@@ -135,6 +135,15 @@ func (model Model) refresh() Model {
 }
 
 func (model Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// Input guard: in input modes, bare-rune keys are always treated as
+	// typed text and never reach a mode handler's shortcut switch. This
+	// structurally prevents single-char shortcuts (e.g. "q" to quit) from
+	// firing while a text field is focused, without each handler opting
+	// out. Modified combos (ctrl+c) and special keys (esc, enter, tab,
+	// ...) are not bare runes and reach the mode handlers normally.
+	if isInputMode(model.mode) && isBareRune(key) {
+		return model.handleInputRune(key)
+	}
 	switch model.mode {
 	case ModeAdd:
 		return model.handleAddKey(key)
@@ -143,6 +152,16 @@ func (model Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	default:
 		return model.handleListKey(key)
 	}
+}
+
+/** handleInputRune routes a bare-rune key to the focused text field of
+the current input mode. It is the only path by which typed characters
+reach input fields, keeping field routing out of handleKey. */
+func (model Model) handleInputRune(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if model.mode == ModeAdd {
+		return model.routeAddInput(key)
+	}
+	return model, nil
 }
 
 func (model Model) handleListKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -198,7 +217,7 @@ func (model Model) handleListKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 func (model Model) handleAddKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
-	case "q", "ctrl+c":
+	case "ctrl+c":
 		return model, tea.Quit
 	case "esc":
 		model.mode = ModeList
@@ -208,6 +227,14 @@ func (model Model) handleAddKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		model.dirPick = -1
 		return model, nil
 	}
+	return model.routeAddInput(key)
+}
+
+/** routeAddInput dispatches a non-shortcut key to the add-mode field
+currently in focus. It is shared by handleAddKey (special keys such as
+tab/enter/backspace/arrows) and by the input-mode rune guard in
+handleKey (bare runes intercepted before the shortcut switch). */
+func (model Model) routeAddInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch model.addField {
 	case fieldDir:
 		return model.handleDirFieldKey(key)

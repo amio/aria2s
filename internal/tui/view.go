@@ -321,7 +321,7 @@ func (model Model) addHelp() string {
 		helpItem{key: "Enter", desc: "Submit"},
 		helpItem{key: "Tab", desc: "Next"},
 		helpItem{key: "Esc", desc: "Back"},
-		helpItem{key: "q", desc: "Quit"},
+		helpItem{key: "Ctrl+C", desc: "Quit"},
 	)
 }
 

@@ -365,17 +365,28 @@ func TestModelQuitsFromAddAndDetailModes(t *testing.T) {
 	model := NewModel(service, time.Second)
 
 	addModel := updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	if !strings.Contains(addModel.View(), "Esc \x1b[2mBack\x1b[22m") || !strings.Contains(addModel.View(), "q \x1b[2mQuit\x1b[22m") {
-		t.Fatalf("add view should mention q Quit, got:\n%s", addModel.View())
+	if !strings.Contains(addModel.View(), "Esc \x1b[2mBack\x1b[22m") || !strings.Contains(addModel.View(), "Ctrl+C \x1b[2mQuit\x1b[22m") {
+		t.Fatalf("add view should mention Ctrl+C Quit, got:\n%s", addModel.View())
 	}
 	addModel = updateModel(t, addModel, tea.KeyMsg{Type: tea.KeyEsc})
 	if addModel.Mode() != ModeList {
 		t.Fatalf("mode got %s, want list", addModel.Mode())
 	}
+
+	// In input mode, bare runes are typed text and never act as shortcuts:
+	// pressing "q" must append to the URL field instead of quitting. Only
+	// ctrl+c (a modified combo, not a bare rune) quits from add mode.
 	addModel = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	_, addCommand := addModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
-	if addCommand == nil {
-		t.Fatal("expected q to quit from add mode")
+	addModel = updateModel(t, addModel, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	if addModel.Mode() != ModeAdd {
+		t.Fatalf("mode got %s, want add after typing q", addModel.Mode())
+	}
+	if got := addModel.input; got != "q" {
+		t.Fatalf("input got %q, want q (bare runes must be typed, not shortcuts)", got)
+	}
+	_, quitCmd := addModel.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if quitCmd == nil {
+		t.Fatal("expected ctrl+c to quit from add mode")
 	}
 
 	detailModel := updateModel(t, model, refreshMsg{})
