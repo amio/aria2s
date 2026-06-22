@@ -64,7 +64,7 @@ func TestModelRendersFullScreenTableLayout(t *testing.T) {
 			t.Fatalf("view missing column header %q:\n%s", header, view)
 		}
 	}
-	if !strings.Contains(view, "  Items 3") {
+	if !strings.Contains(view, "Tasks 3 (A") {
 		t.Fatalf("view missing footer stats:\n%s", view)
 	}
 	if !strings.Contains(view, "Enter/l \x1b[2mDetail\x1b[22m") || !strings.Contains(view, "q \x1b[2mQuit\x1b[22m") {
@@ -238,7 +238,7 @@ func TestModelPagesStoppedDownloads(t *testing.T) {
 		t.Fatalf("previous page stopped offset got %d, want 0", service.listOptions[2].StoppedOffset)
 	}
 	view := model.View()
-	if !strings.Contains(view, "n \x1b[2mNext Page\x1b[22m") || !strings.Contains(view, "b \x1b[2mPrev Page\x1b[22m") {
+	if !strings.Contains(view, "n/b \x1b[2mNext/Prev Page\x1b[22m") {
 		t.Fatalf("view should describe stopped paging controls, got:\n%s", view)
 	}
 }

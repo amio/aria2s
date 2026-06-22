@@ -287,12 +287,11 @@ func (model Model) listStats() string {
 		upTotal += item.UploadSpeed
 	}
 	return fmt.Sprintf(
-		"Items %d A%d W%d S%d P%d Down %s Up %s",
+		"Tasks %d (A%d W%d S%d) ↓%s ↑%s",
 		len(items),
 		len(model.snapshot.Active),
 		len(model.snapshot.Waiting),
 		len(model.snapshot.Stopped),
-		model.stoppedPage+1,
 		formatSpeed(downTotal),
 		formatSpeed(upTotal),
 	)
@@ -302,22 +301,21 @@ func (model Model) detailStats() string {
 	return fmt.Sprintf("Detail view for %s", model.detail.GID)
 }
 
-func (model Model) listHelp() string {
-	return helpText(
+func (model Model) listHelp() []string {
+	return helpSegments(
 		helpItem{key: "↑/↓", desc: "Move"},
 		helpItem{key: "Enter/l", desc: "Detail"},
 		helpItem{key: "a", desc: "Add"},
 		helpItem{key: "p", desc: "Pause"},
 		helpItem{key: "r", desc: "Resume"},
 		helpItem{key: "d", desc: "Remove"},
-		helpItem{key: "n", desc: "Next Page"},
-		helpItem{key: "b", desc: "Prev Page"},
+		helpItem{key: "n/b", desc: "Next/Prev Page"},
 		helpItem{key: "q", desc: "Quit"},
 	)
 }
 
-func (model Model) addHelp() string {
-	return helpText(
+func (model Model) addHelp() []string {
+	return helpSegments(
 		helpItem{key: "Enter", desc: "Submit"},
 		helpItem{key: "Tab", desc: "Next"},
 		helpItem{key: "Esc", desc: "Back"},
@@ -325,8 +323,8 @@ func (model Model) addHelp() string {
 	)
 }
 
-func (model Model) detailHelp() string {
-	return helpText(
+func (model Model) detailHelp() []string {
+	return helpSegments(
 		helpItem{key: "Esc/h", desc: "Back"},
 		helpItem{key: "j/k", desc: "Next/Prev"},
 		helpItem{key: "q", desc: "Quit"},
@@ -457,20 +455,30 @@ func formatProgress(completed int64, total int64) string {
 	return fmt.Sprintf("%.1f%%", float64(completed)/float64(total)*100)
 }
 
-func joinSides(left string, right string, width int) string {
+func joinSides(left string, rightParts []string, width int) string {
 	left = strings.TrimSpace(left)
-	right = strings.TrimSpace(right)
 	leftWidth := ansi.StringWidth(left)
+	const minGap = 5
+	room := max(width-leftWidth-minGap, 0)
+	var included []string
+	for _, part := range rightParts {
+		part = strings.TrimSpace(part)
+		needed := ansi.StringWidth(part)
+		if len(included) > 0 {
+			needed++
+		}
+		if needed > room {
+			break
+		}
+		included = append(included, part)
+		room -= needed
+	}
+	right := strings.Join(included, " ")
 	rightWidth := ansi.StringWidth(right)
-	if leftWidth+1+rightWidth <= width {
+	if rightWidth > 0 && leftWidth+minGap+rightWidth <= width {
 		return left + strings.Repeat(" ", width-leftWidth-rightWidth) + right
 	}
-	if rightWidth >= width {
-		return fitRight(right, width)
-	}
-
-	leftRoom := max(width-rightWidth-1, 0)
-	return fitLeft(left, leftRoom) + " " + right
+	return fitLeft(left, width)
 }
 
 func frameContentWidth(width int) int {
@@ -599,12 +607,12 @@ type helpItem struct {
 	desc string
 }
 
-func helpText(items ...helpItem) string {
+func helpSegments(items ...helpItem) []string {
 	parts := make([]string, 0, len(items))
 	for _, item := range items {
 		parts = append(parts, item.key+" "+dimText(item.desc))
 	}
-	return strings.Join(parts, " ")
+	return parts
 }
 
 func dimText(text string) string {
