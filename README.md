@@ -56,8 +56,42 @@ Default macOS paths:
 ## Development
 
 ```bash
+make
 make build
 make test
 make test-stage1
 make test-stage2
+```
+
+## Common Workflows
+
+Build and verify:
+
+```bash
+make
+make build
+make test
+```
+
+Safe local smoke test with an isolated temporary `HOME`:
+
+```bash
+TMP_HOME=$(mktemp -d)
+HOME="$TMP_HOME" ./bin/asv install --start
+HOME="$TMP_HOME" ./bin/asv status
+HOME="$TMP_HOME" ./bin/asv add https://example.com/file.zip
+HOME="$TMP_HOME" ./bin/asv console
+HOME="$TMP_HOME" ./bin/asv uninstall
+rm -rf "$TMP_HOME"
+```
+
+Real user-session workflow:
+
+```bash
+./bin/asv install --start
+./bin/asv status
+./bin/asv add <url-or-magnet>
+./bin/asv console
+./bin/asv logs
+./bin/asv uninstall
 ```
