@@ -1,0 +1,397 @@
+package app
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"time"
+
+	"github.com/amio/aria2s/internal/aria2"
+	"github.com/amio/aria2s/internal/doctor"
+	"github.com/amio/aria2s/internal/paths"
+	"github.com/amio/aria2s/internal/service"
+	"github.com/amio/aria2s/internal/state"
+)
+
+type RPC interface {
+	Version(context.Context, state.State) (string, error)
+	AddURI(context.Context, state.State, string) (string, error)
+}
+
+type Options struct {
+	Paths           paths.Paths
+	DownloadDir     string
+	LookPath        func(string) (string, error)
+	Abs             func(string) (string, error)
+	IsPortAvailable func(int) bool
+	GenerateSecret  func() (string, error)
+	Service         service.Backend
+	RPC             RPC
+	RPCReadyTimeout time.Duration
+	RPCPollInterval time.Duration
+}
+
+type App struct {
+	options Options
+}
+
+func New(options Options) *App {
+	if options.LookPath == nil {
+		options.LookPath = exec.LookPath
+	}
+	if options.Abs == nil {
+		options.Abs = filepath.Abs
+	}
+	if options.IsPortAvailable == nil {
+		options.IsPortAvailable = IsPortAvailable
+	}
+	if options.GenerateSecret == nil {
+		options.GenerateSecret = GenerateSecret
+	}
+	if options.RPC == nil {
+		options.RPC = LocalRPC{}
+	}
+	if options.RPCReadyTimeout == 0 {
+		options.RPCReadyTimeout = 5 * time.Second
+	}
+	if options.RPCPollInterval == 0 {
+		options.RPCPollInterval = 100 * time.Millisecond
+	}
+	return &App{options: options}
+}
+
+func Default() (*App, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return nil, err
+	}
+	servicePaths := paths.NewDarwin(home)
+	return New(Options{
+		Paths:       servicePaths,
+		DownloadDir: filepath.Join(home, "Downloads"),
+		Service: service.NewLaunchdBackend(
+			service.ExecRunner{},
+			os.Getuid(),
+			servicePaths.ServiceName,
+			servicePaths.ServiceFile,
+		),
+	}), nil
+}
+
+func (app *App) Install(ctx context.Context, start bool) error {
+	aria2c, err := app.options.LookPath("aria2c")
+	if err != nil {
+		return fmt.Errorf("aria2c not found in PATH: %w", err)
+	}
+	aria2c, err = app.options.Abs(aria2c)
+	if err != nil {
+		return err
+	}
+	current, err := state.Load(app.options.Paths.StateFile)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			current = state.State{}
+		} else {
+			return fmt.Errorf("load state: %w", err)
+		}
+	}
+	current.Aria2cPath = aria2c
+	current.ConfigPath = app.options.Paths.ConfigFile
+	current.SessionPath = app.options.Paths.SessionFile
+	current.LogPath = app.options.Paths.LogFile
+	current.ErrorLogPath = app.options.Paths.ErrorLogFile
+	current.ServiceName = app.options.Paths.ServiceName
+	if current.RPCPort == 0 {
+		current.RPCPort, err = app.choosePort()
+		if err != nil {
+			return err
+		}
+	}
+	if current.RPCSecret == "" {
+		current.RPCSecret, err = app.options.GenerateSecret()
+		if err != nil {
+			return err
+		}
+	}
+	if err := state.Save(app.options.Paths.StateFile, current); err != nil {
+		return err
+	}
+	existingConfig, err := aria2.ReadConfig(current.ConfigPath)
+	if err != nil {
+		return err
+	}
+	managedConfigChanged := aria2.HasManagedDrift(existingConfig, current)
+	downloadDir := app.options.DownloadDir
+	if downloadDir == "" {
+		downloadDir = filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(current.ConfigPath))), "Downloads")
+	}
+	content := aria2.BuildConfig(aria2.ManagedConfig{
+		RPCPort:     current.RPCPort,
+		RPCSecret:   current.RPCSecret,
+		SessionFile: current.SessionPath,
+		DownloadDir: downloadDir,
+	}, existingConfig)
+	if err := aria2.WriteConfig(current.ConfigPath, content); err != nil {
+		return err
+	}
+	if err := touch0600(current.SessionPath); err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(current.LogPath), 0o755); err != nil {
+		return err
+	}
+	plist, err := service.RenderLaunchAgent(current)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(app.options.Paths.ServiceFile), 0o755); err != nil {
+		return err
+	}
+	serviceLoaded := false
+	serviceRunning := false
+	if app.options.Service != nil {
+		serviceLoaded = app.options.Service.IsLoaded(ctx)
+		serviceRunning = app.options.Service.IsRunning(ctx)
+	}
+	serviceChanged, err := fileContentChanged(app.options.Paths.ServiceFile, plist)
+	if err != nil {
+		return err
+	}
+	if app.options.Service != nil && serviceLoaded && serviceChanged {
+		if err := app.options.Service.Uninstall(ctx); err != nil {
+			return err
+		}
+		serviceLoaded = false
+	}
+	if err := os.WriteFile(app.options.Paths.ServiceFile, []byte(plist), 0o644); err != nil {
+		return err
+	}
+	if app.options.Service != nil {
+		if !serviceLoaded {
+			if err := app.options.Service.Install(ctx); err != nil {
+				return err
+			}
+		}
+		if start {
+			if serviceRunning && managedConfigChanged && !serviceChanged {
+				if err := app.options.Service.Restart(ctx); err != nil {
+					return err
+				}
+			} else if err := app.options.Service.Start(ctx); err != nil {
+				return err
+			}
+		} else if serviceRunning && serviceChanged {
+			if err := app.options.Service.Start(ctx); err != nil {
+				return err
+			}
+		}
+		if start {
+			return app.waitForRPC(ctx, current)
+		}
+	}
+	return nil
+}
+
+func (app *App) Uninstall(ctx context.Context) error {
+	if app.options.Service != nil && app.options.Service.IsLoaded(ctx) {
+		if err := app.options.Service.Uninstall(ctx); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(app.options.Paths.ServiceFile); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func (app *App) Start(ctx context.Context) error {
+	current, err := app.preflightLifecycle()
+	if err != nil {
+		return err
+	}
+	if err := app.options.Service.Start(ctx); err != nil {
+		return err
+	}
+	return app.waitForRPC(ctx, current)
+}
+
+func (app *App) Stop(ctx context.Context) error {
+	return app.options.Service.Stop(ctx)
+}
+
+func (app *App) Restart(ctx context.Context) error {
+	current, err := app.preflightLifecycle()
+	if err != nil {
+		return err
+	}
+	if err := app.options.Service.Restart(ctx); err != nil {
+		return err
+	}
+	return app.waitForRPC(ctx, current)
+}
+
+func (app *App) Status(ctx context.Context) doctor.StatusReport {
+	return doctor.Status(ctx, doctor.StatusOptions{
+		Paths:   app.options.Paths,
+		Service: app.options.Service,
+		RPCVersion: func(ctx context.Context, current state.State) (string, error) {
+			return app.options.RPC.Version(ctx, current)
+		},
+	})
+}
+
+func (app *App) Doctor(ctx context.Context) doctor.Report {
+	return doctor.Check(ctx, doctor.Options{
+		Paths:           app.options.Paths,
+		IsPortAvailable: app.options.IsPortAvailable,
+		Service:         app.options.Service,
+		RPCReachable: func(ctx context.Context, current state.State) bool {
+			_, err := app.options.RPC.Version(ctx, current)
+			return err == nil
+		},
+	})
+}
+
+func (app *App) Add(ctx context.Context, uri string) (string, error) {
+	current, err := state.Load(app.options.Paths.StateFile)
+	if err != nil {
+		return "", err
+	}
+	return app.options.RPC.AddURI(ctx, current, uri)
+}
+
+func (app *App) Paths() paths.Paths {
+	return app.options.Paths
+}
+
+func (app *App) preflightLifecycle() (state.State, error) {
+	current, err := state.Load(app.options.Paths.StateFile)
+	if err != nil {
+		return state.State{}, fmt.Errorf("load state: %w", err)
+	}
+	if !isExecutable(current.Aria2cPath) {
+		return state.State{}, fmt.Errorf("stored aria2c path is not executable: %s", current.Aria2cPath)
+	}
+	values, err := aria2.ReadConfig(current.ConfigPath)
+	if err != nil {
+		return state.State{}, err
+	}
+	if aria2.HasManagedDrift(values, current) {
+		return state.State{}, fmt.Errorf("managed config drift detected; run `asv install` to repair %s", current.ConfigPath)
+	}
+	return current, nil
+}
+
+func (app *App) waitForRPC(ctx context.Context, current state.State) error {
+	deadline := time.Now().Add(app.options.RPCReadyTimeout)
+	var lastErr error
+	for {
+		if _, err := app.options.RPC.Version(ctx, current); err == nil {
+			return nil
+		} else {
+			lastErr = err
+		}
+		if time.Now().Add(app.options.RPCPollInterval).After(deadline) {
+			return app.rpcReadyError(current, lastErr)
+		}
+		timer := time.NewTimer(app.options.RPCPollInterval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (app *App) rpcReadyError(current state.State, cause error) error {
+	return fmt.Errorf(
+		"aria2 did not become reachable within %s at %s: %w\nCheck logs at %s or run `asv doctor` for diagnostics",
+		app.options.RPCReadyTimeout,
+		endpoint(current.RPCPort),
+		cause,
+		current.LogPath,
+	)
+}
+
+func (app *App) choosePort() (int, error) {
+	if app.options.IsPortAvailable(6800) {
+		return 6800, nil
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+	defer listener.Close()
+	return listener.Addr().(*net.TCPAddr).Port, nil
+}
+
+func fileContentChanged(path, content string) (bool, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return true, nil
+		}
+		return false, err
+	}
+	return string(data) != content, nil
+}
+
+func isExecutable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
+}
+
+type LocalRPC struct{}
+
+func (LocalRPC) Version(ctx context.Context, current state.State) (string, error) {
+	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 2 * time.Second})
+	return client.Version(ctx)
+}
+
+func (LocalRPC) AddURI(ctx context.Context, current state.State, uri string) (string, error) {
+	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
+	return client.AddURI(ctx, uri)
+}
+
+func endpoint(port int) string {
+	return fmt.Sprintf("http://127.0.0.1:%d/jsonrpc", port)
+}
+
+func IsPortAvailable(port int) bool {
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		return false
+	}
+	_ = listener.Close()
+	return true
+}
+
+func GenerateSecret() (string, error) {
+	var data [32]byte
+	if _, err := rand.Read(data[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(data[:]), nil
+}
+
+func touch0600(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}

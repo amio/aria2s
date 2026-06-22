@@ -1,0 +1,59 @@
+# aria2s
+
+`aria2s` is a small macOS-first CLI for running local `aria2c` as a background LaunchAgent.
+
+The project builds the `asv` binary.
+
+## Requirements
+
+- macOS user session with `launchd`
+- `aria2c` available on `PATH` during install
+
+## Commands
+
+```bash
+asv install --start
+asv uninstall
+asv start
+asv stop
+asv restart
+asv status
+asv logs
+asv doctor
+asv add <url-or-magnet>
+```
+
+`asv install` locates `aria2c`, stores its absolute path, chooses a stable localhost RPC port, generates an RPC secret, writes managed config/state files, and installs or reasserts the LaunchAgent without starting it.
+
+`asv install --start` performs the same install work, starts the service, and verifies RPC health.
+
+`asv status` reports service file presence, supervisor state, stored binary validity, RPC reachability, aria2 version, endpoint, config path, and log path. It never prints the RPC secret.
+
+`asv doctor` reports common startup/configuration problems, including missing `aria2c`, port conflicts, and drift in aria2s-managed config keys.
+
+`asv logs` prints the log file paths plus recent stdout and stderr log content.
+
+`asv add <url-or-magnet>` reads local state and submits HTTP, HTTPS, or magnet downloads to localhost JSON-RPC with the stored token automatically.
+
+## Files
+
+Default macOS paths:
+
+```text
+~/Library/LaunchAgents/io.github.amio.aria2s.plist
+~/Library/Application Support/aria2s/aria2.conf
+~/Library/Application Support/aria2s/state.json
+~/Library/Application Support/aria2s/session
+~/Library/Logs/aria2s/aria2.log
+~/Library/Logs/aria2s/aria2.err.log
+```
+
+`state.json` and `aria2.conf` are written with `0600` permissions.
+
+## Development
+
+```bash
+make build
+make test
+make test-stage1
+```
