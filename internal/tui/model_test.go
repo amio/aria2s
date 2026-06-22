@@ -154,6 +154,28 @@ func TestModelPagesStoppedDownloads(t *testing.T) {
 	}
 }
 
+func TestModelDisplaysMetadataLabelForMetadataEntries(t *testing.T) {
+	service := &fakeService{
+		snapshot: aria2.DownloadSnapshot{
+			Active: []aria2.Download{
+				{GID: "m1", Name: "GIRLT.No.017.7z", Status: "active", IsMetadata: true},
+				{GID: "a1", Name: "movie.mkv", Status: "active"},
+			},
+		},
+	}
+	model := NewModel(service, time.Second)
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 140, Height: 16})
+	model = updateModel(t, model, refreshMsg{})
+
+	view := model.View()
+	if !strings.Contains(view, "Metadata") {
+		t.Fatalf("view should show 'Metadata' status for metadata entries:\n%s", view)
+	}
+	if !strings.Contains(view, "GIRLT.No.017.7z") {
+		t.Fatalf("view should show metadata entry name:\n%s", view)
+	}
+}
+
 func TestModelOpensAndClosesDetailView(t *testing.T) {
 	service := &fakeService{
 		snapshot: aria2.DownloadSnapshot{

@@ -51,6 +51,87 @@ func TestListDownloadsFetchesActiveWaitingAndStoppedWindows(t *testing.T) {
 	assertRPCRequest(t, requests[2], "aria2.tellStopped", "token:secret-token", float64(20), float64(30))
 }
 
+func TestListDownloadsFiltersCompletedMetadataFromStopped(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := decodeRPCCall(t, r)
+		switch call.Method {
+		case "aria2.tellActive":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[
+				{"gid":"m1","status":"active","files":[{"path":"[METADATA]GIRLT.No.017.7z"}],"completedLength":"0","totalLength":"0","downloadSpeed":"0"},
+				{"gid":"a1","status":"active","files":[{"path":"/tmp/movie.mkv"}],"bittorrent":{"info":{"name":"Movie"}},"completedLength":"100","totalLength":"200","downloadSpeed":"5"}
+			]}`)
+		case "aria2.tellWaiting":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[]}`)
+		case "aria2.tellStopped":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[
+				{"gid":"m2","status":"complete","files":[{"path":"[METADATA]The+New+York+Times"}],"completedLength":"20480","totalLength":"20480"},
+				{"gid":"s1","status":"complete","files":[{"path":"/tmp/done.iso"}],"completedLength":"300","totalLength":"300"}
+			]}`)
+		default:
+			t.Fatalf("unexpected method %s", call.Method)
+		}
+	}))
+	defer server.Close()
+	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
+
+	snapshot, err := client.ListDownloads(context.Background(), aria2.ListOptions{})
+	if err != nil {
+		t.Fatalf("list downloads: %v", err)
+	}
+
+	if len(snapshot.Active) != 2 {
+		t.Fatalf("active count got %d, want 2", len(snapshot.Active))
+	}
+	if !snapshot.Active[0].IsMetadata {
+		t.Fatalf("first active entry should be metadata: %#v", snapshot.Active[0])
+	}
+	if snapshot.Active[0].Name != "GIRLT.No.017.7z" {
+		t.Fatalf("metadata name got %q, want GIRLT.No.017.7z", snapshot.Active[0].Name)
+	}
+	if snapshot.Active[1].Name != "Movie" {
+		t.Fatalf("active name got %q, want Movie", snapshot.Active[1].Name)
+	}
+
+	if len(snapshot.Stopped) != 1 {
+		t.Fatalf("stopped count got %d, want 1 (completed metadata should be filtered)", len(snapshot.Stopped))
+	}
+	if snapshot.Stopped[0].GID != "s1" {
+		t.Fatalf("stopped entry got %s, want s1", snapshot.Stopped[0].GID)
+	}
+}
+
+func TestListDownloadsDecodesMetadataDisplayName(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := decodeRPCCall(t, r)
+		switch call.Method {
+		case "aria2.tellActive":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[
+				{"gid":"m1","status":"active","files":[{"path":"[METADATA]The+New+York+Times+Best+Sellers"}],"completedLength":"0","totalLength":"20480"}
+			]}`)
+		case "aria2.tellWaiting":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[]}`)
+		case "aria2.tellStopped":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[]}`)
+		default:
+			t.Fatalf("unexpected method %s", call.Method)
+		}
+	}))
+	defer server.Close()
+	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
+
+	snapshot, err := client.ListDownloads(context.Background(), aria2.ListOptions{})
+	if err != nil {
+		t.Fatalf("list downloads: %v", err)
+	}
+
+	if len(snapshot.Active) != 1 {
+		t.Fatalf("active count got %d, want 1", len(snapshot.Active))
+	}
+	if snapshot.Active[0].Name != "The New York Times Best Sellers" {
+		t.Fatalf("metadata name got %q, want 'The New York Times Best Sellers'", snapshot.Active[0].Name)
+	}
+}
+
 func TestTaskDetailParsesSelectedTaskPayload(t *testing.T) {
 	var request rpcCall
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

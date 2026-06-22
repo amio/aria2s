@@ -79,7 +79,7 @@ func (model Model) detailView() string {
 	detail := model.detail
 	lines := []string{
 		fmt.Sprintf("Name: %s", detail.Name),
-		fmt.Sprintf("Status: %s", statusLabel(detail.Status)),
+		fmt.Sprintf("Status: %s", detailStatusLabel(detail)),
 		fmt.Sprintf("GID: %s", detail.GID),
 		fmt.Sprintf("URI: %s", detail.PrimaryURI),
 		formatDetailLabel("Download Dir", detailDownloadDir(detail)),
@@ -187,7 +187,7 @@ func (model Model) blankBodyLine(width int, text string) string {
 func (model Model) downloadRow(width int, download aria2.Download, selected bool) string {
 	contentWidth := frameContentWidth(width)
 	statusWidth, nameWidth, sizeWidth, downloadedWidth, progressWidth, downWidth, upWidth := tableColumnWidths(contentWidth)
-	status := fitLeft(statusLabel(download.Status), statusWidth)
+	status := fitLeft(downloadStatusLabel(download), statusWidth)
 	name := fitLeft(download.Name, nameWidth)
 	size := fitRight(formatBytes(download.TotalLength), sizeWidth)
 	downloaded := fitRight(formatBytes(download.CompletedLength), downloadedWidth)
@@ -202,7 +202,7 @@ func (model Model) downloadRow(width int, download aria2.Download, selected bool
 		background = selectedColor
 		foreground = selectedTextColor
 	}
-	return selectedLine(row, width, background, foreground, statusTone(download.Status), selected)
+	return selectedLine(row, width, background, foreground, downloadStatusTone(download), selected)
 }
 
 func (model Model) titleFrame(title string) []string {
@@ -357,6 +357,27 @@ func statusTone(status string) rgb {
 	default:
 		return bodyTextColor
 	}
+}
+
+func downloadStatusLabel(download aria2.Download) string {
+	if download.IsMetadata {
+		return "Metadata"
+	}
+	return statusLabel(download.Status)
+}
+
+func downloadStatusTone(download aria2.Download) rgb {
+	if download.IsMetadata {
+		return rgb{180, 190, 210}
+	}
+	return statusTone(download.Status)
+}
+
+func detailStatusLabel(detail aria2.DownloadDetail) string {
+	if detail.IsMetadata {
+		return "Metadata"
+	}
+	return statusLabel(detail.Status)
 }
 
 func formatBytes(value int64) string {

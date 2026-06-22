@@ -2,8 +2,10 @@ package aria2
 
 import (
 	"context"
+	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 )
 
 /** ListOptions bounds aria2 history reads for the interactive console. */
@@ -25,6 +27,7 @@ type Download struct {
 	GID             string
 	Status          string
 	Name            string
+	IsMetadata      bool
 	CompletedLength int64
 	TotalLength     int64
 	DownloadSpeed   int64
@@ -36,6 +39,7 @@ type DownloadDetail struct {
 	GID             string
 	Status          string
 	Name            string
+	IsMetadata      bool
 	CompletedLength int64
 	TotalLength     int64
 	DownloadSpeed   int64
@@ -76,7 +80,7 @@ func (client *RPCClient) ListDownloads(ctx context.Context, options ListOptions)
 	return DownloadSnapshot{
 		Active:  mapDownloads(active),
 		Waiting: mapDownloads(waiting),
-		Stopped: mapDownloads(stopped),
+		Stopped: filterMetadataStopped(mapDownloads(stopped)),
 	}, nil
 }
 
@@ -90,6 +94,7 @@ func (client *RPCClient) TaskDetail(ctx context.Context, gid string) (DownloadDe
 		GID:             download.GID,
 		Status:          download.Status,
 		Name:            download.Name,
+		IsMetadata:      download.IsMetadata,
 		CompletedLength: download.CompletedLength,
 		TotalLength:     download.TotalLength,
 		DownloadSpeed:   download.DownloadSpeed,
@@ -166,11 +171,21 @@ func (raw rawDownload) toDownload() Download {
 		GID:             raw.GID,
 		Status:          raw.Status,
 		Name:            raw.name(),
+		IsMetadata:      raw.isMetadata(),
 		CompletedLength: parseInt(raw.CompletedLength),
 		TotalLength:     parseInt(raw.TotalLength),
 		DownloadSpeed:   parseInt(raw.DownloadSpeed),
 		UploadSpeed:     parseInt(raw.UploadSpeed),
 	}
+}
+
+func (raw rawDownload) isMetadata() bool {
+	for _, file := range raw.Files {
+		if strings.HasPrefix(file.Path, "[METADATA]") {
+			return true
+		}
+	}
+	return false
 }
 
 func (raw rawDownload) name() string {
@@ -179,7 +194,7 @@ func (raw rawDownload) name() string {
 	}
 	for _, file := range raw.Files {
 		if file.Path != "" {
-			return fileName(file.Path)
+			return displayName(file.Path)
 		}
 	}
 	return raw.GID
@@ -202,6 +217,32 @@ func mapDownloads(raw []rawDownload) []Download {
 		downloads = append(downloads, item.toDownload())
 	}
 	return downloads
+}
+
+func filterMetadataStopped(downloads []Download) []Download {
+	result := make([]Download, 0, len(downloads))
+	for _, d := range downloads {
+		if d.IsMetadata && isStoppedStatus(d.Status) {
+			continue
+		}
+		result = append(result, d)
+	}
+	return result
+}
+
+func isStoppedStatus(status string) bool {
+	return status == "complete" || status == "error" || status == "removed"
+}
+
+func displayName(path string) string {
+	if strings.HasPrefix(path, "[METADATA]") {
+		decoded := strings.TrimPrefix(path, "[METADATA]")
+		if unescaped, err := url.QueryUnescape(decoded); err == nil {
+			return unescaped
+		}
+		return decoded
+	}
+	return fileName(path)
 }
 
 func parseInt(value string) int64 {
