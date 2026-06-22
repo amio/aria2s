@@ -41,8 +41,7 @@ var (
 	frameTextColor    = rgb{241, 244, 247}
 	bodyColor         = rgb{9, 15, 22}
 	bodyTextColor     = rgb{210, 217, 225}
-	selectedColor     = rgb{21, 35, 48}
-	selectedTextColor = rgb{244, 246, 248}
+	selectedColor     = rgb{28, 44, 58}
 	errorTextColor    = rgb{255, 152, 152}
 )
 
@@ -271,19 +270,17 @@ func (model Model) downloadRow(width int, download aria2.Download, selected bool
 	add(formatSpeed(download.UploadSpeed), l.upWidth, true)
 
 	row := strings.Join(parts, columnGap)
-	background := bodyColor
-	foreground := bodyTextColor
-	if selected {
-		background = selectedColor
-		foreground = selectedTextColor
-	}
-	return selectedLine(row, width, background, foreground, downloadStatusTone(download), selected)
+		background := bodyColor
+		if selected {
+			background = selectedColor
+		}
+		return selectedLine(row, width, background, downloadStatusTone(download), selected)
 }
 
 func (model Model) titleFrame(title string) []string {
 	width, _ := model.viewport()
 	return []string{
-		transparentHalfBlockLine(width, frameEdgeColor, '▀'),
+		strings.Repeat(" ", width),
 		paddedTransparentLine(title, width, framePaddingX, frameTextColor, true),
 		transparentHalfBlockLine(width, bodyColor, '▄'),
 	}
@@ -293,7 +290,7 @@ func (model Model) tableFrame(content string, top bool) []string {
 	width, _ := model.viewport()
 	if top {
 		return []string{
-			transparentHalfBlockLine(width, frameEdgeColor, '▀'),
+			strings.Repeat(" ", width),
 			paddedTransparentLine(content, width, framePaddingX, frameTextColor, true),
 			transparentHalfBlockLine(width, bodyColor, '▄'),
 		}
@@ -301,7 +298,7 @@ func (model Model) tableFrame(content string, top bool) []string {
 	return []string{
 		transparentHalfBlockLine(width, frameDividerColor, '▀'),
 		paddedTransparentLine(content, width, framePaddingX, frameTextColor, false),
-		transparentHalfBlockLine(width, frameEdgeColor, '▄'),
+		strings.Repeat(" ", width),
 	}
 }
 
@@ -634,14 +631,11 @@ func paddedTransparentLine(text string, width int, padding int, foreground rgb, 
 	return colorizeForeground(line, foreground, bold)
 }
 
-func selectedLine(text string, width int, background rgb, foreground rgb, status rgb, selected bool) string {
+func selectedLine(text string, width int, background rgb, status rgb, selected bool) string {
 	if ansi.StringWidth(text) == 0 {
 		return paddedStyledLine("", width, framePaddingX, bodyTextColor, background, false)
 	}
-	if !selected {
-		return paddedStyledLine(text, width, framePaddingX, status, background, false)
-	}
-	return paddedStyledLine(text, width, framePaddingX, foreground, background, false)
+	return paddedStyledLine(text, width, framePaddingX, status, background, false)
 }
 
 func halfBlockLine(width int, top rgb, bottom rgb, block rune) string {
