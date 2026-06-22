@@ -89,8 +89,97 @@ func TestModelAddsURIFromInputMode(t *testing.T) {
 	if len(service.added) != 1 || service.added[0] != "https://example.com/file.zip" {
 		t.Fatalf("unexpected added URIs: %#v", service.added)
 	}
+	if len(service.addOpts) != 1 || service.addOpts[0].Dir != "" {
+		t.Fatalf("expected empty dir option, got %#v", service.addOpts)
+	}
 	if model.Mode() != ModeList {
 		t.Fatalf("mode got %s, want list", model.Mode())
+	}
+}
+
+func TestModelAddWithCustomDir(t *testing.T) {
+	service := &fakeService{defaultDir: "/home/user/Downloads"}
+	model := NewModel(service, time.Second)
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://example.com/file.zip")})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/data/Movies")})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(service.addOpts) != 1 || service.addOpts[0].Dir != "/data/Movies" {
+		t.Fatalf("expected dir /data/Movies, got %#v", service.addOpts)
+	}
+	if !strings.Contains(model.View(), "No downloads yet") && model.Mode() != ModeList {
+		t.Fatalf("mode got %s, want list", model.Mode())
+	}
+}
+
+func TestModelAddDirRecentPick(t *testing.T) {
+	service := &fakeService{
+		defaultDir: "/home/user/Downloads",
+		recentDirs: []string{"/data/Movies", "/data/Music"},
+	}
+	model := NewModel(service, time.Second)
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model.recentDirs = service.recentDirs
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://example.com/file.zip")})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(service.addOpts) != 1 || service.addOpts[0].Dir != "/data/Movies" {
+		t.Fatalf("expected dir /data/Movies picked from recents, got %#v", service.addOpts)
+	}
+}
+
+func TestModelAddDirTabCyclesAndWraps(t *testing.T) {
+	service := &fakeService{
+		recentDirs: []string{"/data/Movies", "/data/Music", "/data/Books"},
+	}
+	model := NewModel(service, time.Second)
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model.recentDirs = service.recentDirs
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // URL -> Dir
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // -> 1st recent
+	if model.dirInput != "/data/Movies" {
+		t.Fatalf("first tab got %q, want /data/Movies", model.dirInput)
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // -> 2nd
+	if model.dirInput != "/data/Music" {
+		t.Fatalf("second tab got %q, want /data/Music", model.dirInput)
+	}
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // -> 3rd
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // wrap -> 1st
+	if model.dirInput != "/data/Movies" {
+		t.Fatalf("wrapped tab got %q, want /data/Movies", model.dirInput)
+	}
+}
+
+func TestModelLoadsRecentDirsOnAddMode(t *testing.T) {
+	service := &fakeService{
+		recentDirs: []string{"/data/Movies", "/data/Music"},
+	}
+	model := NewModel(service, time.Second)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected recent dirs load command when entering add mode")
+	}
+	msg := cmd()
+	loaded, _ := model.Update(msg)
+	model = loaded.(Model)
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
+
+	view := model.View()
+	if !strings.Contains(view, "/data/Movies") || !strings.Contains(view, "Recent dirs") {
+		t.Fatalf("add view should list recent dirs after load, got:\n%s", view)
+	}
+	if service.recentCalls != 1 {
+		t.Fatalf("expected one recent dirs call, got %d", service.recentCalls)
 	}
 }
 
@@ -276,10 +365,10 @@ func TestModelQuitsFromAddAndDetailModes(t *testing.T) {
 	model := NewModel(service, time.Second)
 
 	addModel := updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	if !strings.Contains(addModel.View(), "Esc/h \x1b[2mBack\x1b[22m") || !strings.Contains(addModel.View(), "q \x1b[2mQuit\x1b[22m") {
+	if !strings.Contains(addModel.View(), "Esc \x1b[2mBack\x1b[22m") || !strings.Contains(addModel.View(), "q \x1b[2mQuit\x1b[22m") {
 		t.Fatalf("add view should mention q Quit, got:\n%s", addModel.View())
 	}
-	addModel = updateModel(t, addModel, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	addModel = updateModel(t, addModel, tea.KeyMsg{Type: tea.KeyEsc})
 	if addModel.Mode() != ModeList {
 		t.Fatalf("mode got %s, want list", addModel.Mode())
 	}
@@ -328,6 +417,10 @@ type fakeService struct {
 	detailCalls    int
 	detailRequests []string
 	added          []string
+	addOpts        []aria2.AddOptions
+	defaultDir     string
+	recentDirs     []string
+	recentCalls    int
 	paused         []string
 	resumed        []string
 	removed        []string
@@ -351,9 +444,19 @@ func (service *fakeService) TaskDetail(_ context.Context, gid string) (aria2.Dow
 	return service.detail, nil
 }
 
-func (service *fakeService) AddURI(_ context.Context, uri string) (string, error) {
+func (service *fakeService) AddURI(_ context.Context, uri string, opts aria2.AddOptions) (string, error) {
 	service.added = append(service.added, uri)
+	service.addOpts = append(service.addOpts, opts)
 	return "new-gid", nil
+}
+
+func (service *fakeService) RecentDirs(context.Context) ([]string, error) {
+	service.recentCalls++
+	return service.recentDirs, nil
+}
+
+func (service *fakeService) DefaultDir() string {
+	return service.defaultDir
 }
 
 func (service *fakeService) Pause(_ context.Context, gid string) error {

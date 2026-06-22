@@ -23,12 +23,21 @@ func NewRPCClient(endpoint, secret string, client *http.Client) *RPCClient {
 	return &RPCClient{endpoint: endpoint, secret: secret, client: client}
 }
 
-func (client *RPCClient) AddURI(ctx context.Context, uri string) (string, error) {
+/** AddOptions carries optional per-task overrides sent to aria2.addUri. */
+type AddOptions struct {
+	Dir string
+}
+
+func (client *RPCClient) AddURI(ctx context.Context, uri string, opts AddOptions) (string, error) {
 	if !isSupportedURI(uri) {
 		return "", fmt.Errorf("unsupported URI: %s", uri)
 	}
+	params := []any{[]string{uri}}
+	if opts.Dir != "" {
+		params = append(params, map[string]string{"dir": opts.Dir})
+	}
 	var gid string
-	if err := client.call(ctx, "aria2.addUri", []any{[]string{uri}}, &gid); err != nil {
+	if err := client.call(ctx, "aria2.addUri", params, &gid); err != nil {
 		return "", err
 	}
 	return gid, nil

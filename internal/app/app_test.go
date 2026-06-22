@@ -468,7 +468,7 @@ func (rpc fixedRPC) Version(context.Context, state.State) (string, error) {
 	return rpc.version, nil
 }
 
-func (rpc fixedRPC) AddURI(context.Context, state.State, string) (string, error) {
+func (rpc fixedRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
 	return "2089b05ecca3d829", nil
 }
 
@@ -487,8 +487,85 @@ func (rpc *flakyRPC) Version(context.Context, state.State) (string, error) {
 	return rpc.version, nil
 }
 
-func (rpc *flakyRPC) AddURI(context.Context, state.State, string) (string, error) {
+func (rpc *flakyRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
 	return "2089b05ecca3d829", nil
+}
+
+type dirRecordingRPC struct {
+	lastDir string
+}
+
+func (rpc *dirRecordingRPC) Version(context.Context, state.State) (string, error) {
+	return "1.37.0", nil
+}
+
+func (rpc *dirRecordingRPC) AddURI(_ context.Context, _ state.State, _ string, opts aria2.AddOptions) (string, error) {
+	rpc.lastDir = opts.Dir
+	return "2089b05ecca3d829", nil
+}
+
+func TestAddRecordsCustomDirAndExposesRecentDirs(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	rpc := &dirRecordingRPC{}
+	application := newTestApp(servicePaths, aria2c, &recordingService{}, rpc, app.Options{
+		DownloadDir: filepath.Join(root, "Downloads"),
+	})
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+
+	if _, err := application.Add(context.Background(), "https://example.com/a.zip", aria2.AddOptions{Dir: "/data/Movies"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	if rpc.lastDir != "/data/Movies" {
+		t.Fatalf("rpc received dir %q, want /data/Movies", rpc.lastDir)
+	}
+
+	recent, err := application.RecentDirs(context.Background())
+	if err != nil {
+		t.Fatalf("recent dirs: %v", err)
+	}
+	if len(recent) != 1 || recent[0] != "/data/Movies" {
+		t.Fatalf("recent dirs got %#v, want [/data/Movies]", recent)
+	}
+
+	// Adding the same dir again should dedup, not duplicate.
+	if _, err := application.Add(context.Background(), "https://example.com/b.zip", aria2.AddOptions{Dir: "/data/Movies"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	recent, _ = application.RecentDirs(context.Background())
+	if len(recent) != 1 {
+		t.Fatalf("expected deduped single recent dir, got %#v", recent)
+	}
+
+	// A new dir is recorded at the front.
+	if _, err := application.Add(context.Background(), "https://example.com/c.zip", aria2.AddOptions{Dir: "/data/Music"}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	recent, _ = application.RecentDirs(context.Background())
+	if len(recent) != 2 || recent[0] != "/data/Music" || recent[1] != "/data/Movies" {
+		t.Fatalf("expected [Music Movies], got %#v", recent)
+	}
+}
+
+func TestAddWithoutDirDoesNotRecord(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	rpc := &dirRecordingRPC{}
+	application := newTestApp(servicePaths, aria2c, &recordingService{}, rpc, app.Options{})
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+
+	if _, err := application.Add(context.Background(), "https://example.com/a.zip", aria2.AddOptions{}); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	recent, err := application.RecentDirs(context.Background())
+	if err != nil {
+		t.Fatalf("recent dirs: %v", err)
+	}
+	if len(recent) != 0 {
+		t.Fatalf("expected no recent dirs when dir unset, got %#v", recent)
+	}
 }
 
 func assertContains(t *testing.T, text, want string) {

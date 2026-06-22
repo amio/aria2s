@@ -22,7 +22,7 @@ import (
 
 type RPC interface {
 	Version(context.Context, state.State) (string, error)
-	AddURI(context.Context, state.State, string) (string, error)
+	AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error)
 }
 
 type consoleRPC interface {
@@ -268,16 +268,61 @@ func (app *App) Doctor(ctx context.Context) doctor.Report {
 	})
 }
 
-func (app *App) Add(ctx context.Context, uri string) (string, error) {
+func (app *App) Add(ctx context.Context, uri string, opts aria2.AddOptions) (string, error) {
 	current, err := state.Load(app.options.Paths.StateFile)
 	if err != nil {
 		return "", err
 	}
-	return app.options.RPC.AddURI(ctx, current, uri)
+	gid, err := app.options.RPC.AddURI(ctx, current, uri, opts)
+	if err != nil {
+		return "", err
+	}
+	if opts.Dir != "" {
+		_ = app.recordDir(opts.Dir)
+	}
+	return gid, nil
 }
 
-func (app *App) AddURI(ctx context.Context, uri string) (string, error) {
-	return app.Add(ctx, uri)
+func (app *App) AddURI(ctx context.Context, uri string, opts aria2.AddOptions) (string, error) {
+	return app.Add(ctx, uri, opts)
+}
+
+func (app *App) DefaultDir() string {
+	return app.options.DownloadDir
+}
+
+func (app *App) RecentDirs(context.Context) ([]string, error) {
+	current, err := state.Load(app.options.Paths.StateFile)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return current.RecentDirs, nil
+}
+
+func (app *App) recordDir(dir string) error {
+	if dir == "" {
+		return nil
+	}
+	current, err := state.Load(app.options.Paths.StateFile)
+	if err != nil {
+		return err
+	}
+	filtered := make([]string, 0, len(current.RecentDirs)+1)
+	for _, existing := range current.RecentDirs {
+		if existing != dir {
+			filtered = append(filtered, existing)
+		}
+	}
+	filtered = append([]string{dir}, filtered...)
+	const recentDirLimit = 8
+	if len(filtered) > recentDirLimit {
+		filtered = filtered[:recentDirLimit]
+	}
+	current.RecentDirs = filtered
+	return state.Save(app.options.Paths.StateFile, current)
 }
 
 func (app *App) ListDownloads(ctx context.Context, options aria2.ListOptions) (aria2.DownloadSnapshot, error) {
@@ -429,9 +474,9 @@ func (LocalRPC) Version(ctx context.Context, current state.State) (string, error
 	return client.Version(ctx)
 }
 
-func (LocalRPC) AddURI(ctx context.Context, current state.State, uri string) (string, error) {
+func (LocalRPC) AddURI(ctx context.Context, current state.State, uri string, opts aria2.AddOptions) (string, error) {
 	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
-	return client.AddURI(ctx, uri)
+	return client.AddURI(ctx, uri, opts)
 }
 
 func (LocalRPC) ListDownloads(ctx context.Context, current state.State, options aria2.ListOptions) (aria2.DownloadSnapshot, error) {

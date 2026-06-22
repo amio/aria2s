@@ -8,14 +8,15 @@ import (
 
 /** State is the authoritative local runtime metadata for aria2s-managed RPC access. */
 type State struct {
-	Aria2cPath   string `json:"aria2cPath"`
-	RPCPort      int    `json:"rpcPort"`
-	RPCSecret    string `json:"rpcSecret"`
-	ConfigPath   string `json:"configPath"`
-	SessionPath  string `json:"sessionPath"`
-	LogPath      string `json:"logPath"`
-	ErrorLogPath string `json:"errorLogPath"`
-	ServiceName  string `json:"serviceName"`
+	Aria2cPath   string   `json:"aria2cPath"`
+	RPCPort      int      `json:"rpcPort"`
+	RPCSecret    string   `json:"rpcSecret"`
+	ConfigPath   string   `json:"configPath"`
+	SessionPath  string   `json:"sessionPath"`
+	LogPath      string   `json:"logPath"`
+	ErrorLogPath string   `json:"errorLogPath"`
+	ServiceName  string   `json:"serviceName"`
+	RecentDirs   []string `json:"recentDirs,omitempty"`
 }
 
 func Save(path string, current State) error {

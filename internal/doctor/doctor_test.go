@@ -424,7 +424,7 @@ func (rpc *fakeRPC) Version(context.Context, state.State) (string, error) {
 	return rpc.version, nil
 }
 
-func (rpc *fakeRPC) AddURI(_ context.Context, _ state.State, uri string) (string, error) {
+func (rpc *fakeRPC) AddURI(_ context.Context, _ state.State, uri string, _ aria2.AddOptions) (string, error) {
 	rpc.addedURI = uri
 	return rpc.gid, nil
 }

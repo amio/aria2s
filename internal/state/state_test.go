@@ -3,6 +3,7 @@ package state_test
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 
 	"github.com/amio/aria2s/internal/paths"
@@ -39,7 +40,7 @@ func TestSaveStateWrites0600AndRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load state: %v", err)
 	}
-	if reloaded != current {
+	if !reflect.DeepEqual(reloaded, current) {
 		t.Fatalf("round trip mismatch:\nwant %#v\n got %#v", current, reloaded)
 	}
 }
