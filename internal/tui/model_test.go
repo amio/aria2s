@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -66,7 +67,7 @@ func TestModelRendersFullScreenTableLayout(t *testing.T) {
 	if !strings.Contains(view, "  Items 3") {
 		t.Fatalf("view missing footer stats:\n%s", view)
 	}
-	if !strings.Contains(view, "q Quit") {
+	if !strings.Contains(view, "Enter/l \x1b[2mDetail\x1b[22m") || !strings.Contains(view, "q \x1b[2mQuit\x1b[22m") {
 		t.Fatalf("view missing key help:\n%s", view)
 	}
 	if !strings.Contains(view, "▀") && !strings.Contains(view, "▄") {
@@ -148,7 +149,7 @@ func TestModelPagesStoppedDownloads(t *testing.T) {
 		t.Fatalf("previous page stopped offset got %d, want 0", service.listOptions[2].StoppedOffset)
 	}
 	view := model.View()
-	if !strings.Contains(view, "n Next Page") || !strings.Contains(view, "b Prev Page") {
+	if !strings.Contains(view, "n \x1b[2mNext Page\x1b[22m") || !strings.Contains(view, "b \x1b[2mPrev Page\x1b[22m") {
 		t.Fatalf("view should describe stopped paging controls, got:\n%s", view)
 	}
 }
@@ -158,18 +159,19 @@ func TestModelOpensAndClosesDetailView(t *testing.T) {
 		snapshot: aria2.DownloadSnapshot{
 			Active: []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
 		},
-		detail: aria2.DownloadDetail{
+		detail: withDownloadDir(t, aria2.DownloadDetail{
 			GID:             "a1",
 			Name:            "active.iso",
 			Status:          "active",
 			PrimaryURI:      "https://example.com/active.iso",
+			Files:           []aria2.DownloadFile{{Path: "/data/downloads/active.iso", Name: "active.iso"}},
 			CompletedLength: 50,
 			TotalLength:     100,
-		},
+		}, "/data/downloads"),
 	}
 	model := NewModel(service, time.Second)
 	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 
 	if service.detailCalls != 1 {
 		t.Fatalf("expected detail call, got %d", service.detailCalls)
@@ -180,10 +182,65 @@ func TestModelOpensAndClosesDetailView(t *testing.T) {
 	if !strings.Contains(model.View(), "https://example.com/active.iso") {
 		t.Fatalf("detail view missing URI:\n%s", model.View())
 	}
+	if !strings.Contains(model.View(), "\x1b[1mDownload Dir:\x1b[22m /data/downloads") {
+		t.Fatalf("detail view missing bold download directory:\n%s", model.View())
+	}
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEsc})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
 	if model.Mode() != ModeList {
 		t.Fatalf("mode got %s, want list", model.Mode())
+	}
+}
+
+func TestModelNavigatesAdjacentDetailsWithJK(t *testing.T) {
+	service := &fakeService{
+		snapshot: aria2.DownloadSnapshot{
+			Active: []aria2.Download{
+				{GID: "a1", Name: "active.iso", Status: "active"},
+				{GID: "a2", Name: "queued.iso", Status: "waiting"},
+			},
+		},
+		details: map[string]aria2.DownloadDetail{
+			"a1": withDownloadDir(t, aria2.DownloadDetail{
+				GID:        "a1",
+				Name:       "active.iso",
+				Status:     "active",
+				PrimaryURI: "https://example.com/a1.iso",
+				Files:      []aria2.DownloadFile{{Path: "/downloads/a/active.iso", Name: "active.iso"}},
+			}, "/downloads/a"),
+			"a2": withDownloadDir(t, aria2.DownloadDetail{
+				GID:        "a2",
+				Name:       "queued.iso",
+				Status:     "waiting",
+				PrimaryURI: "https://example.com/a2.iso",
+				Files:      []aria2.DownloadFile{{Path: "/downloads/b/queued.iso", Name: "queued.iso"}},
+			}, "/downloads/b"),
+		},
+	}
+	model := NewModel(service, time.Second)
+	model = updateModel(t, model, refreshMsg{})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+
+	if got := model.Selected().GID; got != "a2" {
+		t.Fatalf("selected gid got %q, want a2", got)
+	}
+	if model.detail.GID != "a2" {
+		t.Fatalf("detail gid got %q, want a2", model.detail.GID)
+	}
+	if !strings.Contains(model.View(), "https://example.com/a2.iso") {
+		t.Fatalf("detail view should update to next item:\n%s", model.View())
+	}
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	if got := model.Selected().GID; got != "a1" {
+		t.Fatalf("selected gid got %q, want a1", got)
+	}
+	if model.detail.GID != "a1" {
+		t.Fatalf("detail gid got %q, want a1", model.detail.GID)
+	}
+	if strings.Join(service.detailRequests, ",") != "a1,a2,a1" {
+		t.Fatalf("detail requests got %#v", service.detailRequests)
 	}
 }
 
@@ -197,9 +254,14 @@ func TestModelQuitsFromAddAndDetailModes(t *testing.T) {
 	model := NewModel(service, time.Second)
 
 	addModel := updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	if !strings.Contains(addModel.View(), "q Quit") {
+	if !strings.Contains(addModel.View(), "Esc/h \x1b[2mBack\x1b[22m") || !strings.Contains(addModel.View(), "q \x1b[2mQuit\x1b[22m") {
 		t.Fatalf("add view should mention q Quit, got:\n%s", addModel.View())
 	}
+	addModel = updateModel(t, addModel, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	if addModel.Mode() != ModeList {
+		t.Fatalf("mode got %s, want list", addModel.Mode())
+	}
+	addModel = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	_, addCommand := addModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
 	if addCommand == nil {
 		t.Fatal("expected q to quit from add mode")
@@ -207,7 +269,7 @@ func TestModelQuitsFromAddAndDetailModes(t *testing.T) {
 
 	detailModel := updateModel(t, model, refreshMsg{})
 	detailModel = updateModel(t, detailModel, tea.KeyMsg{Type: tea.KeyEnter})
-	if !strings.Contains(detailModel.View(), "q Quit") {
+	if !strings.Contains(detailModel.View(), "Esc/h \x1b[2mBack\x1b[22m") || !strings.Contains(detailModel.View(), "j/k \x1b[2mNext/Prev\x1b[22m") {
 		t.Fatalf("detail view should mention q Quit, got:\n%s", detailModel.View())
 	}
 	_, detailCommand := detailModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
@@ -222,17 +284,32 @@ func updateModel(t *testing.T, model Model, msg tea.Msg) Model {
 	return updated.(Model)
 }
 
+func withDownloadDir(t *testing.T, detail aria2.DownloadDetail, dir string) aria2.DownloadDetail {
+	t.Helper()
+	field := reflect.ValueOf(&detail).Elem().FieldByName("DownloadDir")
+	if !field.IsValid() {
+		t.Fatal("DownloadDetail is missing DownloadDir")
+	}
+	if field.Kind() != reflect.String || !field.CanSet() {
+		t.Fatal("DownloadDetail.DownloadDir must be a settable string")
+	}
+	field.SetString(dir)
+	return detail
+}
+
 type fakeService struct {
-	snapshot    aria2.DownloadSnapshot
-	detail      aria2.DownloadDetail
-	listCalls   int
-	listOptions []aria2.ListOptions
-	detailCalls int
-	added       []string
-	paused      []string
-	resumed     []string
-	removed     []string
-	cleared     []string
+	snapshot       aria2.DownloadSnapshot
+	detail         aria2.DownloadDetail
+	details        map[string]aria2.DownloadDetail
+	listCalls      int
+	listOptions    []aria2.ListOptions
+	detailCalls    int
+	detailRequests []string
+	added          []string
+	paused         []string
+	resumed        []string
+	removed        []string
+	cleared        []string
 }
 
 func (service *fakeService) ListDownloads(_ context.Context, options aria2.ListOptions) (aria2.DownloadSnapshot, error) {
@@ -241,8 +318,14 @@ func (service *fakeService) ListDownloads(_ context.Context, options aria2.ListO
 	return service.snapshot, nil
 }
 
-func (service *fakeService) TaskDetail(context.Context, string) (aria2.DownloadDetail, error) {
+func (service *fakeService) TaskDetail(_ context.Context, gid string) (aria2.DownloadDetail, error) {
 	service.detailCalls++
+	service.detailRequests = append(service.detailRequests, gid)
+	if service.details != nil {
+		if detail, ok := service.details[gid]; ok {
+			return detail, nil
+		}
+	}
 	return service.detail, nil
 }
 

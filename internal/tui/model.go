@@ -158,31 +158,22 @@ func (model Model) handleListKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 			model.stoppedPage--
 		}
 		return model.refresh(), nil
-	case "enter":
-		selected := model.Selected()
-		if selected.GID == "" {
-			return model, nil
-		}
-		detail, err := model.service.TaskDetail(context.Background(), selected.GID)
-		if err != nil {
-			model.err = err
-			return model, nil
-		}
-		model.detail = detail
-		model.err = nil
-		model.mode = ModeDetail
+	case "enter", "l":
+		model = model.openDetailAt(model.selected)
 	}
 	return model, nil
 }
 
 func (model Model) handleAddKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	if key.String() == "q" || key.String() == "ctrl+c" {
+	switch key.String() {
+	case "q", "ctrl+c":
 		return model, tea.Quit
-	}
-	switch key.Type {
-	case tea.KeyEsc:
+	case "esc", "h":
 		model.mode = ModeList
 		model.input = ""
+		return model, nil
+	}
+	switch key.Type {
 	case tea.KeyBackspace:
 		if model.input != "" {
 			model.input = model.input[:len(model.input)-1]
@@ -204,10 +195,31 @@ func (model Model) handleDetailKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "q", "ctrl+c":
 		return model, tea.Quit
-	case "esc", "enter":
+	case "esc", "h", "enter":
 		model.mode = ModeList
+	case "down", "j":
+		model = model.openDetailAt(model.selected + 1)
+	case "up", "k":
+		model = model.openDetailAt(model.selected - 1)
 	}
 	return model, nil
+}
+
+func (model Model) openDetailAt(index int) Model {
+	items := model.items()
+	if index < 0 || index >= len(items) {
+		return model
+	}
+	detail, err := model.service.TaskDetail(context.Background(), items[index].GID)
+	if err != nil {
+		model.err = err
+		return model
+	}
+	model.selected = index
+	model.detail = detail
+	model.err = nil
+	model.mode = ModeDetail
+	return model
 }
 
 func (model *Model) runSelected(action func(context.Context, string) error) {

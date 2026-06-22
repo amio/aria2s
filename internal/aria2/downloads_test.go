@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"testing"
 
 	"github.com/amio/aria2s/internal/aria2"
@@ -54,7 +55,7 @@ func TestTaskDetailParsesSelectedTaskPayload(t *testing.T) {
 	var request rpcCall
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		request = decodeRPCCall(t, r)
-		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":{"gid":"a1","status":"active","files":[{"path":"/tmp/movie.mkv","length":"1000","completedLength":"250","uris":[{"uri":"https://example.com/movie.mkv"}]}],"bittorrent":{"info":{"name":"Movie"}},"completedLength":"250","totalLength":"1000","downloadSpeed":"50","uploadSpeed":"10","connections":"3","errorCode":"0","errorMessage":""}}`)
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":{"gid":"a1","status":"active","dir":"/data/downloads","files":[{"path":"/tmp/movie.mkv","length":"1000","completedLength":"250","uris":[{"uri":"https://example.com/movie.mkv"}]}],"bittorrent":{"info":{"name":"Movie"}},"completedLength":"250","totalLength":"1000","downloadSpeed":"50","uploadSpeed":"10","connections":"3","errorCode":"0","errorMessage":""}}`)
 	}))
 	defer server.Close()
 	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
@@ -67,6 +68,9 @@ func TestTaskDetailParsesSelectedTaskPayload(t *testing.T) {
 	if detail.GID != "a1" || detail.Name != "Movie" || detail.PrimaryURI != "https://example.com/movie.mkv" {
 		t.Fatalf("unexpected detail identity: %#v", detail)
 	}
+	if got := downloadDirField(t, detail); got != "/data/downloads" {
+		t.Fatalf("download dir got %q, want /data/downloads", got)
+	}
 	if detail.CompletedLength != 250 || detail.TotalLength != 1000 || detail.DownloadSpeed != 50 || detail.UploadSpeed != 10 || detail.Connections != 3 {
 		t.Fatalf("unexpected detail metrics: %#v", detail)
 	}
@@ -74,6 +78,7 @@ func TestTaskDetailParsesSelectedTaskPayload(t *testing.T) {
 		t.Fatalf("unexpected detail files: %#v", detail.Files)
 	}
 	assertRPCRequest(t, request, "aria2.tellStatus", "token:secret-token", "a1")
+	assertRequestIncludesField(t, request, "dir")
 }
 
 type rpcCall struct {
@@ -110,4 +115,33 @@ func assertRPCRequest(t *testing.T, call rpcCall, method string, params ...any) 
 			t.Fatalf("param %d got %#v, want %#v in %#v", index, call.Params[index], want, call.Params)
 		}
 	}
+}
+
+func assertRequestIncludesField(t *testing.T, call rpcCall, field string) {
+	t.Helper()
+	if len(call.Params) < 3 {
+		t.Fatalf("params got %#v, want detail field list", call.Params)
+	}
+	fields, ok := call.Params[2].([]any)
+	if !ok {
+		t.Fatalf("field params got %#v, want []any", call.Params[2])
+	}
+	for _, item := range fields {
+		if item == field {
+			return
+		}
+	}
+	t.Fatalf("field %q missing from %#v", field, fields)
+}
+
+func downloadDirField(t *testing.T, detail aria2.DownloadDetail) string {
+	t.Helper()
+	field := reflect.ValueOf(detail).FieldByName("DownloadDir")
+	if !field.IsValid() {
+		t.Fatal("DownloadDetail is missing DownloadDir")
+	}
+	if field.Kind() != reflect.String {
+		t.Fatalf("DownloadDetail.DownloadDir kind got %s, want string", field.Kind())
+	}
+	return field.String()
 }

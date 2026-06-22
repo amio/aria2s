@@ -2,10 +2,11 @@ package tui
 
 import (
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/amio/aria2s/internal/aria2"
-	"github.com/mattn/go-runewidth"
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -81,6 +82,7 @@ func (model Model) detailView() string {
 		fmt.Sprintf("Status: %s", statusLabel(detail.Status)),
 		fmt.Sprintf("GID: %s", detail.GID),
 		fmt.Sprintf("URI: %s", detail.PrimaryURI),
+		formatDetailLabel("Download Dir", detailDownloadDir(detail)),
 		fmt.Sprintf("Progress: %s of %s (%s)", formatBytes(detail.CompletedLength), formatBytes(detail.TotalLength), formatProgress(detail.CompletedLength, detail.TotalLength)),
 		fmt.Sprintf("Down: %s", formatSpeed(detail.DownloadSpeed)),
 		fmt.Sprintf("Up: %s", formatSpeed(detail.UploadSpeed)),
@@ -253,15 +255,33 @@ func (model Model) detailStats() string {
 }
 
 func (model Model) listHelp() string {
-	return "↑/↓ Move Enter Detail a Add p Pause r Resume d Remove n Next Page b Prev Page q Quit"
+	return helpText(
+		helpItem{key: "↑/↓", desc: "Move"},
+		helpItem{key: "Enter/l", desc: "Detail"},
+		helpItem{key: "a", desc: "Add"},
+		helpItem{key: "p", desc: "Pause"},
+		helpItem{key: "r", desc: "Resume"},
+		helpItem{key: "d", desc: "Remove"},
+		helpItem{key: "n", desc: "Next Page"},
+		helpItem{key: "b", desc: "Prev Page"},
+		helpItem{key: "q", desc: "Quit"},
+	)
 }
 
 func (model Model) addHelp() string {
-	return "Enter Submit Esc Back q Quit"
+	return helpText(
+		helpItem{key: "Enter", desc: "Submit"},
+		helpItem{key: "Esc/h", desc: "Back"},
+		helpItem{key: "q", desc: "Quit"},
+	)
 }
 
 func (model Model) detailHelp() string {
-	return "Esc Back Enter Back q Quit"
+	return helpText(
+		helpItem{key: "Esc/h", desc: "Back"},
+		helpItem{key: "j/k", desc: "Next/Prev"},
+		helpItem{key: "q", desc: "Quit"},
+	)
 }
 
 func (model Model) viewport() (int, int) {
@@ -370,8 +390,8 @@ func formatProgress(completed int64, total int64) string {
 func joinSides(left string, right string, width int) string {
 	left = strings.TrimSpace(left)
 	right = strings.TrimSpace(right)
-	leftWidth := runewidth.StringWidth(left)
-	rightWidth := runewidth.StringWidth(right)
+	leftWidth := ansi.StringWidth(left)
+	rightWidth := ansi.StringWidth(right)
 	if leftWidth+1+rightWidth <= width {
 		return left + strings.Repeat(" ", width-leftWidth-rightWidth) + right
 	}
@@ -400,14 +420,14 @@ func fit(text string, width int, right bool) string {
 		return ""
 	}
 	cleaned := strings.ReplaceAll(text, "\n", " ")
-	if runewidth.StringWidth(cleaned) > width {
+	if ansi.StringWidth(cleaned) > width {
 		if width <= 3 {
 			cleaned = strings.Repeat(".", width)
 		} else {
-			cleaned = runewidth.Truncate(cleaned, width, "...")
+			cleaned = ansi.Truncate(cleaned, width, "...")
 		}
 	}
-	padding := width - runewidth.StringWidth(cleaned)
+	padding := width - ansi.StringWidth(cleaned)
 	if padding < 0 {
 		padding = 0
 	}
@@ -440,7 +460,7 @@ func paddedTransparentLine(text string, width int, padding int, foreground rgb, 
 }
 
 func selectedLine(text string, width int, background rgb, foreground rgb, status rgb, selected bool) string {
-	if runewidth.StringWidth(text) == 0 {
+	if ansi.StringWidth(text) == 0 {
 		return paddedStyledLine("", width, framePaddingX, bodyTextColor, background, false)
 	}
 	if !selected {
@@ -502,6 +522,43 @@ func colorizeForeground(text string, foreground rgb, bold bool) string {
 
 func rgbCode(color rgb) string {
 	return fmt.Sprintf("%d;%d;%d", color.r, color.g, color.b)
+}
+
+type helpItem struct {
+	key  string
+	desc string
+}
+
+func helpText(items ...helpItem) string {
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		parts = append(parts, item.key+" "+dimText(item.desc))
+	}
+	return strings.Join(parts, " ")
+}
+
+func dimText(text string) string {
+	return "\x1b[2m" + text + "\x1b[22m"
+}
+
+func boldText(text string) string {
+	return "\x1b[1m" + text + "\x1b[22m"
+}
+
+func formatDetailLabel(label string, value string) string {
+	return boldText(label+":") + " " + value
+}
+
+func detailDownloadDir(detail aria2.DownloadDetail) string {
+	if detail.DownloadDir != "" {
+		return detail.DownloadDir
+	}
+	for _, file := range detail.Files {
+		if file.Path != "" {
+			return filepath.Dir(file.Path)
+		}
+	}
+	return "-"
 }
 
 func min(a int, b int) int {

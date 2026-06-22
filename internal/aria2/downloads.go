@@ -41,6 +41,7 @@ type DownloadDetail struct {
 	DownloadSpeed   int64
 	UploadSpeed     int64
 	PrimaryURI      string
+	DownloadDir     string
 	Connections     int64
 	ErrorCode       string
 	ErrorMessage    string
@@ -94,6 +95,7 @@ func (client *RPCClient) TaskDetail(ctx context.Context, gid string) (DownloadDe
 		DownloadSpeed:   download.DownloadSpeed,
 		UploadSpeed:     download.UploadSpeed,
 		PrimaryURI:      raw.primaryURI(),
+		DownloadDir:     raw.Dir,
 		Connections:     parseInt(raw.Connections),
 		ErrorCode:       raw.ErrorCode,
 		ErrorMessage:    raw.ErrorMessage,
@@ -132,6 +134,7 @@ func (client *RPCClient) RemoveDownloadResult(ctx context.Context, gid string) e
 type rawDownload struct {
 	GID             string    `json:"gid"`
 	Status          string    `json:"status"`
+	Dir             string    `json:"dir"`
 	CompletedLength string    `json:"completedLength"`
 	TotalLength     string    `json:"totalLength"`
 	DownloadSpeed   string    `json:"downloadSpeed"`
@@ -219,5 +222,5 @@ func downloadFields() []string {
 }
 
 func detailFields() []string {
-	return []string{"gid", "status", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "connections", "errorCode", "errorMessage"}
+	return []string{"gid", "status", "dir", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "connections", "errorCode", "errorMessage"}
 }
