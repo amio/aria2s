@@ -21,6 +21,7 @@ asv status
 asv logs
 asv doctor
 asv add <url-or-magnet>
+asv console
 ```
 
 `asv install` locates `aria2c`, stores its absolute path, chooses a stable localhost RPC port, generates an RPC secret, writes managed config/state files, and installs or reasserts the LaunchAgent without starting it.
@@ -34,6 +35,8 @@ asv add <url-or-magnet>
 `asv logs` prints the log file paths plus recent stdout and stderr log content.
 
 `asv add <url-or-magnet>` reads local state and submits HTTP, HTTPS, or magnet downloads to localhost JSON-RPC with the stored token automatically.
+
+`asv console` opens an interactive terminal UI backed by the same local state and RPC token. It shows active, waiting, and recent stopped downloads, supports adding a URL or magnet, pause/resume/remove actions, selected task details, periodic refresh, and clean quit.
 
 ## Files
 
@@ -56,4 +59,5 @@ Default macOS paths:
 make build
 make test
 make test-stage1
+make test-stage2
 ```

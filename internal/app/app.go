@@ -25,6 +25,15 @@ type RPC interface {
 	AddURI(context.Context, state.State, string) (string, error)
 }
 
+type consoleRPC interface {
+	ListDownloads(context.Context, state.State, aria2.ListOptions) (aria2.DownloadSnapshot, error)
+	TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error)
+	Pause(context.Context, state.State, string) error
+	Resume(context.Context, state.State, string) error
+	Remove(context.Context, state.State, string) error
+	ClearStopped(context.Context, state.State, string) error
+}
+
 type Options struct {
 	Paths           paths.Paths
 	DownloadDir     string
@@ -267,8 +276,72 @@ func (app *App) Add(ctx context.Context, uri string) (string, error) {
 	return app.options.RPC.AddURI(ctx, current, uri)
 }
 
+func (app *App) AddURI(ctx context.Context, uri string) (string, error) {
+	return app.Add(ctx, uri)
+}
+
+func (app *App) ListDownloads(ctx context.Context, options aria2.ListOptions) (aria2.DownloadSnapshot, error) {
+	current, rpc, err := app.consoleRPC()
+	if err != nil {
+		return aria2.DownloadSnapshot{}, err
+	}
+	return rpc.ListDownloads(ctx, current, options)
+}
+
+func (app *App) TaskDetail(ctx context.Context, gid string) (aria2.DownloadDetail, error) {
+	current, rpc, err := app.consoleRPC()
+	if err != nil {
+		return aria2.DownloadDetail{}, err
+	}
+	return rpc.TaskDetail(ctx, current, gid)
+}
+
+func (app *App) Pause(ctx context.Context, gid string) error {
+	current, rpc, err := app.consoleRPC()
+	if err != nil {
+		return err
+	}
+	return rpc.Pause(ctx, current, gid)
+}
+
+func (app *App) Resume(ctx context.Context, gid string) error {
+	current, rpc, err := app.consoleRPC()
+	if err != nil {
+		return err
+	}
+	return rpc.Resume(ctx, current, gid)
+}
+
+func (app *App) Remove(ctx context.Context, gid string) error {
+	current, rpc, err := app.consoleRPC()
+	if err != nil {
+		return err
+	}
+	return rpc.Remove(ctx, current, gid)
+}
+
+func (app *App) ClearStopped(ctx context.Context, gid string) error {
+	current, rpc, err := app.consoleRPC()
+	if err != nil {
+		return err
+	}
+	return rpc.ClearStopped(ctx, current, gid)
+}
+
 func (app *App) Paths() paths.Paths {
 	return app.options.Paths
+}
+
+func (app *App) consoleRPC() (state.State, consoleRPC, error) {
+	current, err := state.Load(app.options.Paths.StateFile)
+	if err != nil {
+		return state.State{}, nil, err
+	}
+	rpc, ok := app.options.RPC.(consoleRPC)
+	if !ok {
+		return state.State{}, nil, errors.New("configured RPC client does not support console task management")
+	}
+	return current, rpc, nil
 }
 
 func (app *App) preflightLifecycle() (state.State, error) {
@@ -359,6 +432,36 @@ func (LocalRPC) Version(ctx context.Context, current state.State) (string, error
 func (LocalRPC) AddURI(ctx context.Context, current state.State, uri string) (string, error) {
 	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
 	return client.AddURI(ctx, uri)
+}
+
+func (LocalRPC) ListDownloads(ctx context.Context, current state.State, options aria2.ListOptions) (aria2.DownloadSnapshot, error) {
+	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
+	return client.ListDownloads(ctx, options)
+}
+
+func (LocalRPC) TaskDetail(ctx context.Context, current state.State, gid string) (aria2.DownloadDetail, error) {
+	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
+	return client.TaskDetail(ctx, gid)
+}
+
+func (LocalRPC) Pause(ctx context.Context, current state.State, gid string) error {
+	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
+	return client.Pause(ctx, gid)
+}
+
+func (LocalRPC) Resume(ctx context.Context, current state.State, gid string) error {
+	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
+	return client.Resume(ctx, gid)
+}
+
+func (LocalRPC) Remove(ctx context.Context, current state.State, gid string) error {
+	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
+	return client.Remove(ctx, gid)
+}
+
+func (LocalRPC) ClearStopped(ctx context.Context, current state.State, gid string) error {
+	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
+	return client.RemoveDownloadResult(ctx, gid)
 }
 
 func endpoint(port int) string {

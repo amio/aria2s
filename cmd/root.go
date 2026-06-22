@@ -22,6 +22,7 @@ func NewRoot(application *app.App) *cobra.Command {
 	root.AddCommand(newLogsCommand(application))
 	root.AddCommand(newDoctorCommand(application))
 	root.AddCommand(newAddCommand(application))
+	root.AddCommand(newConsoleCommand(application))
 	return root
 }
 
