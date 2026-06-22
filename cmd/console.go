@@ -15,7 +15,7 @@ func newConsoleCommand(application *app.App) *cobra.Command {
 		Use:   "console",
 		Short: "Open the interactive aria2 console",
 		RunE: func(command *cobra.Command, _ []string) error {
-			program := tea.NewProgram(tui.NewModel(application, time.Second))
+			program := tea.NewProgram(tui.NewModel(application, time.Second), tea.WithAltScreen())
 			_, err := program.Run()
 			return err
 		},

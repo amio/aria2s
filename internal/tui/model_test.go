@@ -45,6 +45,38 @@ func TestModelRefreshesDownloadsAndMovesSelection(t *testing.T) {
 	}
 }
 
+func TestModelRendersFullScreenTableLayout(t *testing.T) {
+	service := &fakeService{
+		snapshot: aria2.DownloadSnapshot{
+			Active:  []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active", CompletedLength: 50, TotalLength: 100, DownloadSpeed: 2048, UploadSpeed: 0}},
+			Waiting: []aria2.Download{{GID: "w1", Name: "queued.iso", Status: "waiting", CompletedLength: 0, TotalLength: 200}},
+			Stopped: []aria2.Download{{GID: "s1", Name: "done.iso", Status: "complete", CompletedLength: 300, TotalLength: 300}},
+		},
+	}
+	model := NewModel(service, time.Second)
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 140, Height: 16})
+	model = updateModel(t, model, refreshMsg{})
+
+	view := model.View()
+	for _, header := range []string{"Status", "Name", "Size", "Downloaded", "Progress", "Down", "Up"} {
+		if !strings.Contains(view, header) {
+			t.Fatalf("view missing column header %q:\n%s", header, view)
+		}
+	}
+	if !strings.Contains(view, "  Items 3") {
+		t.Fatalf("view missing footer stats:\n%s", view)
+	}
+	if !strings.Contains(view, "q Quit") {
+		t.Fatalf("view missing key help:\n%s", view)
+	}
+	if !strings.Contains(view, "▀") && !strings.Contains(view, "▄") {
+		t.Fatalf("view should use half-block header/footer rendering:\n%s", view)
+	}
+	if got := strings.Count(view, "\n") + 1; got != 16 {
+		t.Fatalf("view should fill the terminal height, got %d lines:\n%s", got, view)
+	}
+}
+
 func TestModelAddsURIFromInputMode(t *testing.T) {
 	service := &fakeService{}
 	model := NewModel(service, time.Second)
@@ -116,7 +148,7 @@ func TestModelPagesStoppedDownloads(t *testing.T) {
 		t.Fatalf("previous page stopped offset got %d, want 0", service.listOptions[2].StoppedOffset)
 	}
 	view := model.View()
-	if !strings.Contains(view, "Stopped page 1") || !strings.Contains(view, "n next stopped page") || !strings.Contains(view, "b previous stopped page") {
+	if !strings.Contains(view, "n Next Page") || !strings.Contains(view, "b Prev Page") {
 		t.Fatalf("view should describe stopped paging controls, got:\n%s", view)
 	}
 }
@@ -165,8 +197,8 @@ func TestModelQuitsFromAddAndDetailModes(t *testing.T) {
 	model := NewModel(service, time.Second)
 
 	addModel := updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	if !strings.Contains(addModel.View(), "q quits") {
-		t.Fatalf("add view should mention q quits, got:\n%s", addModel.View())
+	if !strings.Contains(addModel.View(), "q Quit") {
+		t.Fatalf("add view should mention q Quit, got:\n%s", addModel.View())
 	}
 	_, addCommand := addModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
 	if addCommand == nil {
@@ -175,8 +207,8 @@ func TestModelQuitsFromAddAndDetailModes(t *testing.T) {
 
 	detailModel := updateModel(t, model, refreshMsg{})
 	detailModel = updateModel(t, detailModel, tea.KeyMsg{Type: tea.KeyEnter})
-	if !strings.Contains(detailModel.View(), "q quits") {
-		t.Fatalf("detail view should mention q quits, got:\n%s", detailModel.View())
+	if !strings.Contains(detailModel.View(), "q Quit") {
+		t.Fatalf("detail view should mention q Quit, got:\n%s", detailModel.View())
 	}
 	_, detailCommand := detailModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
 	if detailCommand == nil {

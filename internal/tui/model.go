@@ -37,6 +37,8 @@ type Model struct {
 	mode            Mode
 	snapshot        aria2.DownloadSnapshot
 	selected        int
+	width           int
+	height          int
 	stoppedPage     int
 	stoppedLimit    int
 	input           string
@@ -66,6 +68,10 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case refreshMsg:
 		return model.refresh(), tick(model.refreshInterval)
+	case tea.WindowSizeMsg:
+		model.width = msg.Width
+		model.height = msg.Height
+		return model, nil
 	case tea.KeyMsg:
 		return model.handleKey(msg)
 	}

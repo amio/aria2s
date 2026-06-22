@@ -36,7 +36,7 @@ asv console
 
 `asv add <url-or-magnet>` reads local state and submits HTTP, HTTPS, or magnet downloads to localhost JSON-RPC with the stored token automatically.
 
-`asv console` opens an interactive terminal UI backed by the same local state and RPC token. It shows active, waiting, and recent stopped downloads, supports adding a URL or magnet, pause/resume/remove actions, selected task details, periodic refresh, and clean quit.
+`asv console` opens a full-screen interactive terminal UI backed by the same local state and RPC token. It shows active, waiting, and recent stopped downloads in a live table with status, size, progress, and transfer speeds, keeps task statistics and key help in the footer, supports adding a URL or magnet, pause/resume/remove actions, selected task details, periodic refresh, and clean quit.
 
 ## Files
 
