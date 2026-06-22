@@ -59,7 +59,7 @@ func TestModelRendersFullScreenTableLayout(t *testing.T) {
 	model = updateModel(t, model, refreshMsg{})
 
 	view := model.View()
-	for _, header := range []string{"Status", "Name", "Size", "Downloaded", "Progress", "Down", "Up"} {
+	for _, header := range []string{"Status", "Name", "Size", "Downloaded", "Progress", "Down Speed", "Up Speed"} {
 		if !strings.Contains(view, header) {
 			t.Fatalf("view missing column header %q:\n%s", header, view)
 		}

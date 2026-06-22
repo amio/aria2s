@@ -12,12 +12,21 @@ import (
 const (
 	defaultViewportWidth  = 120
 	defaultViewportHeight = 28
-	minTableWidth         = 88
+	minTableWidth         = 58 // below this even the 4-column minimal layout won't fit
 	minBodyHeight         = 3
+	minNameWidth          = 18
 	columnGap             = "  "
 	framePaddingX         = 2
 	bodyTopPaddingLines   = 1
 	bodyBottomPaddingLine = 1
+
+	// column base widths
+	statusBaseWidth     = 10
+	sizeBaseWidth       = 12
+	downloadedBaseWidth = 12
+	progressBaseWidth   = 10
+	downBaseWidth       = 14
+	upBaseWidth         = 14
 )
 
 type rgb struct {
@@ -152,19 +161,27 @@ func (model Model) detailView() string {
 
 func (model Model) tableHeader(contentWidth int) string {
 	if contentWidth < minTableWidth {
-		return fitLeft("Status  Name  Size  Downloaded  Progress  Down  Up", contentWidth)
+		return fitLeft("Status  Name  Progress  Down Speed", contentWidth)
 	}
-	statusWidth, nameWidth, sizeWidth, downloadedWidth, progressWidth, downWidth, upWidth := tableColumnWidths(contentWidth)
-	columns := []string{
-		fitLeft("Status", statusWidth),
-		fitLeft("Name", nameWidth),
-		fitLeft("Size", sizeWidth),
-		fitLeft("Downloaded", downloadedWidth),
-		fitLeft("Progress", progressWidth),
-		fitLeft("Down", downWidth),
-		fitLeft("Up", upWidth),
+	l := computeLayout(contentWidth)
+	parts := make([]string, 0, 7)
+	add := func(text string, width int, right bool) {
+		if width > 0 {
+			if right {
+				parts = append(parts, fitRight(text, width))
+			} else {
+				parts = append(parts, fitLeft(text, width))
+			}
+		}
 	}
-	return strings.Join(columns, columnGap)
+	add("Status", l.statusWidth, false)
+	add("Name", l.nameWidth, false)
+	add("Size", l.sizeWidth, true)
+	add("Downloaded", l.downloadedWidth, true)
+	add("Progress", l.progressWidth, true)
+	add("Down Speed", l.downWidth, true)
+	add("Up Speed", l.upWidth, true)
+	return strings.Join(parts, columnGap)
 }
 
 func (model Model) listBody(width int, height int) []string {
@@ -234,16 +251,26 @@ func (model Model) blankBodyLine(width int, text string) string {
 
 func (model Model) downloadRow(width int, download aria2.Download, selected bool) string {
 	contentWidth := frameContentWidth(width)
-	statusWidth, nameWidth, sizeWidth, downloadedWidth, progressWidth, downWidth, upWidth := tableColumnWidths(contentWidth)
-	status := fitLeft(downloadStatusLabel(download), statusWidth)
-	name := fitLeft(download.Name, nameWidth)
-	size := fitRight(formatBytes(download.TotalLength), sizeWidth)
-	downloaded := fitRight(formatBytes(download.CompletedLength), downloadedWidth)
-	progress := fitRight(formatProgress(download.CompletedLength, download.TotalLength), progressWidth)
-	down := fitRight(formatSpeed(download.DownloadSpeed), downWidth)
-	up := fitRight(formatSpeed(download.UploadSpeed), upWidth)
+	l := computeLayout(contentWidth)
+	parts := make([]string, 0, 7)
+	add := func(text string, width int, right bool) {
+		if width > 0 {
+			if right {
+				parts = append(parts, fitRight(text, width))
+			} else {
+				parts = append(parts, fitLeft(text, width))
+			}
+		}
+	}
+	add(downloadStatusLabel(download), l.statusWidth, false)
+	add(download.Name, l.nameWidth, false)
+	add(formatBytes(download.TotalLength), l.sizeWidth, true)
+	add(formatBytes(download.CompletedLength), l.downloadedWidth, true)
+	add(formatProgress(download.CompletedLength, download.TotalLength), l.progressWidth, true)
+	add(formatSpeed(download.DownloadSpeed), l.downWidth, true)
+	add(formatSpeed(download.UploadSpeed), l.upWidth, true)
 
-	row := strings.Join([]string{status, name, size, downloaded, progress, down, up}, columnGap)
+	row := strings.Join(parts, columnGap)
 	background := bodyColor
 	foreground := bodyTextColor
 	if selected {
@@ -344,15 +371,85 @@ func (model Model) viewport() (int, int) {
 }
 
 func tableColumnWidths(width int) (int, int, int, int, int, int, int) {
-	statusWidth := 10
-	sizeWidth := 12
-	downloadedWidth := 12
-	progressWidth := 10
-	downWidth := 11
-	upWidth := 11
-	fixed := statusWidth + sizeWidth + downloadedWidth + progressWidth + downWidth + upWidth + len(columnGap)*6
-	nameWidth := max(width-fixed, 18)
-	return statusWidth, nameWidth, sizeWidth, downloadedWidth, progressWidth, downWidth, upWidth
+	l := computeLayout(width)
+	return l.statusWidth, l.nameWidth, l.sizeWidth, l.downloadedWidth, l.progressWidth, l.downWidth, l.upWidth
+}
+
+// tableLayout holds the computed column widths for a given content width.
+// A width of 0 means the column is hidden.
+type tableLayout struct {
+	statusWidth     int
+	nameWidth       int
+	sizeWidth       int
+	downloadedWidth int
+	progressWidth   int
+	downWidth       int
+	upWidth         int
+}
+
+// computeLayout determines which columns are visible and their widths.
+// Columns are hidden in this order as width shrinks: Downloaded, Size, Up Speed.
+func computeLayout(width int) tableLayout {
+	l := tableLayout{
+		statusWidth:     statusBaseWidth,
+		sizeWidth:       sizeBaseWidth,
+		downloadedWidth: downloadedBaseWidth,
+		progressWidth:   progressBaseWidth,
+		downWidth:       downBaseWidth,
+		upWidth:         upBaseWidth,
+	}
+	for l.fixed()+minNameWidth > width && l.hideNext() {
+	}
+	l.nameWidth = max(width-l.fixed(), minNameWidth)
+	return l
+}
+
+// fixed returns the total width of all non-name columns plus column gaps.
+func (l tableLayout) fixed() int {
+	w := l.statusWidth + l.sizeWidth + l.downloadedWidth + l.progressWidth + l.downWidth + l.upWidth
+	n := l.visible()
+	if n > 1 {
+		w += (n - 1) * len(columnGap)
+	}
+	return w
+}
+
+// visible returns the number of visible columns (including name).
+func (l tableLayout) visible() int {
+	n := 2 // status and name are always visible
+	if l.sizeWidth > 0 {
+		n++
+	}
+	if l.downloadedWidth > 0 {
+		n++
+	}
+	if l.progressWidth > 0 {
+		n++
+	}
+	if l.downWidth > 0 {
+		n++
+	}
+	if l.upWidth > 0 {
+		n++
+	}
+	return n
+}
+
+// hideNext removes the next optional column; returns false when none remain.
+func (l *tableLayout) hideNext() bool {
+	if l.downloadedWidth > 0 {
+		l.downloadedWidth = 0
+		return true
+	}
+	if l.sizeWidth > 0 {
+		l.sizeWidth = 0
+		return true
+	}
+	if l.upWidth > 0 {
+		l.upWidth = 0
+		return true
+	}
+	return false
 }
 
 func tableStart(selected int, total int, visible int) int {
