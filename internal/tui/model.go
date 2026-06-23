@@ -2,6 +2,9 @@ package tui
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -297,6 +300,25 @@ func (model Model) handleDetailKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if model.detailScroll < 0 {
 			model.detailScroll = 0
 		}
+	case "o":
+		target := downloadTargetPath(model.detail)
+		if target == "" {
+			break
+		}
+		info, err := os.Stat(target)
+		if err != nil {
+			// Path doesn't exist yet — open the parent directory.
+			dir := filepath.Dir(target)
+			if dir != "" {
+				_ = exec.Command("open", dir).Start()
+			}
+			break
+		}
+		if info.IsDir() {
+			_ = exec.Command("open", target).Start()
+		} else {
+			_ = exec.Command("open", "-R", target).Start()
+		}
 	}
 	return model, nil
 }
@@ -374,6 +396,21 @@ func loadRecentDirs(service Service) tea.Cmd {
 		dirs, err := service.RecentDirs(context.Background())
 		return recentDirsMsg{dirs: dirs, err: err}
 	}
+}
+
+// downloadTargetPath returns the on-disk path for the downloaded content.
+// For single-file downloads it returns the file path; for multi-file
+// torrents it returns the content directory.
+func downloadTargetPath(detail aria2.DownloadDetail) string {
+	// Single file: prefer the file's absolute path.
+	if len(detail.Files) == 1 && detail.Files[0].Path != "" {
+		return detail.Files[0].Path
+	}
+	// Multi-file or unknown: build from DownloadDir + Name.
+	if detail.DownloadDir != "" && detail.Name != "" {
+		return filepath.Join(detail.DownloadDir, detail.Name)
+	}
+	return ""
 }
 
 func waitForWSEvent(ch <-chan aria2.Notification) tea.Cmd {

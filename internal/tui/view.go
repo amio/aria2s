@@ -413,6 +413,7 @@ func (model Model) detailHelp() []string {
 		helpItem{key: "Esc/h", desc: "Back"},
 		helpItem{key: "j/k", desc: "Next/Prev"},
 		helpItem{key: "n/b", desc: "Page"},
+		helpItem{key: "o", desc: "Open in Finder"},
 		helpItem{key: "q", desc: "Quit"},
 	)
 }
