@@ -61,7 +61,11 @@ func (model Model) View() string {
 func (model Model) listView() string {
 	width, height := model.viewport()
 	cWidth := frameContentWidth(width)
-	topContent := joinSides(dimText("aria2s ("+model.version+")"), []string{model.listStats()}, cWidth)
+	leftSide := dimText("aria2s (" + model.version + ")")
+	if info := model.ErrorInfo(); info != "" {
+		leftSide += "  " + colorizeForeground("ERROR: "+info, errorTextColor, false)
+	}
+	topContent := joinSides(leftSide, []string{model.listStats()}, cWidth)
 	bottomContent := joinSides("", model.listHelp(), cWidth)
 
 	barLines := len(model.barFrame("")) * 2
@@ -251,9 +255,6 @@ func (model Model) listBody(width int, height int) []string {
 	}
 
 	body := make([]string, 0, height)
-	if model.err != nil {
-		body = append(body, borderedLine(fmt.Sprintf("Error: %v", model.err), width, errorTextColor, contentBgColor, true))
-	}
 
 	items := model.items()
 	remaining := height - len(body)
@@ -410,7 +411,7 @@ func (model Model) listStats() string {
 		upTotal += item.UploadSpeed
 	}
 	return fmt.Sprintf(
-		"Tasks %d (A%d W%d S%d) Down %s  Up %s",
+		"Total %d (A%d W%d S%d) Down %s  Up %s",
 		len(items),
 		len(model.snapshot.Active),
 		len(model.snapshot.Waiting),
@@ -869,7 +870,10 @@ func colorizeForeground(text string, foreground rgb, bold bool) string {
 	builder.WriteString(rgbCode(foreground))
 	builder.WriteString("m")
 	builder.WriteString(text)
-	builder.WriteString("\x1b[0m")
+	builder.WriteString("\x1b[39m")
+	if bold {
+		builder.WriteString("\x1b[22m")
+	}
 	return builder.String()
 }
 

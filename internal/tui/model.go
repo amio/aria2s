@@ -56,6 +56,8 @@ type Model struct {
 	loadingFrame    int
 	version         string
 	err             error
+	errorInfo       string
+	errorInfoTime   time.Time
 }
 
 type refreshMsg struct{}
@@ -128,7 +130,7 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case recentDirsMsg:
 		model.addForm = model.addForm.WithRecents(msg.dirs)
 		if msg.err != nil {
-			model.err = msg.err
+			model.setError(msg.err)
 		}
 		if model.mode == ModeAdd {
 			return model, model.addForm.BlinkCmd()
@@ -164,7 +166,7 @@ func (model Model) refresh() Model {
 	})
 	model.loaded = true
 	if err != nil {
-		model.err = err
+		model.setError(err)
 		return model
 	}
 	previous := model.Selected().GID
@@ -231,7 +233,7 @@ func (model Model) handleListKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "d":
 		selected := model.Selected()
 		if selected.GID != "" && isStopped(selected) {
-			model.err = model.service.ClearStopped(context.Background(), selected.GID)
+			model.setError(model.service.ClearStopped(context.Background(), selected.GID))
 		} else {
 			model.runSelected(func(ctx context.Context, gid string) error {
 				return model.service.Remove(ctx, gid)
@@ -270,7 +272,8 @@ func (model Model) applyAddForm(form AddForm, cmd tea.Cmd, action AddFormAction)
 			if dir != "" {
 				opts.Dir = dir
 			}
-			_, model.err = model.service.AddURI(context.Background(), uri, opts)
+			_, err := model.service.AddURI(context.Background(), uri, opts)
+			model.setError(err)
 		}
 		model.addForm = model.addForm.Reset()
 		model.mode = ModeList
@@ -335,7 +338,7 @@ func (model Model) openDetailAt(index int) Model {
 	}
 	detail, err := model.service.TaskDetail(context.Background(), items[index].GID)
 	if err != nil {
-		model.err = err
+		model.setError(err)
 		return model
 	}
 	model.selected = index
@@ -346,12 +349,30 @@ func (model Model) openDetailAt(index int) Model {
 	return model
 }
 
+func (model *Model) setError(err error) {
+	model.err = err
+	if err != nil {
+		model.errorInfo = err.Error()
+		model.errorInfoTime = time.Now()
+	}
+}
+
+const errorInfoDuration = 2 * time.Second
+
+// ErrorInfo returns the last error message if it was set within errorInfoDuration.
+func (model Model) ErrorInfo() string {
+	if model.errorInfo != "" && time.Since(model.errorInfoTime) < errorInfoDuration {
+		return model.errorInfo
+	}
+	return ""
+}
+
 func (model *Model) runSelected(action func(context.Context, string) error) {
 	selected := model.Selected()
 	if selected.GID == "" {
 		return
 	}
-	model.err = action(context.Background(), selected.GID)
+	model.setError(action(context.Background(), selected.GID))
 }
 
 func (model Model) items() []aria2.Download {

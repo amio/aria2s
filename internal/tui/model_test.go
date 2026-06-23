@@ -87,7 +87,7 @@ func TestModelRendersFullScreenTableLayout(t *testing.T) {
 			t.Fatalf("view missing column header %q:\n%s", header, view)
 		}
 	}
-	if !strings.Contains(view, "Tasks 3 (A") {
+	if !strings.Contains(view, "Total 3 (A") {
 		t.Fatalf("view missing footer stats:\n%s", view)
 	}
 	if !strings.Contains(view, "Enter/l \x1b[2mDetail\x1b[22m") || !strings.Contains(view, "q \x1b[2mQuit\x1b[22m") {
