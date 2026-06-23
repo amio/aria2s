@@ -26,8 +26,8 @@ const (
 	sizeBaseWidth       = 12
 	downloadedBaseWidth = 12
 	progressBaseWidth   = 10
-	downBaseWidth       = 14
-	upBaseWidth         = 14
+	downBaseWidth       = 12
+	upBaseWidth         = 10
 )
 
 type rgb struct {
