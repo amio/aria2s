@@ -1,0 +1,50 @@
+# https://goreleaser.com
+
+builds:
+  - env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    binary: aria2s
+    ldflags:
+      - -s -w
+
+archives:
+  - formats: ["tar.gz"]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+checksum:
+  name_template: "checksums.txt"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^ci:"
+      - "^chore:"
+
+brews:
+  - name: aria2s
+    homepage: "https://github.com/amio/aria2s"
+    description: "Your aria2c, always on — TUI manager for aria2 downloads"
+    license: "MIT"
+    repository:
+      owner: amio
+      name: homebrew-tap
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    post_install: |
+      bin.install_symlink "aria2s"
+    caveats: |
+      aria2s manages aria2c as a background service. To set it up:
+        aria2s install --start
+
+      Then just run the TUI:
+        aria2s
+    test: |
+      system "#{bin}/aria2s", "version"
