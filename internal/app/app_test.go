@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -237,7 +238,7 @@ func TestRestartWaitsThroughShutdownTransitionWhenRPCIsAlreadyUnavailable(t *tes
 	rpc := &sessionRecordingRPC{
 		service:        serviceBackend,
 		events:         &events,
-		saveSessionErr: errors.New(`Post "http://127.0.0.1:6800/jsonrpc": dial tcp 127.0.0.1:6800: connect: connection refused`),
+		saveSessionErr: fmt.Errorf("%w: dial tcp 127.0.0.1:6800: connect: connection refused", aria2.ErrTransportUnavailable),
 	}
 	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
 		RPCReadyTimeout: time.Second,
@@ -400,6 +401,43 @@ func TestInstallStartGracefullyStopsRunningServiceBeforeReloadingChangedPlist(t 
 	}
 	if strings.Join(events, ",") != "saveSession,shutdown,uninstall,install,start,version" {
 		t.Fatalf("expected graceful shutdown before service reload, got %v", events)
+	}
+}
+
+func TestInstallPreservesRunningServiceAcrossChangedPlistWithoutStartFlag(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	current := state.State{
+		Aria2cPath:   aria2c,
+		RPCPort:      6800,
+		RPCSecret:    "secret-token",
+		ConfigPath:   servicePaths.ConfigFile,
+		SessionPath:  servicePaths.SessionFile,
+		LogPath:      servicePaths.LogFile,
+		ErrorLogPath: servicePaths.ErrorLogFile,
+		ServiceName:  servicePaths.ServiceName,
+	}
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+		t.Fatalf("mkdir service dir: %v", err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, []byte("stale plist"), 0o644); err != nil {
+		t.Fatalf("write stale plist: %v", err)
+	}
+	events := []string{}
+	serviceBackend := &recordingService{loaded: true, running: true, events: &events}
+	rpc := &sessionRecordingRPC{events: &events, service: serviceBackend}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{})
+
+	if err := application.Install(context.Background(), false); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	if strings.Join(events, ",") != "saveSession,shutdown,uninstall,install,start" {
+		t.Fatalf("expected install to preserve running state across plist reload, got %v", events)
 	}
 }
 
@@ -577,16 +615,6 @@ func (service *recordingService) Stop(context.Context) error {
 	return nil
 }
 
-func (service *recordingService) Restart(context.Context) error {
-	service.calls = append(service.calls, "restart")
-	if service.events != nil {
-		*service.events = append(*service.events, "restart")
-	}
-	service.loaded = true
-	service.running = true
-	return nil
-}
-
 func (service *recordingService) IsLoaded(context.Context) bool {
 	return service.loaded
 }
@@ -617,10 +645,6 @@ func (service *unloadedService) Stop(context.Context) error {
 	return nil
 }
 
-func (service *unloadedService) Restart(context.Context) error {
-	return nil
-}
-
 func (service *unloadedService) IsLoaded(context.Context) bool {
 	return false
 }
@@ -647,10 +671,6 @@ func (service *alreadyLoadedService) Start(context.Context) error {
 }
 
 func (service *alreadyLoadedService) Stop(context.Context) error {
-	return nil
-}
-
-func (service *alreadyLoadedService) Restart(context.Context) error {
 	return nil
 }
 

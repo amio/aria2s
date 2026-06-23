@@ -7,7 +7,6 @@ type Backend interface {
 	Uninstall(context.Context) error
 	Start(context.Context) error
 	Stop(context.Context) error
-	Restart(context.Context) error
 	IsLoaded(context.Context) bool
 	IsRunning(context.Context) bool
 }

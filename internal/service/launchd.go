@@ -64,17 +64,7 @@ func (backend *LaunchdBackend) Stop(ctx context.Context) error {
 	if !backend.IsLoaded(ctx) {
 		return nil
 	}
-	_, err := backend.runner.Run(ctx, "launchctl", "bootout", backend.serviceTarget())
-	return err
-}
-
-func (backend *LaunchdBackend) Restart(ctx context.Context) error {
-	if !backend.IsLoaded(ctx) {
-		if err := backend.bootstrap(ctx); err != nil {
-			return err
-		}
-	}
-	_, err := backend.runner.Run(ctx, "launchctl", "kickstart", "-k", backend.serviceTarget())
+	_, err := backend.runner.Run(ctx, "launchctl", "kill", "SIGTERM", backend.serviceTarget())
 	return err
 }
 

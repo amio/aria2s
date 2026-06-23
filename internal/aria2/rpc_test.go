@@ -2,6 +2,7 @@ package aria2_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -73,5 +74,13 @@ func TestAddURIRejectsUnsupportedSchemes(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported URI") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWrapTransportErrorMarksEOFAsTransportUnavailable(t *testing.T) {
+	err := aria2.WrapTransportError(io.EOF)
+
+	if !errors.Is(err, aria2.ErrTransportUnavailable) {
+		t.Fatalf("expected ErrTransportUnavailable, got %v", err)
 	}
 }

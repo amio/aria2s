@@ -6,9 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net"
 	"net/http"
+	neturl "net/url"
 	"strings"
 )
+
+var ErrTransportUnavailable = errors.New("aria2 rpc transport unavailable")
 
 type RPCClient struct {
 	endpoint string
@@ -110,4 +115,22 @@ func isSupportedURI(uri string) bool {
 	return strings.HasPrefix(uri, "http://") ||
 		strings.HasPrefix(uri, "https://") ||
 		strings.HasPrefix(uri, "magnet:")
+}
+
+func WrapTransportError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var urlErr *neturl.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return fmt.Errorf("%w: %v", ErrTransportUnavailable, err)
+	}
+	if errors.Is(err, io.EOF) {
+		return fmt.Errorf("%w: %v", ErrTransportUnavailable, err)
+	}
+	return err
 }

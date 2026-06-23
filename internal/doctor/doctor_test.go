@@ -397,13 +397,6 @@ func (service *fakeService) Stop(context.Context) error {
 	return nil
 }
 
-func (service *fakeService) Restart(ctx context.Context) error {
-	if err := service.Stop(ctx); err != nil {
-		return err
-	}
-	return service.Start(ctx)
-}
-
 func (service *fakeService) IsLoaded(context.Context) bool {
 	return service.installed
 }

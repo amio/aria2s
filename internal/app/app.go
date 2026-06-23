@@ -8,11 +8,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/amio/aria2s/internal/aria2"
@@ -177,6 +175,7 @@ func (app *App) Install(ctx context.Context, start bool) error {
 		serviceLoaded = app.options.Service.IsLoaded(ctx)
 		serviceRunning = app.options.Service.IsRunning(ctx)
 	}
+	serviceWasRunning := serviceRunning
 	serviceChanged, err := fileContentChanged(app.options.Paths.ServiceFile, plist)
 	if err != nil {
 		return err
@@ -197,26 +196,28 @@ func (app *App) Install(ctx context.Context, start bool) error {
 		return err
 	}
 	if app.options.Service != nil {
+		didWaitForRPC := false
 		if !serviceLoaded {
 			if err := app.options.Service.Install(ctx); err != nil {
 				return err
 			}
 		}
 		if start {
-			if serviceRunning && managedConfigChanged && !serviceChanged {
+			if serviceWasRunning && managedConfigChanged && !serviceChanged {
 				if err := app.restartServiceGracefully(ctx, current); err != nil {
 					return err
 				}
+				didWaitForRPC = true
 			} else if err := app.options.Service.Start(ctx); err != nil {
 				return err
 			}
-		} else if serviceRunning && serviceChanged {
+		} else if serviceWasRunning && serviceChanged {
 			if err := app.options.Service.Start(ctx); err != nil {
 				return err
 			}
 		}
 		if start {
-			if serviceRunning && managedConfigChanged && !serviceChanged {
+			if didWaitForRPC {
 				return nil
 			}
 			return app.waitForRPC(ctx, current)
@@ -283,13 +284,13 @@ func (app *App) restartServiceGracefully(ctx context.Context, current state.Stat
 
 func (app *App) gracefulShutdown(ctx context.Context, current state.State) error {
 	if err := app.saveSession(ctx, current); err != nil {
-		if isRPCTransportUnavailable(err) {
+		if errors.Is(err, aria2.ErrTransportUnavailable) {
 			return app.waitForServiceStop(ctx)
 		}
 		return err
 	}
 	if err := app.shutdown(ctx, current); err != nil {
-		if isRPCTransportUnavailable(err) {
+		if errors.Is(err, aria2.ErrTransportUnavailable) {
 			return app.waitForServiceStop(ctx)
 		}
 		return err
@@ -565,12 +566,12 @@ func (LocalRPC) AddURI(ctx context.Context, current state.State, uri string, opt
 
 func (LocalRPC) SaveSession(ctx context.Context, current state.State) error {
 	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
-	return client.SaveSession(ctx)
+	return aria2.WrapTransportError(client.SaveSession(ctx))
 }
 
 func (LocalRPC) Shutdown(ctx context.Context, current state.State) error {
 	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
-	return client.Shutdown(ctx)
+	return aria2.WrapTransportError(client.Shutdown(ctx))
 }
 
 func (LocalRPC) ListDownloads(ctx context.Context, current state.State, options aria2.ListOptions) (aria2.DownloadSnapshot, error) {
@@ -614,19 +615,6 @@ func IsPortAvailable(port int) bool {
 	}
 	_ = listener.Close()
 	return true
-}
-
-func isRPCTransportUnavailable(err error) bool {
-	var urlErr *neturl.Error
-	if errors.As(err, &urlErr) {
-		err = urlErr.Err
-	}
-	var opErr *net.OpError
-	if errors.As(err, &opErr) {
-		return true
-	}
-	message := err.Error()
-	return strings.Contains(message, "connection refused") || strings.Contains(message, "EOF")
 }
 
 func GenerateSecret() (string, error) {

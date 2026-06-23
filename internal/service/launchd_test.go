@@ -57,10 +57,22 @@ func TestLaunchdBackendGeneratesBootstrapCommands(t *testing.T) {
 		"launchctl print gui/501/io.github.amio.aria2s",
 		"launchctl kickstart gui/501/io.github.amio.aria2s",
 		"launchctl print gui/501/io.github.amio.aria2s",
-		"launchctl bootout gui/501/io.github.amio.aria2s",
+		"launchctl kill SIGTERM gui/501/io.github.amio.aria2s",
 	}
 	if strings.Join(runner.calls, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("unexpected commands:\n%s", strings.Join(runner.calls, "\n"))
+	}
+}
+
+func TestLaunchdStopKeepsServiceLoaded(t *testing.T) {
+	runner := &printAwareRunner{loaded: true, running: true}
+	backend := service.NewLaunchdBackend(runner, 501, "io.github.amio.aria2s", "/tmp/io.github.amio.aria2s.plist")
+
+	if err := backend.Stop(context.Background()); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	if !runner.loaded {
+		t.Fatal("expected stop to keep the service loaded")
 	}
 }
 
@@ -92,23 +104,6 @@ func TestLaunchdStartDoesNothingWhenAlreadyRunning(t *testing.T) {
 	}
 
 	want := []string{"launchctl print gui/501/io.github.amio.aria2s"}
-	if strings.Join(runner.calls, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("unexpected commands:\n%s", strings.Join(runner.calls, "\n"))
-	}
-}
-
-func TestLaunchdRestartUsesKickstartKillWhenLoaded(t *testing.T) {
-	runner := &printAwareRunner{loaded: true, running: true}
-	backend := service.NewLaunchdBackend(runner, 501, "io.github.amio.aria2s", "/tmp/io.github.amio.aria2s.plist")
-
-	if err := backend.Restart(context.Background()); err != nil {
-		t.Fatalf("restart: %v", err)
-	}
-
-	want := []string{
-		"launchctl print gui/501/io.github.amio.aria2s",
-		"launchctl kickstart -k gui/501/io.github.amio.aria2s",
-	}
 	if strings.Join(runner.calls, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("unexpected commands:\n%s", strings.Join(runner.calls, "\n"))
 	}
@@ -173,6 +168,9 @@ func (runner *printAwareRunner) Run(_ context.Context, name string, args ...stri
 	}
 	if call == "launchctl bootstrap gui/501 /tmp/io.github.amio.aria2s.plist" {
 		runner.loaded = true
+	}
+	if call == "launchctl kill SIGTERM gui/501/io.github.amio.aria2s" {
+		runner.running = false
 	}
 	if call == "launchctl bootout gui/501/io.github.amio.aria2s" {
 		runner.loaded = false
