@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var runConsole = func(application *app.App) error {
+func defaultConsoleRunner(application *app.App) error {
 	program := tea.NewProgram(tui.NewModel(application, time.Second, Version), tea.WithAltScreen())
 	_, err := program.Run()
 	return err
@@ -24,7 +24,7 @@ func newConsoleCommand(application *app.App) *cobra.Command {
 			if err := application.EnsureConsoleReady(command.Context()); err != nil {
 				return err
 			}
-			return runConsole(application)
+			return application.RunConsole()
 		},
 	}
 }

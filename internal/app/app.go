@@ -51,6 +51,7 @@ type Options struct {
 	RPCReadyTimeout time.Duration
 	RPCPollInterval time.Duration
 	ShutdownTimeout time.Duration
+	ConsoleRunner   func(*App) error
 }
 
 type App struct {
@@ -317,6 +318,17 @@ func (app *App) Install(ctx context.Context, start bool) error {
 		}
 	}
 	return nil
+}
+
+func (app *App) RunConsole() error {
+	if app.options.ConsoleRunner == nil {
+		return errors.New("console runner not configured")
+	}
+	return app.options.ConsoleRunner(app)
+}
+
+func (app *App) SetConsoleRunner(runner func(*App) error) {
+	app.options.ConsoleRunner = runner
 }
 
 func (app *App) EnsureConsoleReady(ctx context.Context) error {

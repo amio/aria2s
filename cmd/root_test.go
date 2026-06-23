@@ -40,13 +40,9 @@ func TestRootWithoutArgsOpensConsole(t *testing.T) {
 	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc)
 
 	calls := 0
-	previous := runConsole
-	runConsole = func(*app.App) error {
+	application.SetConsoleRunner(func(*app.App) error {
 		calls++
 		return nil
-	}
-	t.Cleanup(func() {
-		runConsole = previous
 	})
 
 	root := NewRoot(application)
@@ -109,13 +105,9 @@ func TestRootWithoutArgsUsesStoredInstallWhenLookPathFails(t *testing.T) {
 	})
 
 	calls := 0
-	previous := runConsole
-	runConsole = func(*app.App) error {
+	application.SetConsoleRunner(func(*app.App) error {
 		calls++
 		return nil
-	}
-	t.Cleanup(func() {
-		runConsole = previous
 	})
 
 	root := NewRoot(application)

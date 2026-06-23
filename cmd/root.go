@@ -35,6 +35,7 @@ func Execute() error {
 	if err != nil {
 		return err
 	}
+	application.SetConsoleRunner(defaultConsoleRunner)
 	return NewRoot(application).Execute()
 }
 
