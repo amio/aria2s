@@ -9,7 +9,14 @@
 curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | sh
 
 # Or if you have Go installed
-go install github.com/amio/aria2s@latest && aria2s install --start
+go install github.com/amio/aria2s@latest
+```
+
+## Uninstall
+
+```bash
+aria2s uninstall                       # remove service and all managed files
+rm "$(command -v aria2s)"             # remove the binary
 ```
 
 ## Quick Start
