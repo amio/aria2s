@@ -29,22 +29,27 @@ changelog:
       - "^ci:"
       - "^chore:"
 
-brews:
-  - name: aria2s
-    homepage: "https://github.com/amio/aria2s"
-    description: "Your aria2c, always on — TUI manager for aria2 downloads"
-    license: "MIT"
-    repository:
-      owner: amio
-      name: homebrew-tap
-      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
-    post_install: |
-      bin.install_symlink "aria2s"
-    caveats: |
-      aria2s manages aria2c as a background service. To set it up:
-        aria2s install --start
-
-      Then just run the TUI:
-        aria2s
-    test: |
-      system "#{bin}/aria2s", "version"
+# --- Homebrew tap (uncomment when TAP_TOKEN is ready) ---
+#
+# 1. Create repo: github.com/amio/homebrew-tap
+# 2. Generate PAT with `repo` scope at https://github.com/settings/tokens
+# 3. Add secret TAP_TOKEN at https://github.com/amio/aria2s/settings/secrets/actions
+# 4. Uncomment this block:
+#
+# brews:
+#   - name: aria2s
+#     homepage: "https://github.com/amio/aria2s"
+#     description: "Your aria2c, always on — TUI manager for aria2 downloads"
+#     license: "MIT"
+#     repository:
+#       owner: amio
+#       name: homebrew-tap
+#       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+#     caveats: |
+#       aria2s manages aria2c as a background service. To set it up:
+#         aria2s install --start
+#
+#       Then just run the TUI:
+#         aria2s
+#     test: |
+#       system "#{bin}/aria2s", "version"

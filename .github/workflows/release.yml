@@ -12,27 +12,18 @@ jobs:
   goreleaser:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version: "1.26"
 
-      - uses: goreleaser/goreleaser-action@v6
+      - uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
-          version: latest
+          version: "~> v2"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # If you want goreleaser to auto-push the Homebrew Formula,
-          # create a PAT with `repo` scope and add it as a secret:
-          #   https://github.com/amio/aria2s/settings/secrets/actions/new
-          #
-          #   Name:  TAP_TOKEN
-          #   Value: ghp_xxxxxxxxxxxxxxxxxxxx
-          #
-          # Then uncomment the line below and remove the `#`:
-          # TAP_GITHUB_TOKEN: ${{ secrets.TAP_TOKEN }}
