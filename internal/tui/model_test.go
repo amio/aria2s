@@ -575,3 +575,7 @@ func (service *fakeService) ClearStopped(_ context.Context, gid string) error {
 	service.cleared = append(service.cleared, gid)
 	return nil
 }
+
+func (service *fakeService) Subscribe(context.Context) <-chan aria2.Notification {
+	return nil
+}

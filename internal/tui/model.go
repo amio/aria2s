@@ -20,6 +20,9 @@ type Service interface {
 	Resume(context.Context, string) error
 	Remove(context.Context, string) error
 	ClearStopped(context.Context, string) error
+	// Subscribe returns a channel of aria2 WebSocket notification events.
+	// When WebSocket is unavailable the implementation returns nil.
+	Subscribe(context.Context) <-chan aria2.Notification
 }
 
 /** Mode identifies the current console interaction surface. */
@@ -35,6 +38,7 @@ const (
 type Model struct {
 	service         Service
 	refreshInterval time.Duration
+	wsEvents        <-chan aria2.Notification
 	mode            Mode
 	snapshot        aria2.DownloadSnapshot
 	selected        int
@@ -52,6 +56,12 @@ type Model struct {
 
 type refreshMsg struct{}
 
+type wsEventMsg struct {
+	notification aria2.Notification
+}
+
+type wsDisconnectedMsg struct{}
+
 type loadingTickMsg struct{}
 
 type recentDirsMsg struct {
@@ -66,22 +76,35 @@ func NewModel(service Service, refreshInterval time.Duration) Model {
 	return Model{
 		service:         service,
 		refreshInterval: refreshInterval,
+		wsEvents:        service.Subscribe(context.Background()),
 		mode:            ModeList,
 		stoppedLimit:    100,
 	}
 }
 
 func (model Model) Init() tea.Cmd {
-	return tea.Batch(
+	cmds := []tea.Cmd{
 		func() tea.Msg { return refreshMsg{} },
 		loadingTick(),
-	)
+	}
+	if model.wsEvents != nil {
+		cmds = append(cmds, waitForWSEvent(model.wsEvents))
+	}
+	return tea.Batch(cmds...)
 }
 
 func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case refreshMsg:
 		return model.refresh(), tick(model.refreshInterval)
+	case wsEventMsg:
+		return model.refresh(), tea.Batch(
+			tick(model.refreshInterval),
+			waitForWSEvent(model.wsEvents),
+		)
+	case wsDisconnectedMsg:
+		model.wsEvents = nil
+		return model, nil
 	case loadingTickMsg:
 		if model.loaded {
 			return model, nil
@@ -350,5 +373,15 @@ func loadRecentDirs(service Service) tea.Cmd {
 	return func() tea.Msg {
 		dirs, err := service.RecentDirs(context.Background())
 		return recentDirsMsg{dirs: dirs, err: err}
+	}
+}
+
+func waitForWSEvent(ch <-chan aria2.Notification) tea.Cmd {
+	return func() tea.Msg {
+		notif, ok := <-ch
+		if !ok {
+			return wsDisconnectedMsg{}
+		}
+		return wsEventMsg{notification: notif}
 	}
 }

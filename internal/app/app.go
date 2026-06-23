@@ -439,6 +439,19 @@ func (app *App) ClearStopped(ctx context.Context, gid string) error {
 	return rpc.ClearStopped(ctx, current, gid)
 }
 
+func (app *App) Subscribe(ctx context.Context) <-chan aria2.Notification {
+	current, err := state.Load(app.options.Paths.StateFile)
+	if err != nil {
+		return nil
+	}
+	wsClient, err := aria2.NewWSClient(endpoint(current.RPCPort))
+	if err != nil {
+		return nil
+	}
+	wsClient.Connect(ctx)
+	return wsClient.Events()
+}
+
 func (app *App) Paths() paths.Paths {
 	return app.options.Paths
 }
