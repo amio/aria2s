@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"path/filepath"
 	"strings"
 
@@ -197,7 +198,13 @@ func (model Model) detailView() string {
 	if len(detail.Files) > 0 {
 		lines = append(lines, "", "Files:")
 		for _, file := range detail.Files {
-			label := fmt.Sprintf("- %s (%s of %s)", file.Name, formatBytes(file.CompletedLength), formatBytes(file.Length))
+			pct := float64(file.CompletedLength) / float64(file.Length)
+			if file.Length <= 0 {
+				pct = 0
+			}
+			bar := makeProgressBar(pct)
+			label := fmt.Sprintf("%s %s %s", bar, file.Name,
+				dimText(fmt.Sprintf("(%s of %s)", formatBytes(file.CompletedLength), formatBytes(file.Length))))
 			if !file.Selected {
 				label += dimText(" (unselected)")
 			}
@@ -629,6 +636,44 @@ func formatProgress(completed int64, total int64) string {
 		return "0.0%"
 	}
 	return fmt.Sprintf("%.1f%%", float64(completed)/float64(total)*100)
+}
+
+/** makeProgressBar returns a unicode progress bar string with an always-visible
+    half-character slider (╸) separating filled from empty. Each cell counts
+    as 2 segments; one segment is reserved for the slider so it never vanishes
+    into a full cell. The thin-track portion (─) is rendered dim. */
+func makeProgressBar(progress float64, charCount ...int) string {
+	n := 5
+	if len(charCount) > 0 && charCount[0] > 0 {
+		n = charCount[0]
+	}
+	if progress <= 0 {
+		return dimText(strings.Repeat("\u2500", n)) // ─
+	}
+	if progress >= 1 {
+		return strings.Repeat("\u2501", n) // ━
+	}
+
+	sliderPos := int(math.Floor(progress * float64(n*2-1)))
+
+	var b strings.Builder
+	b.Grow(n * 3)
+	for i := 0; i < n; i++ {
+		cellStart := i * 2
+		if cellStart+1 < sliderPos {
+			b.WriteRune('\u2501') // ━
+		} else if cellStart <= sliderPos {
+			b.WriteRune('\u2578') // ╸
+		} else {
+			b.WriteRune('\u2500') // ─
+		}
+	}
+
+	raw := b.String()
+	if idx := strings.IndexRune(raw, '\u2500'); idx >= 0 {
+		return raw[:idx] + dimText(raw[idx:])
+	}
+	return raw
 }
 
 func joinSides(left string, rightParts []string, width int) string {
