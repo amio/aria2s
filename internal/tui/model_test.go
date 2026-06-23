@@ -123,7 +123,7 @@ func TestModelAddDirRecentPick(t *testing.T) {
 	model := NewModel(service, time.Second)
 
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	model.recentDirs = service.recentDirs
+	model.addForm = model.addForm.WithRecents(service.recentDirs)
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://example.com/file.zip")})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
@@ -141,20 +141,20 @@ func TestModelAddDirTabCyclesAndWraps(t *testing.T) {
 	model := NewModel(service, time.Second)
 
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	model.recentDirs = service.recentDirs
+	model.addForm = model.addForm.WithRecents(service.recentDirs)
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // URL -> Dir
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // -> 1st recent
-	if model.dirInput != "/data/Movies" {
-		t.Fatalf("first tab got %q, want /data/Movies", model.dirInput)
+	if model.addForm.dir != "/data/Movies" {
+		t.Fatalf("first tab got %q, want /data/Movies", model.addForm.dir)
 	}
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // -> 2nd
-	if model.dirInput != "/data/Music" {
-		t.Fatalf("second tab got %q, want /data/Music", model.dirInput)
+	if model.addForm.dir != "/data/Music" {
+		t.Fatalf("second tab got %q, want /data/Music", model.addForm.dir)
 	}
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // -> 3rd
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // wrap -> 1st
-	if model.dirInput != "/data/Movies" {
-		t.Fatalf("wrapped tab got %q, want /data/Movies", model.dirInput)
+	if model.addForm.dir != "/data/Movies" {
+		t.Fatalf("wrapped tab got %q, want /data/Movies", model.addForm.dir)
 	}
 }
 
@@ -416,7 +416,7 @@ func TestModelQuitsFromAddAndDetailModes(t *testing.T) {
 	if addModel.Mode() != ModeAdd {
 		t.Fatalf("mode got %s, want add after typing q", addModel.Mode())
 	}
-	if got := addModel.input; got != "q" {
+	if got := addModel.addForm.url; got != "q" {
 		t.Fatalf("input got %q, want q (bare runes must be typed, not shortcuts)", got)
 	}
 	_, quitCmd := addModel.Update(tea.KeyMsg{Type: tea.KeyCtrlC})

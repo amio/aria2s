@@ -2,7 +2,6 @@ package tui
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -32,14 +31,6 @@ const (
 	ModeDetail Mode = "detail"
 )
 
-/** addField identifies which input is focused in add mode. */
-type addField int
-
-const (
-	fieldURL addField = iota
-	fieldDir
-)
-
 /** Model is the Bubble Tea state for the aria2 console. */
 type Model struct {
 	service         Service
@@ -51,12 +42,7 @@ type Model struct {
 	height          int
 	stoppedPage     int
 	stoppedLimit    int
-	input           string
-	dirInput        string
-	addField        addField
-	defaultDir      string
-	recentDirs      []string
-	dirPick         int
+	addForm         AddForm
 	detail          aria2.DownloadDetail
 	detailScroll    int
 	err             error
@@ -78,7 +64,6 @@ func NewModel(service Service, refreshInterval time.Duration) Model {
 		refreshInterval: refreshInterval,
 		mode:            ModeList,
 		stoppedLimit:    100,
-		dirPick:         -1,
 	}
 }
 
@@ -90,10 +75,19 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case refreshMsg:
 		return model.refresh(), tick(model.refreshInterval)
+	case cursorBlinkMsg:
+		if model.mode != ModeAdd {
+			return model, nil
+		}
+		model.addForm = model.addForm.Blink()
+		return model, model.addForm.BlinkCmd()
 	case recentDirsMsg:
-		model.recentDirs = msg.dirs
+		model.addForm = model.addForm.WithRecents(msg.dirs)
 		if msg.err != nil {
 			model.err = msg.err
+		}
+		if model.mode == ModeAdd {
+			return model, model.addForm.BlinkCmd()
 		}
 		return model, nil
 	case tea.WindowSizeMsg:
@@ -160,7 +154,7 @@ the current input mode. It is the only path by which typed characters
 reach input fields, keeping field routing out of handleKey. */
 func (model Model) handleInputRune(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if model.mode == ModeAdd {
-		return model.routeAddInput(key)
+		return model.applyAddForm(model.addForm.HandleKey(key))
 	}
 	return model, nil
 }
@@ -179,11 +173,7 @@ func (model Model) handleListKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 	case "a":
 		model.mode = ModeAdd
-		model.input = ""
-		model.dirInput = ""
-		model.addField = fieldURL
-		model.dirPick = -1
-		model.defaultDir = model.service.DefaultDir()
+		model.addForm = NewAddForm(model.service.DefaultDir())
 		return model, loadRecentDirs(model.service)
 	case "p":
 		model.runSelected(func(ctx context.Context, gid string) error {
@@ -217,116 +207,32 @@ func (model Model) handleListKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (model Model) handleAddKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch key.String() {
-	case "ctrl+c":
+	return model.applyAddForm(model.addForm.HandleKey(key))
+}
+
+func (model Model) applyAddForm(form AddForm, cmd tea.Cmd, action AddFormAction) (tea.Model, tea.Cmd) {
+	model.addForm = form
+	switch action {
+	case AddFormQuit:
 		return model, tea.Quit
-	case "esc":
+	case AddFormCancel:
 		model.mode = ModeList
-		model.input = ""
-		model.dirInput = ""
-		model.addField = fieldURL
-		model.dirPick = -1
 		return model, nil
-	}
-	return model.routeAddInput(key)
-}
-
-/** routeAddInput dispatches a non-shortcut key to the add-mode field
-currently in focus. It is shared by handleAddKey (special keys such as
-tab/enter/backspace/arrows) and by the input-mode rune guard in
-handleKey (bare runes intercepted before the shortcut switch). */
-func (model Model) routeAddInput(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch model.addField {
-	case fieldDir:
-		return model.handleDirFieldKey(key)
+	case AddFormSubmit:
+		uri, dir := model.addForm.Values()
+		if uri != "" {
+			opts := aria2.AddOptions{}
+			if dir != "" {
+				opts.Dir = dir
+			}
+			_, model.err = model.service.AddURI(context.Background(), uri, opts)
+		}
+		model.addForm = model.addForm.Reset()
+		model.mode = ModeList
+		return model, nil
 	default:
-		return model.handleURLFieldKey(key)
+		return model, cmd
 	}
-}
-
-func (model Model) handleURLFieldKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch key.Type {
-	case tea.KeyTab:
-		model.addField = fieldDir
-		model.dirPick = -1
-	case tea.KeyEnter:
-		return model.submitAdd()
-	case tea.KeyBackspace:
-		if model.input != "" {
-			model.input = model.input[:len(model.input)-1]
-		}
-	case tea.KeyRunes:
-		model.input += string(key.Runes)
-	}
-	return model, nil
-}
-
-func (model Model) handleDirFieldKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch key.Type {
-	case tea.KeyShiftTab:
-		model.addField = fieldURL
-	case tea.KeyTab:
-		model.cycleRecents()
-	case tea.KeyEnter:
-		return model.submitAdd()
-	case tea.KeyBackspace:
-		if model.dirInput != "" {
-			model.dirInput = model.dirInput[:len(model.dirInput)-1]
-		}
-		model.dirPick = -1
-	case tea.KeyUp:
-		model.navigateRecents(false)
-	case tea.KeyDown:
-		model.navigateRecents(true)
-	case tea.KeyRunes:
-		model.dirInput += string(key.Runes)
-		model.dirPick = -1
-	}
-	return model, nil
-}
-
-func (model *Model) cycleRecents() {
-	if len(model.recentDirs) == 0 {
-		return
-	}
-	model.dirPick = (model.dirPick + 1) % len(model.recentDirs)
-	model.dirInput = model.recentDirs[model.dirPick]
-}
-
-func (model *Model) navigateRecents(down bool) {
-	if len(model.recentDirs) == 0 {
-		return
-	}
-	if model.dirPick < 0 {
-		if !down {
-			return
-		}
-		model.dirPick = 0
-	} else {
-		if down {
-			model.dirPick = min(model.dirPick+1, len(model.recentDirs)-1)
-		} else {
-			model.dirPick = max(model.dirPick-1, 0)
-		}
-	}
-	model.dirInput = model.recentDirs[model.dirPick]
-}
-
-func (model Model) submitAdd() (tea.Model, tea.Cmd) {
-	uri := strings.TrimSpace(model.input)
-	if uri != "" {
-		opts := aria2.AddOptions{}
-		if dir := strings.TrimSpace(model.dirInput); dir != "" {
-			opts.Dir = dir
-		}
-		_, model.err = model.service.AddURI(context.Background(), uri, opts)
-	}
-	model.input = ""
-	model.dirInput = ""
-	model.addField = fieldURL
-	model.dirPick = -1
-	model.mode = ModeList
-	return model, nil
 }
 
 func (model Model) handleDetailKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {

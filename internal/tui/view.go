@@ -72,59 +72,8 @@ func (model Model) addView() string {
 	footer := model.tableFrame(joinSides("Submit a new task to local aria2 JSON-RPC.", model.addHelp(), frameContentWidth(width)), false)
 	bodyHeight := max(height-len(header)-len(footer), minBodyHeight)
 
-	lines := []string{
-		"URL or magnet link, Tab to set dir, Enter to submit.",
-		"",
-		model.urlFieldLine(),
-		model.dirFieldLine(),
-	}
-	if model.addField == fieldDir && len(model.recentDirs) > 0 {
-		lines = append(lines, "", "Recent dirs (Tab to cycle):")
-		for i, dir := range model.recentDirs {
-			marker := "  "
-			if i == model.dirPick {
-				marker = "> "
-			}
-			lines = append(lines, fmt.Sprintf("%s%d %s", marker, i+1, dir))
-		}
-	}
-	body := model.fillBody(width, bodyHeight, lines)
+	body := model.fillBody(width, bodyHeight, model.addForm.BodyLines())
 	return strings.Join(append(append(header, body...), footer...), "\n")
-}
-
-func (model Model) urlFieldLine() string {
-	label := "URL:"
-	if model.addField == fieldURL {
-		label = boldText(label)
-	}
-	value := model.input
-	if model.addField == fieldURL {
-		value += "_"
-	}
-	return fmt.Sprintf("%s %s", label, value)
-}
-
-func (model Model) dirFieldLine() string {
-	label := "Dir:"
-	if model.addField == fieldDir {
-		label = boldText(label)
-	}
-	if model.dirInput == "" {
-		hint := model.defaultDir
-		if hint == "" {
-			hint = "aria2 default"
-		}
-		text := dimText(hint + " (default)")
-		if model.addField == fieldDir {
-			text = "_" + text
-		}
-		return fmt.Sprintf("%s %s", label, text)
-	}
-	value := model.dirInput
-	if model.addField == fieldDir {
-		value += "_"
-	}
-	return fmt.Sprintf("%s %s", label, value)
 }
 
 func (model Model) detailView() string {
