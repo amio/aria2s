@@ -11,16 +11,16 @@ aria2s
 The binary name is:
 
 ```bash
-asv
+aria2s
 ```
 
 Example usage:
 
 ```bash
-asv
-asv status
-asv add https://example.com/file.zip
-asv console
+aria2s
+aria2s status
+aria2s add https://example.com/file.zip
+aria2s console
 ```
 
 ## 1. Product Scope
@@ -44,7 +44,7 @@ It should not become a full aria2 replacement, a GUI app, or a large download-ma
 * Generate a safe default `aria2.conf`.
 * Hide local RPC token handling from users.
 * Keep the CLI command surface small.
-* Put rich download management into `asv console`, not into many top-level commands.
+* Put rich download management into `aria2s console`, not into many top-level commands.
 * In Stage 1, "background service" means detached from the invoking terminal and supervised inside the current user session. Surviving logout or running as a system-wide service is out of scope.
 
 ## 3. Tech Stack
@@ -84,33 +84,33 @@ path/filepath
 Stage 1 should focus on core service management plus minimal task submission.
 
 ```bash
-asv install --start
-asv uninstall
-asv start
-asv stop
-asv restart
-asv status
-asv logs
-asv doctor
-asv add <url-or-magnet>
+aria2s install --start
+aria2s uninstall
+aria2s start
+aria2s stop
+aria2s restart
+aria2s status
+aria2s logs
+aria2s doctor
+aria2s add <url-or-magnet>
 ```
 
 Optional but acceptable:
 
 ```bash
-asv config
-asv token
+aria2s config
+aria2s token
 ```
 
 Avoid in Stage 1:
 
 ```bash
-asv list
-asv show
-asv pause
-asv resume
-asv remove
-asv console
+aria2s list
+aria2s show
+aria2s pause
+aria2s resume
+aria2s remove
+aria2s console
 ```
 
 Reason: Stage 1 should first prove that service lifecycle, config generation, RPC health check, and simple task submission are reliable. Download management should not spread into many standalone commands too early.
@@ -120,12 +120,12 @@ Reason: Stage 1 should first prove that service lifecycle, config generation, RP
 Stage 2 introduces the interactive terminal console:
 
 ```bash
-asv console
+aria2s console
 ```
 
-`asv console` should open an htop-like interface for live aria2 download monitoring and basic task management.
+`aria2s console` should open an htop-like interface for live aria2 download monitoring and basic task management.
 
-Bare `asv` should be the daily entrypoint. It should run the same readiness flow as `asv console`: install if needed, start if needed, then open the console.
+Bare `aria2s` should be the daily entrypoint. It should run the same readiness flow as `aria2s console`: install if needed, start if needed, then open the console.
 
 It should support:
 
@@ -144,7 +144,7 @@ This keeps the normal CLI small while still providing a practical day-to-day dow
 
 ## 5. Stage 1 Behavior
 
-### 5.1 `asv install --start`
+### 5.1 `aria2s install --start`
 
 Responsibilities:
 
@@ -196,12 +196,12 @@ Logs:
   ~/Library/Logs/aria2s/aria2.log
 
 Next:
-  asv status
-  asv add <url>
-  asv logs
+  aria2s status
+  aria2s add <url>
+  aria2s logs
 ```
 
-### 5.2 `asv status`
+### 5.2 `aria2s status`
 
 `status` should report service health, not detailed download state.
 
@@ -227,7 +227,7 @@ Config:     ~/Library/Application Support/aria2s/aria2.conf
 Logs:       ~/Library/Logs/aria2s/aria2.log
 ```
 
-### 5.3 `asv add <url-or-magnet>`
+### 5.3 `aria2s add <url-or-magnet>`
 
 `add` should submit a download task through local aria2 JSON-RPC.
 
@@ -236,7 +236,7 @@ The user should not need to pass host, port, or token.
 Example:
 
 ```bash
-asv add https://example.com/file.zip
+aria2s add https://example.com/file.zip
 ```
 
 Output:
@@ -248,7 +248,7 @@ GID:
   2089b05ecca3d829
 
 Next:
-  asv console
+  aria2s console
 ```
 
 Supported in Stage 1:
@@ -298,7 +298,7 @@ token:<secret>
 
 But this should be internal. Normal users should not need to know or pass the token.
 
-`asv add` and `asv console` should:
+`aria2s add` and `aria2s console` should:
 
 1. Read local `state.json`.
 2. Use the stored `rpc-listen-port`.
@@ -311,7 +311,7 @@ But this should be internal. Normal users should not need to know or pass the to
 Manual token access can exist for external clients:
 
 ```bash
-asv token
+aria2s token
 ```
 
 The token should never be printed in normal logs or normal `status` output.
@@ -452,7 +452,7 @@ Ownership rules:
 * `aria2s` owns and may repair these keys: `enable-rpc`, `rpc-listen-all`, `rpc-listen-port`, `rpc-secret`, `input-file`, `save-session`, `force-save`, and `save-session-interval`.
 * Users may edit aria2 behavior keys such as `dir`, `max-concurrent-downloads`, `split`, `max-connection-per-server`, and other performance-related settings.
 * `status`, `add`, and `console` should treat `state.json` as the authoritative source for connection details instead of re-parsing a user-edited config file on every call.
-* If user edits cause managed keys to drift from the stored state, `doctor` should report that drift explicitly and recommend rerunning `asv install` to repair it.
+* If user edits cause managed keys to drift from the stored state, `doctor` should report that drift explicitly and recommend rerunning `aria2s install` to repair it.
 * Completed and removed task visibility across aria2 restarts should rely on aria2's native session persistence via `force-save`, not on an aria2s-owned sidecar history file.
 * Graceful lifecycle paths should ask aria2 to `saveSession` and then `shutdown` before the supervisor stops or starts the service process again, so restart/stop preserve the latest stoppable state instead of relying only on the interval timer.
 * `App` should own graceful lifecycle orchestration and the RPC-facing error policy, while `service.Backend` should stay limited to supervisor primitives such as install, uninstall, start, stop, and load/running inspection.
@@ -509,7 +509,7 @@ internal/aria2/download.go
 Stage 2 introduces:
 
 ```bash
-asv console
+aria2s console
 ```
 
 Goal:
@@ -593,7 +593,7 @@ Data loading policy:
 * Refresh stopped history only for the visible page and at a slower cadence, or on explicit navigation into that section.
 * Use `aria2.tellStatus` only for the selected task detail view instead of fetching detail payloads for every row on every tick.
 
-The console should reuse the same internal RPC client and token-loading logic as `asv add`.
+The console should reuse the same internal RPC client and token-loading logic as `aria2s add`.
 
 ## 12. Security
 
@@ -627,15 +627,15 @@ exec.CommandContext(ctx, "sh", "-c", "launchctl print "+domainTarget)
 Commands:
 
 ```bash
-asv install --start
-asv uninstall
-asv start
-asv stop
-asv restart
-asv status
-asv logs
-asv doctor
-asv add <url-or-magnet>
+aria2s install --start
+aria2s uninstall
+aria2s start
+aria2s stop
+aria2s restart
+aria2s status
+aria2s logs
+aria2s doctor
+aria2s add <url-or-magnet>
 ```
 
 Scope:
@@ -653,12 +653,12 @@ Exit criteria:
 
 ```bash
 brew install aria2
-asv install --start
-asv status
-asv add https://example.com/file.zip
-asv logs
-asv restart
-asv uninstall
+aria2s install --start
+aria2s status
+aria2s add https://example.com/file.zip
+aria2s logs
+aria2s restart
+aria2s uninstall
 ```
 
 All work reliably on macOS.
@@ -668,8 +668,8 @@ All work reliably on macOS.
 Command:
 
 ```bash
-asv
-asv console
+aria2s
+aria2s console
 ```
 
 Scope:
@@ -686,8 +686,8 @@ Scope:
 Exit criteria:
 
 ```bash
-asv
-asv console
+aria2s
+aria2s console
 ```
 
 open a stable interactive terminal console for day-to-day aria2 download management, auto-installing and auto-starting when needed.
@@ -729,7 +729,7 @@ Stage 1 should stay deliberately small:
 Stage 2 should provide the real download-management experience through:
 
 ```bash
-asv console
+aria2s console
 ```
 
 This keeps the CLI clean while still giving users a practical local aria2 control panel.

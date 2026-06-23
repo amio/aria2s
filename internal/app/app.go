@@ -551,7 +551,7 @@ func (app *App) preflightLifecycle() (state.State, error) {
 		return state.State{}, err
 	}
 	if aria2.HasManagedDrift(values, current) {
-		return state.State{}, fmt.Errorf("managed config drift detected; run `asv install` to repair %s", current.ConfigPath)
+		return state.State{}, fmt.Errorf("managed config drift detected; run `aria2s install` to repair %s", current.ConfigPath)
 	}
 	return current, nil
 }
@@ -599,7 +599,7 @@ func (app *App) waitForServiceStop(ctx context.Context) error {
 
 func (app *App) rpcReadyError(current state.State, cause error) error {
 	return fmt.Errorf(
-		"aria2 did not become reachable within %s at %s: %w\nCheck logs at %s or run `asv doctor` for diagnostics",
+		"aria2 did not become reachable within %s at %s: %w\nCheck logs at %s or run `aria2s doctor` for diagnostics",
 		app.options.RPCReadyTimeout,
 		endpoint(current.RPCPort),
 		cause,

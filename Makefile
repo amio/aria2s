@@ -6,8 +6,8 @@ help: ## Show available development commands
 	@printf "Usage: make <target>\n\nTargets:\n"
 	@awk 'BEGIN {FS = ":.*## "}; /^[a-zA-Z0-9_.-]+:.*## / {printf "  %-14s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
-build: ## Build the asv binary
-	go build -o bin/asv .
+build: ## Build the aria2s binary
+	go build -o bin/aria2s .
 
 test: ## Run the full Go test suite
 	go test ./...

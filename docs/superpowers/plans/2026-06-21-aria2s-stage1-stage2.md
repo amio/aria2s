@@ -309,7 +309,7 @@ Run: `make test`
 Expected: PASS
 
 Run: `make build`
-Expected: PASS and produces `./bin/asv`
+Expected: PASS and produces `./bin/aria2s`
 
 Run: `make test-stage1`
 Expected: PASS for Stage 1 focused tests
@@ -416,7 +416,7 @@ type Download struct {
 }
 ```
 
-- [ ] **Step 4: Implement the minimal Bubble Tea model and `asv console` command**
+- [ ] **Step 4: Implement the minimal Bubble Tea model and `aria2s console` command**
 
 ```go
 func (m Model) Update(msg tea.Msg) (Model, tea.Cmd) {
@@ -459,7 +459,7 @@ Run: `make test-stage2`
 Expected: PASS for Stage 2 focused tests
 
 Run: `make build`
-Expected: PASS and `./bin/asv console` launches the TUI entrypoint
+Expected: PASS and `./bin/aria2s console` launches the TUI entrypoint
 
 - [ ] **Step 6: Commit Stage 2**
 
@@ -476,8 +476,8 @@ git commit -m "feat(stage2): add interactive aria2 console"
 - `make build`
 - `go test ./...`
 - Manual smoke on macOS if `aria2c` is installed:
-  - `./bin/asv install --start`
-  - `./bin/asv status`
-  - `./bin/asv add https://example.com/file.zip`
-  - `./bin/asv console`
+  - `./bin/aria2s install --start`
+  - `./bin/aria2s status`
+  - `./bin/aria2s add https://example.com/file.zip`
+  - `./bin/aria2s console`
 

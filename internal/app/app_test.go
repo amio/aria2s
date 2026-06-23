@@ -59,7 +59,7 @@ func TestInstallStartTimeoutGivesRecoveryGuidance(t *testing.T) {
 	assertContains(t, message, "aria2 did not become reachable")
 	assertContains(t, message, "http://127.0.0.1:6800/jsonrpc")
 	assertContains(t, message, servicePaths.LogFile)
-	assertContains(t, message, "asv doctor")
+	assertContains(t, message, "aria2s doctor")
 }
 
 func TestStartPreflightsStateConfigAndWaitsForRPC(t *testing.T) {
@@ -145,7 +145,7 @@ func TestRestartFailsWhenManagedConfigDrifted(t *testing.T) {
 		t.Fatal("expected config drift to fail restart")
 	}
 	assertContains(t, err.Error(), "managed config drift")
-	assertContains(t, err.Error(), "asv install")
+	assertContains(t, err.Error(), "aria2s install")
 	if len(serviceBackend.calls) != 0 {
 		t.Fatalf("expected no service calls, got %v", serviceBackend.calls)
 	}

@@ -10,7 +10,7 @@ import (
 func NewRoot(application *app.App) *cobra.Command {
 	consoleCommand := newConsoleCommand(application)
 	root := &cobra.Command{
-		Use:          "asv",
+		Use:          "aria2s",
 		Short:        "Your aria2c, always on — runs it as a background service with a TUI",
 		SilenceUsage: true,
 		RunE: func(command *cobra.Command, _ []string) error {
