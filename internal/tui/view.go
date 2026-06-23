@@ -40,8 +40,8 @@ var (
 	frameEdgeColor    = rgb{87, 110, 129}
 	frameDividerColor = rgb{29, 42, 54}
 	frameTextColor    = rgb{241, 244, 247}
-	contentBgColor         = rgb{28, 28, 28}
-	bgColor        = rgb{16, 16, 16}
+	contentBgColor    = rgb{28, 28, 28}
+	bgColor           = rgb{16, 16, 16}
 	bodyTextColor     = rgb{210, 217, 225}
 	selectedColor     = rgb{28, 44, 58}
 	errorTextColor    = rgb{255, 152, 152}
@@ -373,14 +373,12 @@ func (model Model) downloadRow(width int, download aria2.Download, selected bool
 	add(formatSpeed(download.UploadSpeed), l.upWidth, true)
 
 	row := strings.Join(parts, columnGap)
-		background := contentBgColor
-		if selected {
-			background = selectedColor
-		}
-		return selectedLine(row, width, background, downloadStatusTone(download), selected)
+	background := contentBgColor
+	if selected {
+		background = selectedColor
+	}
+	return selectedLine(row, width, background, downloadStatusTone(download), selected)
 }
-
-
 
 func (model Model) listStats() string {
 	items := model.items()
@@ -432,7 +430,7 @@ func (model Model) detailHelp() []string {
 		helpItem{key: "Esc/h", desc: "Back"},
 		helpItem{key: "j/k", desc: "Next/Prev"},
 		helpItem{key: "n/b", desc: "Page"},
-		helpItem{key: "o", desc: "Open in Finder"},
+		helpItem{key: "o", desc: "Open in File Manager"},
 		helpItem{key: "q", desc: "Quit"},
 	)
 }
@@ -631,10 +629,12 @@ func formatProgress(completed int64, total int64) string {
 	return fmt.Sprintf("%.1f%%", float64(completed)/float64(total)*100)
 }
 
-/** makeProgressBar returns a unicode progress bar string with an always-visible
+/*
+  - makeProgressBar returns a unicode progress bar string with an always-visible
     half-character slider (╸) separating filled from empty. Each cell counts
     as 2 segments; one segment is reserved for the slider so it never vanishes
-    into a full cell. The thin-track portion (─) is rendered dim. */
+    into a full cell. The thin-track portion (─) is rendered dim.
+*/
 func makeProgressBar(progress float64, charCount ...int) string {
 	n := 5
 	if len(charCount) > 0 && charCount[0] > 0 {
@@ -802,10 +802,6 @@ func selectedLine(text string, width int, background rgb, status rgb, selected b
 	}
 	return borderedLine(text, width, status, background, false)
 }
-
-
-
-
 
 func colorize(text string, foreground rgb, background rgb, bold bool) string {
 	var builder strings.Builder

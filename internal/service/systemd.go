@@ -24,7 +24,7 @@ func (backend *SystemdBackend) Install(ctx context.Context) error {
 	if backend.IsLoaded(ctx) {
 		return nil
 	}
-	_, err := backend.runner.Run(ctx, "systemctl", "--user", "enable", backend.unitName)
+	_, err := backend.run(ctx, "enable", backend.unitName)
 	return err
 }
 
@@ -32,7 +32,7 @@ func (backend *SystemdBackend) Uninstall(ctx context.Context) error {
 	if !backend.IsLoaded(ctx) {
 		return nil
 	}
-	if _, err := backend.runner.Run(ctx, "systemctl", "--user", "disable", "--now", backend.unitName); err != nil {
+	if _, err := backend.run(ctx, "disable", "--now", backend.unitName); err != nil {
 		return err
 	}
 	return backend.reload(ctx)
@@ -47,7 +47,7 @@ func (backend *SystemdBackend) Start(ctx context.Context) error {
 			return err
 		}
 	}
-	_, err := backend.runner.Run(ctx, "systemctl", "--user", "start", backend.unitName)
+	_, err := backend.run(ctx, "start", backend.unitName)
 	return err
 }
 
@@ -55,7 +55,7 @@ func (backend *SystemdBackend) Stop(ctx context.Context) error {
 	if !backend.IsLoaded(ctx) {
 		return nil
 	}
-	_, err := backend.runner.Run(ctx, "systemctl", "--user", "stop", backend.unitName)
+	_, err := backend.run(ctx, "stop", backend.unitName)
 	return err
 }
 
@@ -70,8 +70,23 @@ func (backend *SystemdBackend) IsRunning(ctx context.Context) bool {
 }
 
 func (backend *SystemdBackend) reload(ctx context.Context) error {
-	_, err := backend.runner.Run(ctx, "systemctl", "--user", "daemon-reload")
+	_, err := backend.run(ctx, "daemon-reload")
 	return err
+}
+
+func (backend *SystemdBackend) run(ctx context.Context, args ...string) ([]byte, error) {
+	fullArgs := append([]string{"--user"}, args...)
+	output, err := backend.runner.Run(ctx, "systemctl", fullArgs...)
+	if err == nil {
+		return output, nil
+	}
+	command := "systemctl " + strings.Join(fullArgs, " ")
+	message := strings.TrimSpace(string(output))
+	guidance := "systemd --user requires a live user session and is often unavailable in containers, WSL, or minimal Linux installs"
+	if message != "" {
+		return nil, fmt.Errorf("%s failed: %s. %s: %w", command, message, guidance, err)
+	}
+	return nil, fmt.Errorf("%s failed. %s: %w", command, guidance, err)
 }
 
 func RenderSystemdUnit(current state.State) (string, error) {

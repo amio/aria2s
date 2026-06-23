@@ -2,6 +2,7 @@ package service_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -82,6 +83,22 @@ func TestSystemdStartDoesNothingWhenAlreadyRunning(t *testing.T) {
 	}
 }
 
+func TestSystemdInstallWrapsUnavailableUserSessionErrors(t *testing.T) {
+	runner := &failingSystemdRunner{
+		output: "Failed to connect to bus: No medium found",
+		err:    errors.New("exit status 1"),
+	}
+	backend := service.NewSystemdBackend(runner, "aria2s.service")
+
+	err := backend.Install(context.Background())
+	if err == nil {
+		t.Fatal("expected install to fail")
+	}
+	assertContains(t, err.Error(), "systemd --user")
+	assertContains(t, err.Error(), "live user session")
+	assertContains(t, err.Error(), "Failed to connect to bus: No medium found")
+}
+
 type systemdAwareRunner struct {
 	loaded  bool
 	running bool
@@ -124,4 +141,16 @@ type errSystemdInactive struct{}
 
 func (errSystemdInactive) Error() string {
 	return "inactive"
+}
+
+type failingSystemdRunner struct {
+	output string
+	err    error
+	calls  []string
+}
+
+func (runner *failingSystemdRunner) Run(_ context.Context, name string, args ...string) ([]byte, error) {
+	call := name + " " + strings.Join(args, " ")
+	runner.calls = append(runner.calls, call)
+	return []byte(runner.output), runner.err
 }

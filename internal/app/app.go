@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/amio/aria2s/internal/aria2"
@@ -70,7 +71,10 @@ func New(options Options) *App {
 		options.GenerateSecret = GenerateSecret
 	}
 	if options.RenderService == nil {
-		options.RenderService = service.RenderLaunchAgent
+		options.RenderService = inferRenderService(options.Paths)
+	}
+	if options.Service == nil {
+		options.Service = inferServiceBackend(options.Paths)
 	}
 	if options.RPC == nil {
 		options.RPC = LocalRPC{}
@@ -97,6 +101,45 @@ func Default() (*App, error) {
 		return nil, err
 	}
 	return New(options), nil
+}
+
+func inferRenderService(servicePaths paths.Paths) func(state.State) (string, error) {
+	switch inferServicePlatform(servicePaths) {
+	case "linux":
+		return service.RenderSystemdUnit
+	case "darwin":
+		return service.RenderLaunchAgent
+	default:
+		return func(state.State) (string, error) {
+			return "", fmt.Errorf("unsupported service layout: %s", servicePaths.ServiceFile)
+		}
+	}
+}
+
+func inferServiceBackend(servicePaths paths.Paths) service.Backend {
+	switch inferServicePlatform(servicePaths) {
+	case "linux":
+		return service.NewSystemdBackend(service.ExecRunner{}, servicePaths.ServiceName)
+	case "darwin":
+		return service.NewLaunchdBackend(service.ExecRunner{}, os.Getuid(), servicePaths.ServiceName, servicePaths.ServiceFile)
+	default:
+		return nil
+	}
+}
+
+func inferServicePlatform(servicePaths paths.Paths) string {
+	if strings.HasSuffix(servicePaths.ServiceFile, ".service") || strings.HasSuffix(servicePaths.ServiceName, ".service") {
+		return "linux"
+	}
+	if strings.HasSuffix(servicePaths.ServiceFile, ".plist") || strings.Contains(servicePaths.ServiceFile, "LaunchAgents") {
+		return "darwin"
+	}
+	switch runtime.GOOS {
+	case "linux", "darwin":
+		return runtime.GOOS
+	default:
+		return ""
+	}
 }
 
 func defaultOptionsForOS(goos, home string, uid int, runner service.CommandRunner) (Options, error) {

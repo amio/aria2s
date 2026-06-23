@@ -36,6 +36,25 @@ func TestInstallStartPollsRPCUntilReady(t *testing.T) {
 	}
 }
 
+func TestInstallStartPollsRPCUntilReadyOnLinuxPaths(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewLinux(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	serviceBackend := &recordingService{}
+	rpc := &flakyRPC{failuresRemaining: 2, version: "1.37.0"}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
+		RPCReadyTimeout: time.Second,
+		RPCPollInterval: time.Nanosecond,
+	})
+
+	if err := application.Install(context.Background(), true); err != nil {
+		t.Fatalf("install --start should poll until RPC is ready on Linux paths: %v", err)
+	}
+	if rpc.versionCalls != 3 {
+		t.Fatalf("expected 3 version attempts, got %d", rpc.versionCalls)
+	}
+}
+
 func TestInstallStartTimeoutGivesRecoveryGuidance(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
@@ -176,6 +195,31 @@ func TestStopSavesSessionBeforeStoppingService(t *testing.T) {
 	}
 }
 
+func TestStopSavesSessionBeforeStoppingServiceOnLinuxPaths(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewLinux(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	events := []string{}
+	serviceBackend := &recordingService{loaded: true, running: true, events: &events}
+	rpc := &sessionRecordingRPC{events: &events, service: serviceBackend}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{})
+
+	if err := application.Stop(context.Background()); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	if rpc.saveSessionCalls != 1 {
+		t.Fatalf("expected one saveSession call, got %d", rpc.saveSessionCalls)
+	}
+	if rpc.shutdownCalls != 1 {
+		t.Fatalf("expected one shutdown call, got %d", rpc.shutdownCalls)
+	}
+	if strings.Join(events, ",") != "saveSession,shutdown,stop" {
+		t.Fatalf("expected save, shutdown, then stop, got %v", events)
+	}
+}
+
 func TestStopFailsWhenSaveSessionFails(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
@@ -199,6 +243,34 @@ func TestStopFailsWhenSaveSessionFails(t *testing.T) {
 func TestRestartSavesSessionBeforeRestartingService(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	events := []string{}
+	serviceBackend := &recordingService{loaded: true, running: true, events: &events}
+	rpc := &sessionRecordingRPC{events: &events, service: serviceBackend}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
+		RPCReadyTimeout: time.Second,
+		RPCPollInterval: time.Nanosecond,
+	})
+
+	if err := application.Restart(context.Background()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	if rpc.saveSessionCalls != 1 {
+		t.Fatalf("expected one saveSession call, got %d", rpc.saveSessionCalls)
+	}
+	if rpc.shutdownCalls != 1 {
+		t.Fatalf("expected one shutdown call, got %d", rpc.shutdownCalls)
+	}
+	if strings.Join(events, ",") != "saveSession,shutdown,start,version" {
+		t.Fatalf("expected save, shutdown, start, then version poll, got %v", events)
+	}
+}
+
+func TestRestartSavesSessionBeforeRestartingServiceOnLinuxPaths(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewLinux(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
 	writeInstalledStateAndConfig(t, servicePaths, aria2c)
 	events := []string{}

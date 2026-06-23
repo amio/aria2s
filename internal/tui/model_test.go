@@ -2,6 +2,8 @@ package tui
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -480,6 +482,104 @@ func TestModelQuitsFromAddAndDetailModes(t *testing.T) {
 	_, detailCommand := detailModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
 	if detailCommand == nil {
 		t.Fatal("expected q to quit from detail mode")
+	}
+}
+
+func TestModelDetailHelpUsesGenericFileManagerLabel(t *testing.T) {
+	service := &fakeService{
+		snapshot: aria2.DownloadSnapshot{
+			Active: []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
+		},
+		detail: aria2.DownloadDetail{GID: "a1", Name: "active.iso", Status: "active"},
+	}
+	model := NewModel(service, time.Second, "dev")
+	model = updateModel(t, model, refreshMsg{})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	view := model.View()
+	if !strings.Contains(view, "o \x1b[2mOpen in File Manager\x1b[22m") {
+		t.Fatalf("detail view should use a generic file-manager label, got:\n%s", view)
+	}
+}
+
+func TestModelShowsOpenErrorInsteadOfSilentlyIgnoringIt(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "active.iso")
+	if err := os.WriteFile(target, []byte("data"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	service := &fakeService{
+		snapshot: aria2.DownloadSnapshot{
+			Active: []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
+		},
+		detail: withDownloadDir(t, aria2.DownloadDetail{
+			GID:    "a1",
+			Name:   "active.iso",
+			Status: "active",
+			Files:  []aria2.DownloadFile{{Path: target, Name: "active.iso"}},
+		}, root),
+	}
+	previousPath := os.Getenv("PATH")
+	if err := os.Setenv("PATH", root); err != nil {
+		t.Fatalf("set PATH: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Setenv("PATH", previousPath)
+	})
+
+	model := NewModel(service, time.Second, "dev")
+	model = updateModel(t, model, refreshMsg{})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+
+	if model.ErrorInfo() == "" {
+		t.Fatal("expected open command failure to surface through error info")
+	}
+}
+
+func TestModelUsesXDGOpenForLinuxDetailOpen(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "active.iso")
+	if err := os.WriteFile(target, []byte("data"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	service := &fakeService{
+		snapshot: aria2.DownloadSnapshot{
+			Active: []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
+		},
+		detail: withDownloadDir(t, aria2.DownloadDetail{
+			GID:    "a1",
+			Name:   "active.iso",
+			Status: "active",
+			Files:  []aria2.DownloadFile{{Path: target, Name: "active.iso"}},
+		}, root),
+	}
+
+	previousOS := runtimeGOOS
+	previousStart := startExternalCommand
+	runtimeGOOS = "linux"
+	var gotName string
+	var gotArgs []string
+	startExternalCommand = func(name string, args ...string) error {
+		gotName = name
+		gotArgs = append([]string(nil), args...)
+		return nil
+	}
+	t.Cleanup(func() {
+		runtimeGOOS = previousOS
+		startExternalCommand = previousStart
+	})
+
+	model := NewModel(service, time.Second, "dev")
+	model = updateModel(t, model, refreshMsg{})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+
+	if gotName != "xdg-open" {
+		t.Fatalf("command got %q, want xdg-open", gotName)
+	}
+	if len(gotArgs) != 1 || gotArgs[0] != root {
+		t.Fatalf("args got %#v, want [%q]", gotArgs, root)
 	}
 }
 

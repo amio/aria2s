@@ -2,9 +2,11 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -73,6 +75,12 @@ type loadingTickMsg struct{}
 type recentDirsMsg struct {
 	dirs []string
 	err  error
+}
+
+var runtimeGOOS = runtime.GOOS
+
+var startExternalCommand = func(name string, args ...string) error {
+	return exec.Command(name, args...).Start()
 }
 
 func NewModel(service Service, refreshInterval time.Duration, version string) Model {
@@ -196,9 +204,11 @@ func (model Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-/** handleInputRune routes a bare-rune key to the focused text field of
+/*
+* handleInputRune routes a bare-rune key to the focused text field of
 the current input mode. It is the only path by which typed characters
-reach input fields, keeping field routing out of handleKey. */
+reach input fields, keeping field routing out of handleKey.
+*/
 func (model Model) handleInputRune(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if model.mode == ModeAdd {
 		return model.applyAddForm(model.addForm.HandleKey(key))
@@ -313,22 +323,45 @@ func (model Model) handleDetailKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if target == "" {
 			break
 		}
-		info, err := os.Stat(target)
-		if err != nil {
-			// Path doesn't exist yet — open the parent directory.
-			dir := filepath.Dir(target)
-			if dir != "" {
-				_ = exec.Command("open", dir).Start()
-			}
-			break
-		}
-		if info.IsDir() {
-			_ = exec.Command("open", target).Start()
-		} else {
-			_ = exec.Command("open", "-R", target).Start()
-		}
+		model.setError(openInFileManager(target))
 	}
 	return model, nil
+}
+
+func openInFileManager(target string) error {
+	info, err := os.Stat(target)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return err
+		}
+		dir := filepath.Dir(target)
+		if dir == "" || dir == "." {
+			return fmt.Errorf("download path is unavailable: %s", target)
+		}
+		return openInFileManagerPath(dir, true)
+	}
+	return openInFileManagerPath(target, info.IsDir())
+}
+
+func openInFileManagerPath(target string, isDir bool) error {
+	switch runtimeGOOS {
+	case "darwin":
+		if isDir {
+			return startExternalCommand("open", target)
+		}
+		return startExternalCommand("open", "-R", target)
+	case "linux":
+		dir := target
+		if !isDir {
+			dir = filepath.Dir(target)
+		}
+		if dir == "" || dir == "." {
+			return fmt.Errorf("download path is unavailable: %s", target)
+		}
+		return startExternalCommand("xdg-open", dir)
+	default:
+		return fmt.Errorf("opening downloads is unsupported on %s", runtimeGOOS)
+	}
 }
 
 func (model Model) openDetailAt(index int) Model {
