@@ -2,6 +2,16 @@
 
 `aria2s` runs `aria2c` as a background service and provides a TUI to manage downloads.
 
+## Install
+
+```bash
+# One-liner (macOS / Linux)
+curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | sh
+
+# Or if you have Go installed
+go install github.com/amio/aria2s@latest && aria2s install --start
+```
+
 ## Quick Start
 
 ```bash
