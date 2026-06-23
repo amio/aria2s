@@ -104,9 +104,25 @@ func (c *WSClient) loop(ctx context.Context) {
 		default:
 		}
 
-		if err := c.dialAndRead(ctx); err != nil {
-			if c.isClosed() {
-				return
+		hadMessages, err := c.dialAndRead(ctx)
+		if c.isClosed() {
+			return
+		}
+
+		var wait time.Duration
+		switch {
+		case err == nil:
+			// Clean close — reconnect immediately.
+			backoff = initialBackoff
+		case hadMessages:
+			// Session was healthy; reset backoff before retrying.
+			backoff = initialBackoff
+			wait = initialBackoff
+		default:
+			wait = backoff
+			backoff *= 2
+			if backoff > maxBackoff {
+				backoff = maxBackoff
 			}
 		}
 
@@ -115,19 +131,15 @@ func (c *WSClient) loop(ctx context.Context) {
 			return
 		case <-ctx.Done():
 			return
-		case <-time.After(backoff):
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
+		case <-time.After(wait):
 		}
 	}
 }
 
-func (c *WSClient) dialAndRead(ctx context.Context) error {
+func (c *WSClient) dialAndRead(ctx context.Context) (bool, error) {
 	conn, _, err := websocket.Dial(ctx, c.endpoint, nil)
 	if err != nil {
-		return err
+		return false, err
 	}
 
 	c.mu.Lock()
@@ -141,14 +153,16 @@ func (c *WSClient) dialAndRead(ctx context.Context) error {
 		conn.CloseNow()
 	}()
 
+	hadMessages := false
+
 	for {
 		_, data, err := conn.Read(ctx)
 		if err != nil {
 			var closeErr websocket.CloseError
 			if errors.As(err, &closeErr) && closeErr.Code == websocket.StatusNormalClosure {
-				return nil
+				return hadMessages, nil
 			}
-			return err
+			return hadMessages, err
 		}
 
 		var req wsRequest
@@ -169,8 +183,9 @@ func (c *WSClient) dialAndRead(ctx context.Context) error {
 
 		select {
 		case c.events <- notif:
+			hadMessages = true
 		case <-c.done:
-			return nil
+			return hadMessages, nil
 		}
 	}
 }

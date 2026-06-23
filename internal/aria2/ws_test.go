@@ -149,6 +149,82 @@ func TestWSClientReconnectsAfterDrop(t *testing.T) {
 	}
 }
 
+func TestWSClientResetsBackoffAfterSuccessfulSession(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	connectCount := 0
+	reconnectAfter := make(chan time.Time, 1)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		connectCount++
+		conn, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+
+		switch connectCount {
+		case 1, 2:
+			// Abrupt close with no messages — builds exponential backoff (1s, then 2s).
+			conn.CloseNow()
+		case 3:
+			payload, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0",
+				"method":  "aria2.onDownloadStart",
+				"params":  []map[string]string{{"gid": "first"}},
+			})
+			conn.Write(ctx, websocket.MessageText, payload)
+			time.Sleep(20 * time.Millisecond)
+			conn.Close(websocket.StatusNormalClosure, "")
+			reconnectAfter <- time.Now()
+		default:
+			payload, _ := json.Marshal(map[string]any{
+				"jsonrpc": "2.0",
+				"method":  "aria2.onDownloadComplete",
+				"params":  []map[string]string{{"gid": "second"}},
+			})
+			conn.Write(ctx, websocket.MessageText, payload)
+			<-ctx.Done()
+		}
+	}))
+	defer server.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/jsonrpc"
+	client, err := aria2.NewWSClient(wsURL)
+	if err != nil {
+		t.Fatalf("NewWSClient: %v", err)
+	}
+	client.Connect(ctx)
+
+	var notifications []aria2.Notification
+	timeout := time.After(8 * time.Second)
+	for len(notifications) < 2 {
+		select {
+		case notif, ok := <-client.Events():
+			if !ok {
+				t.Fatal("events channel closed unexpectedly")
+			}
+			notifications = append(notifications, notif)
+		case <-timeout:
+			t.Fatalf("timed out after %d notifications (connectCount=%d)", len(notifications), connectCount)
+		}
+	}
+
+	select {
+	case closedAt := <-reconnectAfter:
+		// After a clean close, reconnect should be immediate (not the accumulated 4s backoff).
+		if time.Since(closedAt) > 500*time.Millisecond {
+			t.Fatalf("second reconnect took too long after clean close (%v)", time.Since(closedAt))
+		}
+	default:
+		t.Fatal("server never reported clean close")
+	}
+
+	if notifications[0].GID != "first" || notifications[1].GID != "second" {
+		t.Fatalf("notifications = %+v", notifications)
+	}
+}
+
 func TestWSClientClosesCleanly(t *testing.T) {
 	ctx := context.Background()
 
