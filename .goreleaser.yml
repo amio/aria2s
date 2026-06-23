@@ -11,7 +11,7 @@ builds:
       - arm64
     binary: aria2s
     ldflags:
-      - -s -w
+      - -s -w -X github.com/amio/aria2s/cmd.Version={{ .Version }}
 
 archives:
   - formats: ["tar.gz"]
