@@ -1,99 +1,47 @@
-# aria2s
+# aria2s - Your `aria2c`, always on.
 
-`aria2s` is a small macOS-first CLI for running local `aria2c` as a background LaunchAgent.
+`aria2s` manages `aria2c` as a background service, with a TUI to manage downloads.
 
 The project builds the `asv` binary.
 
-## Requirements
+## Quick Start
 
-- macOS user session with `launchd`
-- `aria2c` available on `PATH` during install
+```bash
+asv install --start   # install & launch the background service
+asv console           # open the interactive dashboard
+```
 
 ## Commands
 
-```bash
-asv install --start
-asv uninstall
-asv start
-asv stop
-asv restart
-asv status
-asv logs
-asv doctor
-asv add <url-or-magnet>
-asv console
-```
-
-`asv install` locates `aria2c`, stores its absolute path, chooses a stable localhost RPC port, generates an RPC secret, writes managed config/state files, and installs or reasserts the LaunchAgent without starting it.
-
-`asv install --start` performs the same install work, starts the service, and verifies RPC health.
-
-`asv stop` and `asv restart` use aria2's RPC lifecycle first: they save the current session, request graceful `shutdown`, and only then hand off to the supervisor to stop or start the service process.
-
-`asv status` reports service file presence, supervisor state, stored binary validity, RPC reachability, aria2 version, endpoint, config path, and log path. It never prints the RPC secret.
-
-`asv doctor` reports common startup/configuration problems, including missing `aria2c`, port conflicts, and drift in aria2s-managed config keys.
-
-`asv logs` prints the log file paths plus recent stdout and stderr log content.
-
-`asv add <url-or-magnet>` reads local state and submits HTTP, HTTPS, or magnet downloads to localhost JSON-RPC with the stored token automatically.
-
-`asv console` opens a full-screen interactive terminal UI backed by the same local state and RPC token. It shows active, waiting, and recent stopped downloads in a live table with status, size, progress, and transfer speeds, keeps task statistics and key help in the footer, supports adding a URL or magnet, pause/resume/remove actions, selected task details, periodic refresh, and clean quit.
-
-## Files
-
-Default macOS paths:
-
-```text
-~/Library/LaunchAgents/io.github.amio.aria2s.plist
-~/Library/Application Support/aria2s/aria2.conf
-~/Library/Application Support/aria2s/state.json
-~/Library/Application Support/aria2s/session
-~/Library/Logs/aria2s/aria2.log
-~/Library/Logs/aria2s/aria2.err.log
-```
-
-`state.json` and `aria2.conf` are written with `0600` permissions.
+| Command | What it does |
+|---------|-------------|
+| `asv install [--start]` | Set up `aria2c` as a background service. `--start` also launches it. |
+| `asv uninstall` | Remove the service and all managed files. |
+| `asv start` / `stop` / `restart` | Control the background service. Stop & restart save the session first. |
+| `asv status` | Show service state, port, version, and log paths at a glance. |
+| `asv doctor` | Check for common issues (missing binary, port conflicts, config drift). |
+| `asv logs` | Print recent log output. |
+| `asv add <url-or-magnet>` | Submit a download via RPC — no need to remember the port or token. |
+| `asv console` | Full-screen TUI: live download progress, pause/resume/remove, and stats. |
 
 ## Development
 
 ```bash
-make
-make build
-make test
-make test-stage1
-make test-stage2
+make build        # build
+make test         # run all tests
 ```
 
-## Common Workflows
-
-Build and verify:
-
-```bash
-make
-make build
-make test
-```
-
-Safe local smoke test with an isolated temporary `HOME`:
+Smoke-test in an isolated environment:
 
 ```bash
 TMP_HOME=$(mktemp -d)
 HOME="$TMP_HOME" ./bin/asv install --start
 HOME="$TMP_HOME" ./bin/asv status
 HOME="$TMP_HOME" ./bin/asv add https://example.com/file.zip
-HOME="$TMP_HOME" ./bin/asv console
 HOME="$TMP_HOME" ./bin/asv uninstall
 rm -rf "$TMP_HOME"
 ```
 
-Real user-session workflow:
+## License
 
-```bash
-./bin/asv install --start
-./bin/asv status
-./bin/asv add <url-or-magnet>
-./bin/asv console
-./bin/asv logs
-./bin/asv uninstall
-```
+MIT

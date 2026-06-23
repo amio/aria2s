@@ -10,7 +10,7 @@ import (
 func NewRoot(application *app.App) *cobra.Command {
 	root := &cobra.Command{
 		Use:          "asv",
-		Short:        "Manage a local aria2 background service",
+		Short:        "Your aria2c, always on — runs it as a background service with a TUI",
 		SilenceUsage: true,
 	}
 	root.AddCommand(newInstallCommand(application))
