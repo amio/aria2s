@@ -142,7 +142,29 @@ func (model Model) detailView() string {
 		fmt.Sprintf("Progress: %s of %s (%s)", formatBytes(detail.CompletedLength), formatBytes(detail.TotalLength), formatProgress(detail.CompletedLength, detail.TotalLength)),
 		fmt.Sprintf("Down: %s", formatSpeed(detail.DownloadSpeed)),
 		fmt.Sprintf("Up: %s", formatSpeed(detail.UploadSpeed)),
+		fmt.Sprintf("Uploaded: %s", formatBytes(detail.UploadLength)),
 		fmt.Sprintf("Connections: %d", detail.Connections),
+	}
+	if detail.VerifiedLength > 0 {
+		lines = append(lines, fmt.Sprintf("Verified: %s", formatBytes(detail.VerifiedLength)))
+	}
+	if detail.VerifyIntegrityPending {
+		lines = append(lines, "Hash Check: pending")
+	}
+	if detail.InfoHash != "" {
+		lines = append(lines, fmt.Sprintf("Info Hash: %s", detail.InfoHash))
+	}
+	if detail.NumSeeders > 0 {
+		lines = append(lines, fmt.Sprintf("Seeders: %d", detail.NumSeeders))
+	}
+	if detail.Seeder {
+		lines = append(lines, "Seeding: yes")
+	}
+	if detail.PieceLength > 0 {
+		lines = append(lines, fmt.Sprintf("Piece Length: %s", formatBytes(detail.PieceLength)))
+	}
+	if detail.NumPieces > 0 {
+		lines = append(lines, fmt.Sprintf("Pieces: %d", detail.NumPieces))
 	}
 	if detail.ErrorMessage != "" {
 		lines = append(lines, fmt.Sprintf("Error %s: %s", detail.ErrorCode, detail.ErrorMessage))
@@ -150,7 +172,11 @@ func (model Model) detailView() string {
 	if len(detail.Files) > 0 {
 		lines = append(lines, "", "Files:")
 		for _, file := range detail.Files {
-			lines = append(lines, fmt.Sprintf("- %s (%s of %s)", file.Name, formatBytes(file.CompletedLength), formatBytes(file.Length)))
+			label := fmt.Sprintf("- %s (%s of %s)", file.Name, formatBytes(file.CompletedLength), formatBytes(file.Length))
+			if !file.Selected {
+				label += dimText(" (unselected)")
+			}
+			lines = append(lines, label)
 		}
 	}
 

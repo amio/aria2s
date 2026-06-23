@@ -36,20 +36,28 @@ type Download struct {
 
 /** DownloadDetail is the selected task payload fetched on demand. */
 type DownloadDetail struct {
-	GID             string
-	Status          string
-	Name            string
-	IsMetadata      bool
-	CompletedLength int64
-	TotalLength     int64
-	DownloadSpeed   int64
-	UploadSpeed     int64
-	PrimaryURI      string
-	DownloadDir     string
-	Connections     int64
-	ErrorCode       string
-	ErrorMessage    string
-	Files           []DownloadFile
+	GID                    string
+	Status                 string
+	Name                   string
+	IsMetadata             bool
+	CompletedLength        int64
+	TotalLength            int64
+	DownloadSpeed          int64
+	UploadSpeed            int64
+	UploadLength           int64
+	VerifiedLength         int64
+	VerifyIntegrityPending bool
+	InfoHash               string
+	NumSeeders             int64
+	Seeder                 bool
+	PieceLength            int64
+	NumPieces              int64
+	PrimaryURI             string
+	DownloadDir            string
+	Connections            int64
+	ErrorCode              string
+	ErrorMessage           string
+	Files                  []DownloadFile
 }
 
 /** DownloadFile is a single file entry inside a task detail payload. */
@@ -58,6 +66,7 @@ type DownloadFile struct {
 	Name            string
 	Length          int64
 	CompletedLength int64
+	Selected        bool
 }
 
 func (client *RPCClient) ListDownloads(ctx context.Context, options ListOptions) (DownloadSnapshot, error) {
@@ -90,20 +99,34 @@ func (client *RPCClient) TaskDetail(ctx context.Context, gid string) (DownloadDe
 		return DownloadDetail{}, err
 	}
 	download := raw.toDownload()
+	primaryURI := raw.primaryURI()
+	if primaryURI == "" {
+		if uris, err := client.GetURIs(ctx, gid); err == nil && len(uris) > 0 {
+			primaryURI = uris[0].URI
+		}
+	}
 	detail := DownloadDetail{
-		GID:             download.GID,
-		Status:          download.Status,
-		Name:            download.Name,
-		IsMetadata:      download.IsMetadata,
-		CompletedLength: download.CompletedLength,
-		TotalLength:     download.TotalLength,
-		DownloadSpeed:   download.DownloadSpeed,
-		UploadSpeed:     download.UploadSpeed,
-		PrimaryURI:      raw.primaryURI(),
-		DownloadDir:     raw.Dir,
-		Connections:     parseInt(raw.Connections),
-		ErrorCode:       raw.ErrorCode,
-		ErrorMessage:    raw.ErrorMessage,
+		GID:                    download.GID,
+		Status:                 download.Status,
+		Name:                   download.Name,
+		IsMetadata:             download.IsMetadata,
+		CompletedLength:        download.CompletedLength,
+		TotalLength:            download.TotalLength,
+		DownloadSpeed:          download.DownloadSpeed,
+		UploadSpeed:            download.UploadSpeed,
+		UploadLength:           parseInt(raw.UploadLength),
+		VerifiedLength:         parseInt(raw.VerifiedLength),
+		VerifyIntegrityPending: raw.VerifyIntegrityPending == "true",
+		InfoHash:               raw.InfoHash,
+		NumSeeders:             parseInt(raw.NumSeeders),
+		Seeder:                 raw.Seeder == "true",
+		PieceLength:            parseInt(raw.PieceLength),
+		NumPieces:              parseInt(raw.NumPieces),
+		PrimaryURI:             primaryURI,
+		DownloadDir:            raw.Dir,
+		Connections:            parseInt(raw.Connections),
+		ErrorCode:              raw.ErrorCode,
+		ErrorMessage:           raw.ErrorMessage,
 	}
 	for _, file := range raw.Files {
 		detail.Files = append(detail.Files, DownloadFile{
@@ -111,9 +134,18 @@ func (client *RPCClient) TaskDetail(ctx context.Context, gid string) (DownloadDe
 			Name:            fileName(file.Path),
 			Length:          parseInt(file.Length),
 			CompletedLength: parseInt(file.CompletedLength),
+			Selected:        file.Selected != "false",
 		})
 	}
 	return detail, nil
+}
+
+func (client *RPCClient) GetURIs(ctx context.Context, gid string) ([]rawURI, error) {
+	var uris []rawURI
+	if err := client.call(ctx, "aria2.getUris", []any{gid}, &uris); err != nil {
+		return nil, err
+	}
+	return uris, nil
 }
 
 func (client *RPCClient) Pause(ctx context.Context, gid string) error {
@@ -147,18 +179,26 @@ func (client *RPCClient) Shutdown(ctx context.Context) error {
 }
 
 type rawDownload struct {
-	GID             string    `json:"gid"`
-	Status          string    `json:"status"`
-	Dir             string    `json:"dir"`
-	CompletedLength string    `json:"completedLength"`
-	TotalLength     string    `json:"totalLength"`
-	DownloadSpeed   string    `json:"downloadSpeed"`
-	UploadSpeed     string    `json:"uploadSpeed"`
-	Connections     string    `json:"connections"`
-	ErrorCode       string    `json:"errorCode"`
-	ErrorMessage    string    `json:"errorMessage"`
-	Files           []rawFile `json:"files"`
-	Bittorrent      struct {
+	GID                    string    `json:"gid"`
+	Status                 string    `json:"status"`
+	Dir                    string    `json:"dir"`
+	CompletedLength        string    `json:"completedLength"`
+	TotalLength            string    `json:"totalLength"`
+	DownloadSpeed          string    `json:"downloadSpeed"`
+	UploadSpeed            string    `json:"uploadSpeed"`
+	UploadLength           string    `json:"uploadLength"`
+	VerifiedLength         string    `json:"verifiedLength"`
+	VerifyIntegrityPending string    `json:"verifyIntegrityPending"`
+	InfoHash               string    `json:"infoHash"`
+	NumSeeders             string    `json:"numSeeders"`
+	Seeder                 string    `json:"seeder"`
+	PieceLength            string    `json:"pieceLength"`
+	NumPieces              string    `json:"numPieces"`
+	Connections            string    `json:"connections"`
+	ErrorCode              string    `json:"errorCode"`
+	ErrorMessage           string    `json:"errorMessage"`
+	Files                  []rawFile `json:"files"`
+	Bittorrent             struct {
 		Info struct {
 			Name string `json:"name"`
 		} `json:"info"`
@@ -169,6 +209,7 @@ type rawFile struct {
 	Path            string   `json:"path"`
 	Length          string   `json:"length"`
 	CompletedLength string   `json:"completedLength"`
+	Selected        string   `json:"selected"`
 	URIs            []rawURI `json:"uris"`
 }
 
@@ -273,5 +314,5 @@ func downloadFields() []string {
 }
 
 func detailFields() []string {
-	return []string{"gid", "status", "dir", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "connections", "errorCode", "errorMessage"}
+	return []string{"gid", "status", "dir", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "uploadLength", "verifiedLength", "verifyIntegrityPending", "infoHash", "numSeeders", "seeder", "pieceLength", "numPieces", "connections", "errorCode", "errorMessage"}
 }
