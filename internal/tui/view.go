@@ -223,6 +223,9 @@ func (model Model) listBody(width int, height int) []string {
 		return body[:height]
 	}
 	if len(items) == 0 {
+		if !model.loaded && model.err == nil {
+			return model.loadingBody(width, height)
+		}
 		body = append(body, model.blankBodyLine(width, "No downloads yet. Press a to add one."))
 		return append(body, model.blankBodyLines(width, height-len(body))...)
 	}
@@ -283,6 +286,27 @@ func (model Model) blankBodyLines(width int, count int) []string {
 
 func (model Model) blankBodyLine(width int, text string) string {
 	return paddedStyledLine(text, width, framePaddingX, bodyTextColor, bodyColor, false)
+}
+
+var loadingFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+func (model Model) loadingBody(width int, height int) []string {
+	frame := loadingFrames[model.loadingFrame%len(loadingFrames)]
+	indicator := frame + " Connecting..."
+	body := make([]string, 0, height)
+	centerRow := height / 2
+	for row := 0; row < height; row++ {
+		if row == centerRow {
+			body = append(body, model.centeredBodyLine(width, indicator))
+			continue
+		}
+		body = append(body, model.blankBodyLine(width, ""))
+	}
+	return body
+}
+
+func (model Model) centeredBodyLine(width int, text string) string {
+	return centeredStyledLine(text, width, framePaddingX, bodyTextColor, bodyColor)
 }
 
 func (model Model) downloadRow(width int, download aria2.Download, selected bool) string {
@@ -696,6 +720,18 @@ func paddedStyledLine(text string, width int, padding int, foreground rgb, backg
 	}
 	line := strings.Repeat(" ", padding) + fitLeft(text, innerWidth) + strings.Repeat(" ", padding)
 	return styledLine(line, foreground, background, bold)
+}
+
+func centeredStyledLine(text string, width int, padding int, foreground rgb, background rgb) string {
+	innerWidth := max(width-padding*2, 0)
+	if innerWidth == 0 {
+		return styledLine(strings.Repeat(" ", width), foreground, background, false)
+	}
+	textWidth := ansi.StringWidth(text)
+	leftPad := max((innerWidth-textWidth)/2, 0)
+	rightPad := max(innerWidth-textWidth-leftPad, 0)
+	line := strings.Repeat(" ", padding) + strings.Repeat(" ", leftPad) + text + strings.Repeat(" ", rightPad) + strings.Repeat(" ", padding)
+	return styledLine(line, foreground, background, false)
 }
 
 func paddedTransparentLine(text string, width int, padding int, foreground rgb, bold bool) string {

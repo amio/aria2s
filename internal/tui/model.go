@@ -45,10 +45,14 @@ type Model struct {
 	addForm         AddForm
 	detail          aria2.DownloadDetail
 	detailScroll    int
+	loaded          bool
+	loadingFrame    int
 	err             error
 }
 
 type refreshMsg struct{}
+
+type loadingTickMsg struct{}
 
 type recentDirsMsg struct {
 	dirs []string
@@ -68,13 +72,22 @@ func NewModel(service Service, refreshInterval time.Duration) Model {
 }
 
 func (model Model) Init() tea.Cmd {
-	return tick(model.refreshInterval)
+	return tea.Batch(
+		func() tea.Msg { return refreshMsg{} },
+		loadingTick(),
+	)
 }
 
 func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case refreshMsg:
 		return model.refresh(), tick(model.refreshInterval)
+	case loadingTickMsg:
+		if model.loaded {
+			return model, nil
+		}
+		model.loadingFrame++
+		return model, loadingTick()
 	case cursorBlinkMsg:
 		if model.mode != ModeAdd {
 			return model, nil
@@ -118,6 +131,7 @@ func (model Model) refresh() Model {
 		StoppedOffset: model.stoppedPage * model.stoppedLimit,
 		StoppedLimit:  model.stoppedLimit,
 	})
+	model.loaded = true
 	if err != nil {
 		model.err = err
 		return model
@@ -321,6 +335,14 @@ func isStopped(download aria2.Download) bool {
 func tick(interval time.Duration) tea.Cmd {
 	return tea.Tick(interval, func(time.Time) tea.Msg {
 		return refreshMsg{}
+	})
+}
+
+const loadingTickInterval = 80 * time.Millisecond
+
+func loadingTick() tea.Cmd {
+	return tea.Tick(loadingTickInterval, func(time.Time) tea.Msg {
+		return loadingTickMsg{}
 	})
 }
 

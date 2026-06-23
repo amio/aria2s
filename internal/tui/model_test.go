@@ -17,6 +17,29 @@ func TestAppImplementsConsoleService(t *testing.T) {
 	var _ Service = (*app.App)(nil)
 }
 
+func TestModelShowsLoadingIndicatorBeforeFirstRefresh(t *testing.T) {
+	service := &fakeService{}
+	model := NewModel(service, time.Second)
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 140, Height: 16})
+
+	view := model.View()
+	if strings.Contains(view, "No downloads yet") {
+		t.Fatalf("view should not show empty-state message before first refresh:\n%s", view)
+	}
+	if !strings.Contains(view, "Connecting...") {
+		t.Fatalf("view should show loading indicator before first refresh:\n%s", view)
+	}
+
+	model = updateModel(t, model, refreshMsg{})
+	view = model.View()
+	if strings.Contains(view, "Connecting...") {
+		t.Fatalf("view should stop showing loading indicator after first refresh:\n%s", view)
+	}
+	if !strings.Contains(view, "No downloads yet") {
+		t.Fatalf("view should show empty-state message after first refresh:\n%s", view)
+	}
+}
+
 func TestModelRefreshesDownloadsAndMovesSelection(t *testing.T) {
 	service := &fakeService{
 		snapshot: aria2.DownloadSnapshot{
@@ -106,6 +129,7 @@ func TestModelAddWithCustomDir(t *testing.T) {
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/data/Movies")})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, refreshMsg{})
 
 	if len(service.addOpts) != 1 || service.addOpts[0].Dir != "/data/Movies" {
 		t.Fatalf("expected dir /data/Movies, got %#v", service.addOpts)
