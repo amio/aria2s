@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/amio/aria2s/internal/state"
@@ -48,7 +49,7 @@ func BuildConfig(managed ManagedConfig, current map[string]string) string {
 	var builder strings.Builder
 	writeLine(&builder, "enable-rpc", "true")
 	writeLine(&builder, "rpc-listen-all", "false")
-	writeLine(&builder, "rpc-listen-port", intString(managed.RPCPort))
+	writeLine(&builder, "rpc-listen-port", strconv.Itoa(managed.RPCPort))
 	writeLine(&builder, "rpc-secret", managed.RPCSecret)
 	builder.WriteByte('\n')
 	writeLine(&builder, "input-file", managed.SessionFile)
@@ -135,16 +136,3 @@ func writeLine(builder *strings.Builder, key, value string) {
 	builder.WriteByte('\n')
 }
 
-func intString(value int) string {
-	if value == 0 {
-		return "0"
-	}
-	var digits [20]byte
-	index := len(digits)
-	for value > 0 {
-		index--
-		digits[index] = byte('0' + value%10)
-		value /= 10
-	}
-	return string(digits[index:])
-}
