@@ -9,11 +9,12 @@ Requirements:
 
 ## Install
 
+One-liner (macOS / Linux)
 ```bash
-# One-liner (macOS / Linux)
 curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | sh
-
-# Or if you have Go installed
+```
+Or if you have Go installed
+```bash
 go install github.com/amio/aria2s@latest
 ```
 
