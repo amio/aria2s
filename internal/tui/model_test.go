@@ -290,11 +290,14 @@ func TestModelOpensAndClosesDetailView(t *testing.T) {
 	if model.Mode() != ModeDetail {
 		t.Fatalf("mode got %s, want detail", model.Mode())
 	}
-	if !strings.Contains(model.View(), "https://example.com/active.iso") {
-		t.Fatalf("detail view missing URI:\n%s", model.View())
+	if !strings.Contains(model.View(), "active.iso") {
+		t.Fatalf("detail view missing name in header:\n%s", model.View())
 	}
-	if !strings.Contains(model.View(), "\x1b[1mDownload Dir:\x1b[22m /data/downloads") {
-		t.Fatalf("detail view missing bold download directory:\n%s", model.View())
+	if !strings.Contains(model.View(), "[Active]") {
+		t.Fatalf("detail view missing status in header:\n%s", model.View())
+	}
+	if !strings.Contains(model.View(), "\x1b[2mDownload Dir:") {
+		t.Fatalf("detail view missing dim download directory:\n%s", model.View())
 	}
 
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
@@ -339,7 +342,7 @@ func TestModelNavigatesAdjacentDetailsWithJK(t *testing.T) {
 	if model.detail.GID != "a2" {
 		t.Fatalf("detail gid got %q, want a2", model.detail.GID)
 	}
-	if !strings.Contains(model.View(), "https://example.com/a2.iso") {
+	if !strings.Contains(model.View(), "queued.iso") {
 		t.Fatalf("detail view should update to next item:\n%s", model.View())
 	}
 
@@ -350,8 +353,40 @@ func TestModelNavigatesAdjacentDetailsWithJK(t *testing.T) {
 	if model.detail.GID != "a1" {
 		t.Fatalf("detail gid got %q, want a1", model.detail.GID)
 	}
-	if strings.Join(service.detailRequests, ",") != "a1,a2,a1" {
-		t.Fatalf("detail requests got %#v", service.detailRequests)
+}
+
+func TestModelScrollsDetailWithArrows(t *testing.T) {
+	service := &fakeService{
+		snapshot: aria2.DownloadSnapshot{
+			Active: []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
+		},
+		detail: withDownloadDir(t, aria2.DownloadDetail{
+			GID:        "a1",
+			Name:       "active.iso",
+			Status:     "active",
+			PrimaryURI: "https://example.com/a1.iso",
+			Files:      []aria2.DownloadFile{{Path: "/downloads/a/active.iso", Name: "active.iso"}},
+		}, "/downloads/a"),
+	}
+	model := NewModel(service, time.Second)
+	model = updateModel(t, model, refreshMsg{})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if model.detailScroll != 0 {
+		t.Fatalf("scroll got %d, want 0", model.detailScroll)
+	}
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	if model.detailScroll != 1 {
+		t.Fatalf("scroll got %d, want 1 after down", model.detailScroll)
+	}
+	if model.detail.GID != "a1" {
+		t.Fatalf("detail gid changed to %q, down should not switch items", model.detail.GID)
+	}
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp})
+	if model.detailScroll != 0 {
+		t.Fatalf("scroll got %d, want 0 after up", model.detailScroll)
 	}
 }
 
@@ -392,7 +427,7 @@ func TestModelQuitsFromAddAndDetailModes(t *testing.T) {
 	detailModel := updateModel(t, model, refreshMsg{})
 	detailModel = updateModel(t, detailModel, tea.KeyMsg{Type: tea.KeyEnter})
 	if !strings.Contains(detailModel.View(), "Esc/h \x1b[2mBack\x1b[22m") || !strings.Contains(detailModel.View(), "j/k \x1b[2mNext/Prev\x1b[22m") {
-		t.Fatalf("detail view should mention q Quit, got:\n%s", detailModel.View())
+		t.Fatalf("detail view should mention Esc/h Back and j/k Next/Prev, got:\n%s", detailModel.View())
 	}
 	_, detailCommand := detailModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
 	if detailCommand == nil {

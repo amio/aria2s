@@ -58,6 +58,7 @@ type Model struct {
 	recentDirs      []string
 	dirPick         int
 	detail          aria2.DownloadDetail
+	detailScroll    int
 	err             error
 }
 
@@ -334,10 +335,25 @@ func (model Model) handleDetailKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return model, tea.Quit
 	case "esc", "h", "enter":
 		model.mode = ModeList
-	case "down", "j":
+	case "j":
 		model = model.openDetailAt(model.selected + 1)
-	case "up", "k":
+	case "k":
 		model = model.openDetailAt(model.selected - 1)
+	case "down":
+		model.detailScroll++
+	case "up":
+		if model.detailScroll > 0 {
+			model.detailScroll--
+		}
+	case "n":
+		page := max(model.height/2, 5)
+		model.detailScroll += page
+	case "b":
+		page := max(model.height/2, 5)
+		model.detailScroll -= page
+		if model.detailScroll < 0 {
+			model.detailScroll = 0
+		}
 	}
 	return model, nil
 }
@@ -354,6 +370,7 @@ func (model Model) openDetailAt(index int) Model {
 	}
 	model.selected = index
 	model.detail = detail
+	model.detailScroll = 0
 	model.err = nil
 	model.mode = ModeDetail
 	return model

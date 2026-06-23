@@ -128,46 +128,71 @@ func (model Model) dirFieldLine() string {
 
 func (model Model) detailView() string {
 	width, height := model.viewport()
-	header := model.titleFrame("Download Details")
-	footer := model.tableFrame(joinSides(model.detailStats(), model.detailHelp(), frameContentWidth(width)), false)
+	detail := model.detail
+
+	// Header: name on left, [status] + progress on right.
+	rightParts := []string{
+		fmt.Sprintf("[%s]", detailStatusLabel(detail)),
+		fmt.Sprintf("%s of %s (%s)", formatBytes(detail.CompletedLength), formatBytes(detail.TotalLength), formatProgress(detail.CompletedLength, detail.TotalLength)),
+	}
+	fcw := frameContentWidth(width)
+	const minGap = 5
+	rightMin := 0
+	for i, p := range rightParts {
+		if i > 0 {
+			rightMin++
+		}
+		rightMin += ansi.StringWidth(p)
+	}
+	maxNameWidth := fcw - rightMin - minGap
+	if maxNameWidth < 10 {
+		maxNameWidth = 10
+	}
+	name := detail.Name
+	if ansi.StringWidth(name) > maxNameWidth {
+		name = ansi.Truncate(name, maxNameWidth, "...")
+	}
+	headerContent := joinSides(name, rightParts, fcw)
+	header := model.tableFrame(headerContent, true)
+
+	footer := model.tableFrame(joinSides(model.detailStats(), model.detailHelp(), fcw), false)
 	bodyHeight := max(height-len(header)-len(footer), minBodyHeight)
 
-	detail := model.detail
 	lines := []string{
-		fmt.Sprintf("Name: %s", detail.Name),
-		fmt.Sprintf("Status: %s", detailStatusLabel(detail)),
-		fmt.Sprintf("GID: %s", detail.GID),
-		fmt.Sprintf("URI: %s", detail.PrimaryURI),
-		formatDetailLabel("Download Dir", detailDownloadDir(detail)),
-		fmt.Sprintf("Progress: %s of %s (%s)", formatBytes(detail.CompletedLength), formatBytes(detail.TotalLength), formatProgress(detail.CompletedLength, detail.TotalLength)),
-		fmt.Sprintf("Down: %s", formatSpeed(detail.DownloadSpeed)),
-		fmt.Sprintf("Up: %s", formatSpeed(detail.UploadSpeed)),
-		fmt.Sprintf("Uploaded: %s", formatBytes(detail.UploadLength)),
-		fmt.Sprintf("Connections: %d", detail.Connections),
-	}
-	if detail.VerifiedLength > 0 {
-		lines = append(lines, fmt.Sprintf("Verified: %s", formatBytes(detail.VerifiedLength)))
-	}
-	if detail.VerifyIntegrityPending {
-		lines = append(lines, "Hash Check: pending")
+		formatDetailLabel("GID", detail.GID),
 	}
 	if detail.InfoHash != "" {
-		lines = append(lines, fmt.Sprintf("Info Hash: %s", detail.InfoHash))
+		lines = append(lines, formatDetailLabel("Info Hash", detail.InfoHash))
 	}
+	lines = append(lines,
+		formatDetailLabel("Download Dir", detailDownloadDir(detail)),
+		"",
+		formatDetailLabel("Down", formatSpeed(detail.DownloadSpeed)),
+		formatDetailLabel("Up", formatSpeed(detail.UploadSpeed)),
+		formatDetailLabel("Uploaded", formatBytes(detail.UploadLength)),
+		formatDetailLabel("Connections", fmt.Sprintf("%d", detail.Connections)),
+	)
 	if detail.NumSeeders > 0 {
-		lines = append(lines, fmt.Sprintf("Seeders: %d", detail.NumSeeders))
+		lines = append(lines, formatDetailLabel("Seeders", fmt.Sprintf("%d", detail.NumSeeders)))
 	}
 	if detail.Seeder {
-		lines = append(lines, "Seeding: yes")
+		lines = append(lines, formatDetailLabel("Seeding", "yes"))
 	}
+	lines = append(lines, "")
 	if detail.PieceLength > 0 {
-		lines = append(lines, fmt.Sprintf("Piece Length: %s", formatBytes(detail.PieceLength)))
+		lines = append(lines, formatDetailLabel("Piece Length", formatBytes(detail.PieceLength)))
 	}
 	if detail.NumPieces > 0 {
-		lines = append(lines, fmt.Sprintf("Pieces: %d", detail.NumPieces))
+		lines = append(lines, formatDetailLabel("Pieces", fmt.Sprintf("%d", detail.NumPieces)))
+	}
+	if detail.VerifiedLength > 0 {
+		lines = append(lines, formatDetailLabel("Verified", formatBytes(detail.VerifiedLength)))
+	}
+	if detail.VerifyIntegrityPending {
+		lines = append(lines, formatDetailLabel("Hash Check", "pending"))
 	}
 	if detail.ErrorMessage != "" {
-		lines = append(lines, fmt.Sprintf("Error %s: %s", detail.ErrorCode, detail.ErrorMessage))
+		lines = append(lines, formatDetailLabel("Error "+detail.ErrorCode, detail.ErrorMessage))
 	}
 	if len(detail.Files) > 0 {
 		lines = append(lines, "", "Files:")
@@ -180,7 +205,23 @@ func (model Model) detailView() string {
 		}
 	}
 
-	body := model.fillBody(width, bodyHeight, lines)
+	// Apply scroll offset.
+	visible := bodyHeight
+	if visible < 1 {
+		visible = 1
+	}
+	maxScroll := len(lines) - visible
+	if model.detailScroll > maxScroll {
+		model.detailScroll = maxScroll
+	}
+	if model.detailScroll < 0 {
+		model.detailScroll = 0
+	}
+	if model.detailScroll > 0 && model.detailScroll <= len(lines) {
+		lines = lines[model.detailScroll:]
+	}
+
+	body := model.fillDetailBody(width, bodyHeight, lines)
 	return strings.Join(append(append(header, body...), footer...), "\n")
 }
 
@@ -255,6 +296,20 @@ func (model Model) fillBody(width int, height int, lines []string) []string {
 	}
 	if len(body) < height {
 		body = append(body, model.blankBodyLines(width, min(bodyBottomPaddingLine, height-len(body)))...)
+	}
+	if len(body) < height {
+		body = append(body, model.blankBodyLines(width, height-len(body))...)
+	}
+	return body
+}
+
+func (model Model) fillDetailBody(width int, height int, lines []string) []string {
+	body := make([]string, 0, height)
+	for _, line := range lines {
+		if len(body) == height {
+			return body
+		}
+		body = append(body, model.blankBodyLine(width, line))
 	}
 	if len(body) < height {
 		body = append(body, model.blankBodyLines(width, height-len(body))...)
@@ -353,7 +408,7 @@ func (model Model) detailStats() string {
 
 func (model Model) listHelp() []string {
 	return helpSegments(
-		helpItem{key: "↑/↓", desc: "Move"},
+		helpItem{key: "j/k", desc: "Select"},
 		helpItem{key: "Enter/l", desc: "Detail"},
 		helpItem{key: "a", desc: "Add"},
 		helpItem{key: "p", desc: "Pause"},
@@ -377,6 +432,7 @@ func (model Model) detailHelp() []string {
 	return helpSegments(
 		helpItem{key: "Esc/h", desc: "Back"},
 		helpItem{key: "j/k", desc: "Next/Prev"},
+		helpItem{key: "n/b", desc: "Page"},
 		helpItem{key: "q", desc: "Quit"},
 	)
 }
@@ -740,8 +796,10 @@ func boldText(text string) string {
 	return "\x1b[1m" + text + "\x1b[22m"
 }
 
+const detailLabelWidth = 16
+
 func formatDetailLabel(label string, value string) string {
-	return boldText(label+":") + " " + value
+	return dimText(fmt.Sprintf("%-*s", detailLabelWidth, label+":")) + " " + value
 }
 
 func detailDownloadDir(detail aria2.DownloadDetail) string {
