@@ -429,6 +429,14 @@ func (rpc *fakeRPC) AddURI(_ context.Context, _ state.State, uri string, _ aria2
 	return rpc.gid, nil
 }
 
+func (rpc *fakeRPC) SaveSession(context.Context, state.State) error {
+	return nil
+}
+
+func (rpc *fakeRPC) Shutdown(context.Context, state.State) error {
+	return nil
+}
+
 func runCommand(t *testing.T, application *app.App, args ...string) (string, error) {
 	t.Helper()
 	var stdout bytes.Buffer

@@ -451,6 +451,7 @@ Ownership rules:
 * `status`, `add`, and `console` should treat `state.json` as the authoritative source for connection details instead of re-parsing a user-edited config file on every call.
 * If user edits cause managed keys to drift from the stored state, `doctor` should report that drift explicitly and recommend rerunning `asv install` to repair it.
 * Completed and removed task visibility across aria2 restarts should rely on aria2's native session persistence via `force-save`, not on an aria2s-owned sidecar history file.
+* Graceful lifecycle paths should ask aria2 to `saveSession` and then `shutdown` before the supervisor unloads or starts the service again, so restart/stop preserve the latest stoppable state instead of relying only on the interval timer.
 
 ## 10. Internal Architecture
 

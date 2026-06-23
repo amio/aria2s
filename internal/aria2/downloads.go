@@ -136,6 +136,16 @@ func (client *RPCClient) RemoveDownloadResult(ctx context.Context, gid string) e
 	return client.call(ctx, "aria2.removeDownloadResult", []any{gid}, &ignored)
 }
 
+func (client *RPCClient) SaveSession(ctx context.Context) error {
+	var ignored string
+	return client.call(ctx, "aria2.saveSession", nil, &ignored)
+}
+
+func (client *RPCClient) Shutdown(ctx context.Context) error {
+	var ignored string
+	return client.call(ctx, "aria2.shutdown", nil, &ignored)
+}
+
 type rawDownload struct {
 	GID             string    `json:"gid"`
 	Status          string    `json:"status"`

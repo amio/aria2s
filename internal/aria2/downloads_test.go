@@ -162,6 +162,30 @@ func TestTaskDetailParsesSelectedTaskPayload(t *testing.T) {
 	assertRequestIncludesField(t, request, "dir")
 }
 
+func TestSessionLifecycleRPCMethodsUseExpectedAria2Calls(t *testing.T) {
+	var requests []rpcCall
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := decodeRPCCall(t, r)
+		requests = append(requests, call)
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":"OK"}`)
+	}))
+	defer server.Close()
+	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
+
+	if err := client.SaveSession(context.Background()); err != nil {
+		t.Fatalf("save session: %v", err)
+	}
+	if err := client.Shutdown(context.Background()); err != nil {
+		t.Fatalf("shutdown: %v", err)
+	}
+
+	if len(requests) != 2 {
+		t.Fatalf("expected 2 RPC calls, got %d", len(requests))
+	}
+	assertRPCRequest(t, requests[0], "aria2.saveSession", "token:secret-token")
+	assertRPCRequest(t, requests[1], "aria2.shutdown", "token:secret-token")
+}
+
 type rpcCall struct {
 	Method string `json:"method"`
 	Params []any  `json:"params"`

@@ -28,6 +28,8 @@ asv console
 
 `asv install --start` performs the same install work, starts the service, and verifies RPC health.
 
+`asv stop` and `asv restart` use aria2's RPC lifecycle first: they save the current session, request graceful `shutdown`, and only then hand off to the supervisor to unload or start the service again.
+
 `asv status` reports service file presence, supervisor state, stored binary validity, RPC reachability, aria2 version, endpoint, config path, and log path. It never prints the RPC secret.
 
 `asv doctor` reports common startup/configuration problems, including missing `aria2c`, port conflicts, and drift in aria2s-managed config keys.

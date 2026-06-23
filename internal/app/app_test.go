@@ -127,7 +127,137 @@ func TestRestartFailsWhenManagedConfigDrifted(t *testing.T) {
 	}
 }
 
-func TestInstallStartRestartsRunningServiceWhenManagedConfigChanges(t *testing.T) {
+func TestStopSavesSessionBeforeStoppingService(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	events := []string{}
+	serviceBackend := &recordingService{loaded: true, running: true, events: &events}
+	rpc := &sessionRecordingRPC{events: &events, service: serviceBackend}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{})
+
+	if err := application.Stop(context.Background()); err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+
+	if rpc.saveSessionCalls != 1 {
+		t.Fatalf("expected one saveSession call, got %d", rpc.saveSessionCalls)
+	}
+	if rpc.shutdownCalls != 1 {
+		t.Fatalf("expected one shutdown call, got %d", rpc.shutdownCalls)
+	}
+	if strings.Join(events, ",") != "saveSession,shutdown,stop" {
+		t.Fatalf("expected save, shutdown, then stop, got %v", events)
+	}
+}
+
+func TestStopFailsWhenSaveSessionFails(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	serviceBackend := &recordingService{loaded: true, running: true}
+	rpc := &sessionRecordingRPC{saveSessionErr: errors.New("rpc unavailable")}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{})
+
+	err := application.Stop(context.Background())
+
+	if err == nil {
+		t.Fatal("expected stop to fail when saveSession fails")
+	}
+	assertContains(t, err.Error(), "save session")
+	if len(serviceBackend.calls) != 0 {
+		t.Fatalf("expected no service calls after saveSession failure, got %v", serviceBackend.calls)
+	}
+}
+
+func TestRestartSavesSessionBeforeRestartingService(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	events := []string{}
+	serviceBackend := &recordingService{loaded: true, running: true, events: &events}
+	rpc := &sessionRecordingRPC{events: &events, service: serviceBackend}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
+		RPCReadyTimeout: time.Second,
+		RPCPollInterval: time.Nanosecond,
+	})
+
+	if err := application.Restart(context.Background()); err != nil {
+		t.Fatalf("restart: %v", err)
+	}
+
+	if rpc.saveSessionCalls != 1 {
+		t.Fatalf("expected one saveSession call, got %d", rpc.saveSessionCalls)
+	}
+	if rpc.shutdownCalls != 1 {
+		t.Fatalf("expected one shutdown call, got %d", rpc.shutdownCalls)
+	}
+	if strings.Join(events, ",") != "saveSession,shutdown,start,version" {
+		t.Fatalf("expected save, shutdown, start, then version poll, got %v", events)
+	}
+}
+
+func TestStopUsesShutdownTimeoutInsteadOfRPCReadyTimeout(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	serviceBackend := &recordingService{
+		loaded:            true,
+		running:           true,
+		shutdownLagChecks: 3,
+	}
+	rpc := &sessionRecordingRPC{service: serviceBackend}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
+		RPCReadyTimeout: time.Nanosecond,
+		RPCPollInterval: time.Nanosecond,
+		ShutdownTimeout: 50 * time.Millisecond,
+	})
+
+	if err := application.Stop(context.Background()); err != nil {
+		t.Fatalf("stop should tolerate graceful shutdown longer than RPCReadyTimeout: %v", err)
+	}
+}
+
+func TestRestartWaitsThroughShutdownTransitionWhenRPCIsAlreadyUnavailable(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	events := []string{}
+	serviceBackend := &recordingService{
+		loaded:            true,
+		running:           false,
+		events:            &events,
+		shutdownLagChecks: 3,
+	}
+	rpc := &sessionRecordingRPC{
+		service:        serviceBackend,
+		events:         &events,
+		saveSessionErr: errors.New(`Post "http://127.0.0.1:6800/jsonrpc": dial tcp 127.0.0.1:6800: connect: connection refused`),
+	}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
+		RPCReadyTimeout: time.Second,
+		RPCPollInterval: time.Nanosecond,
+		ShutdownTimeout: 50 * time.Millisecond,
+	})
+
+	if err := application.Restart(context.Background()); err != nil {
+		t.Fatalf("restart should wait for in-flight shutdown and then start: %v", err)
+	}
+
+	if rpc.shutdownCalls != 0 {
+		t.Fatalf("expected no extra shutdown RPC once aria2 is already unreachable, got %d", rpc.shutdownCalls)
+	}
+	if strings.Join(events, ",") != "saveSession,start,version" {
+		t.Fatalf("expected restart to wait through shutdown transition then start, got %v", events)
+	}
+}
+
+func TestInstallStartGracefullyRestartsRunningServiceWhenManagedConfigChanges(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
@@ -145,15 +275,23 @@ func TestInstallStartRestartsRunningServiceWhenManagedConfigChanges(t *testing.T
 	if err := os.WriteFile(servicePaths.ServiceFile, []byte(plist), 0o644); err != nil {
 		t.Fatalf("write plist: %v", err)
 	}
-	serviceBackend := &recordingService{loaded: true, running: true}
-	application := newTestApp(servicePaths, aria2c, serviceBackend, fixedRPC{version: "1.37.0"}, app.Options{})
+	events := []string{}
+	serviceBackend := &recordingService{loaded: true, running: true, events: &events}
+	rpc := &sessionRecordingRPC{events: &events, service: serviceBackend}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
+		RPCReadyTimeout: time.Second,
+		RPCPollInterval: time.Nanosecond,
+	})
 
 	if err := application.Install(context.Background(), true); err != nil {
 		t.Fatalf("install --start: %v", err)
 	}
 
-	if strings.Join(serviceBackend.calls, ",") != "restart" {
-		t.Fatalf("expected restart after config repair, got %v", serviceBackend.calls)
+	if rpc.saveSessionCalls != 1 || rpc.shutdownCalls != 1 {
+		t.Fatalf("expected one saveSession and one shutdown, got save=%d shutdown=%d", rpc.saveSessionCalls, rpc.shutdownCalls)
+	}
+	if strings.Join(events, ",") != "saveSession,shutdown,start,version" {
+		t.Fatalf("expected graceful restart sequence after config repair, got %v", events)
 	}
 }
 
@@ -219,6 +357,49 @@ func TestInstallReloadsLoadedServiceWhenPlistChanges(t *testing.T) {
 	wantCalls := []string{"uninstall", "install"}
 	if strings.Join(serviceBackend.calls, ",") != strings.Join(wantCalls, ",") {
 		t.Fatalf("expected reload calls %v, got %v", wantCalls, serviceBackend.calls)
+	}
+}
+
+func TestInstallStartGracefullyStopsRunningServiceBeforeReloadingChangedPlist(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	current := state.State{
+		Aria2cPath:   aria2c,
+		RPCPort:      6800,
+		RPCSecret:    "secret-token",
+		ConfigPath:   servicePaths.ConfigFile,
+		SessionPath:  servicePaths.SessionFile,
+		LogPath:      servicePaths.LogFile,
+		ErrorLogPath: servicePaths.ErrorLogFile,
+		ServiceName:  servicePaths.ServiceName,
+	}
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+		t.Fatalf("mkdir service dir: %v", err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, []byte("stale plist"), 0o644); err != nil {
+		t.Fatalf("write stale plist: %v", err)
+	}
+	events := []string{}
+	serviceBackend := &recordingService{loaded: true, running: true, events: &events}
+	rpc := &sessionRecordingRPC{events: &events, service: serviceBackend}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
+		RPCReadyTimeout: time.Second,
+		RPCPollInterval: time.Nanosecond,
+	})
+
+	if err := application.Install(context.Background(), true); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	if rpc.saveSessionCalls != 1 || rpc.shutdownCalls != 1 {
+		t.Fatalf("expected one saveSession and one shutdown, got save=%d shutdown=%d", rpc.saveSessionCalls, rpc.shutdownCalls)
+	}
+	if strings.Join(events, ",") != "saveSession,shutdown,uninstall,install,start,version" {
+		t.Fatalf("expected graceful shutdown before service reload, got %v", events)
 	}
 }
 
@@ -351,19 +532,27 @@ func newTestApp(servicePaths paths.Paths, aria2c string, serviceBackend service.
 }
 
 type recordingService struct {
-	loaded  bool
-	running bool
-	calls   []string
+	loaded            bool
+	running           bool
+	calls             []string
+	events            *[]string
+	shutdownLagChecks int
 }
 
 func (service *recordingService) Install(context.Context) error {
 	service.calls = append(service.calls, "install")
+	if service.events != nil {
+		*service.events = append(*service.events, "install")
+	}
 	service.loaded = true
 	return nil
 }
 
 func (service *recordingService) Uninstall(context.Context) error {
 	service.calls = append(service.calls, "uninstall")
+	if service.events != nil {
+		*service.events = append(*service.events, "uninstall")
+	}
 	service.loaded = false
 	service.running = false
 	return nil
@@ -371,6 +560,9 @@ func (service *recordingService) Uninstall(context.Context) error {
 
 func (service *recordingService) Start(context.Context) error {
 	service.calls = append(service.calls, "start")
+	if service.events != nil {
+		*service.events = append(*service.events, "start")
+	}
 	service.loaded = true
 	service.running = true
 	return nil
@@ -378,12 +570,18 @@ func (service *recordingService) Start(context.Context) error {
 
 func (service *recordingService) Stop(context.Context) error {
 	service.calls = append(service.calls, "stop")
+	if service.events != nil {
+		*service.events = append(*service.events, "stop")
+	}
 	service.running = false
 	return nil
 }
 
 func (service *recordingService) Restart(context.Context) error {
 	service.calls = append(service.calls, "restart")
+	if service.events != nil {
+		*service.events = append(*service.events, "restart")
+	}
 	service.loaded = true
 	service.running = true
 	return nil
@@ -394,6 +592,10 @@ func (service *recordingService) IsLoaded(context.Context) bool {
 }
 
 func (service *recordingService) IsRunning(context.Context) bool {
+	if !service.running && service.shutdownLagChecks > 0 {
+		service.shutdownLagChecks--
+		return true
+	}
 	return service.running
 }
 
@@ -472,6 +674,14 @@ func (rpc fixedRPC) AddURI(context.Context, state.State, string, aria2.AddOption
 	return "2089b05ecca3d829", nil
 }
 
+func (rpc fixedRPC) SaveSession(context.Context, state.State) error {
+	return nil
+}
+
+func (rpc fixedRPC) Shutdown(context.Context, state.State) error {
+	return nil
+}
+
 type flakyRPC struct {
 	failuresRemaining int
 	version           string
@@ -491,6 +701,14 @@ func (rpc *flakyRPC) AddURI(context.Context, state.State, string, aria2.AddOptio
 	return "2089b05ecca3d829", nil
 }
 
+func (rpc *flakyRPC) SaveSession(context.Context, state.State) error {
+	return nil
+}
+
+func (rpc *flakyRPC) Shutdown(context.Context, state.State) error {
+	return nil
+}
+
 type dirRecordingRPC struct {
 	lastDir string
 }
@@ -502,6 +720,59 @@ func (rpc *dirRecordingRPC) Version(context.Context, state.State) (string, error
 func (rpc *dirRecordingRPC) AddURI(_ context.Context, _ state.State, _ string, opts aria2.AddOptions) (string, error) {
 	rpc.lastDir = opts.Dir
 	return "2089b05ecca3d829", nil
+}
+
+func (rpc *dirRecordingRPC) SaveSession(context.Context, state.State) error {
+	return nil
+}
+
+func (rpc *dirRecordingRPC) Shutdown(context.Context, state.State) error {
+	return nil
+}
+
+type sessionRecordingRPC struct {
+	saveSessionCalls int
+	shutdownCalls    int
+	saveSessionErr   error
+	shutdownErr      error
+	events           *[]string
+	service          *recordingService
+}
+
+func (rpc *sessionRecordingRPC) Version(context.Context, state.State) (string, error) {
+	if rpc.service != nil && !rpc.service.running {
+		return "", errors.New("connection refused")
+	}
+	if rpc.events != nil {
+		*rpc.events = append(*rpc.events, "version")
+	}
+	return "1.37.0", nil
+}
+
+func (rpc *sessionRecordingRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
+	return "2089b05ecca3d829", nil
+}
+
+func (rpc *sessionRecordingRPC) SaveSession(context.Context, state.State) error {
+	rpc.saveSessionCalls++
+	if rpc.events != nil {
+		*rpc.events = append(*rpc.events, "saveSession")
+	}
+	return rpc.saveSessionErr
+}
+
+func (rpc *sessionRecordingRPC) Shutdown(context.Context, state.State) error {
+	rpc.shutdownCalls++
+	if rpc.events != nil {
+		*rpc.events = append(*rpc.events, "shutdown")
+	}
+	if rpc.shutdownErr != nil {
+		return rpc.shutdownErr
+	}
+	if rpc.service != nil {
+		rpc.service.running = false
+	}
+	return nil
 }
 
 func TestAddRecordsCustomDirAndExposesRecentDirs(t *testing.T) {
