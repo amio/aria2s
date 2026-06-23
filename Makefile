@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := help
 
-.PHONY: help build test test-stage1 test-stage2
+.PHONY: help build test
 
 help: ## Show available development commands
 	@printf "Usage: make <target>\n\nTargets:\n"
@@ -12,8 +12,4 @@ build: ## Build the asv binary
 test: ## Run the full Go test suite
 	go test ./...
 
-test-stage1: ## Run Stage 1 service CLI checks
-	go test ./internal/... ./cmd
 
-test-stage2: ## Run Stage 2 console-focused checks
-	go test ./internal/aria2 ./internal/app ./internal/tui ./cmd
