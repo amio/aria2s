@@ -426,6 +426,7 @@ continue=true
 
 input-file=<session-file>
 save-session=<session-file>
+force-save=true
 save-session-interval=60
 
 max-concurrent-downloads=5
@@ -445,10 +446,11 @@ Important defaults:
 
 Ownership rules:
 
-* `aria2s` owns and may repair these keys: `enable-rpc`, `rpc-listen-all`, `rpc-listen-port`, `rpc-secret`, `input-file`, `save-session`, and `save-session-interval`.
+* `aria2s` owns and may repair these keys: `enable-rpc`, `rpc-listen-all`, `rpc-listen-port`, `rpc-secret`, `input-file`, `save-session`, `force-save`, and `save-session-interval`.
 * Users may edit aria2 behavior keys such as `dir`, `max-concurrent-downloads`, `split`, `max-connection-per-server`, and other performance-related settings.
 * `status`, `add`, and `console` should treat `state.json` as the authoritative source for connection details instead of re-parsing a user-edited config file on every call.
 * If user edits cause managed keys to drift from the stored state, `doctor` should report that drift explicitly and recommend rerunning `asv install` to repair it.
+* Completed and removed task visibility across aria2 restarts should rely on aria2's native session persistence via `force-save`, not on an aria2s-owned sidecar history file.
 
 ## 10. Internal Architecture
 

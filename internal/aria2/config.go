@@ -26,6 +26,7 @@ var managedConfigKeys = map[string]struct{}{
 	"rpc-secret":            {},
 	"input-file":            {},
 	"save-session":          {},
+	"force-save":            {},
 	"save-session-interval": {},
 }
 
@@ -52,6 +53,7 @@ func BuildConfig(managed ManagedConfig, current map[string]string) string {
 	builder.WriteByte('\n')
 	writeLine(&builder, "input-file", managed.SessionFile)
 	writeLine(&builder, "save-session", managed.SessionFile)
+	writeLine(&builder, "force-save", "true")
 	writeLine(&builder, "save-session-interval", "60")
 	builder.WriteByte('\n')
 
@@ -112,6 +114,7 @@ func ManagedValues(current state.State) map[string]string {
 		"rpc-secret":            current.RPCSecret,
 		"input-file":            current.SessionPath,
 		"save-session":          current.SessionPath,
+		"force-save":            "true",
 		"save-session-interval": "60",
 	}
 }
