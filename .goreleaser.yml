@@ -46,7 +46,7 @@ changelog:
 #       name: homebrew-tap
 #       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
 #     caveats: |
-#       aria2s manages aria2c as a background service. To set it up:
+#       aria2s sets up aria2c as a persistent background service. To set it up:
 #         aria2s install --start
 #
 #       Then just run the TUI:

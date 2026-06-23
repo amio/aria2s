@@ -1,6 +1,6 @@
 # `aria2s` - Your `aria2c`, always on.
 
-`aria2s` runs `aria2c` as a background service and provides a TUI to manage downloads.
+`aria2s` sets up `aria2c` as a persistent background service and provides a TUI to manage downloads.
 
 ## Install
 
