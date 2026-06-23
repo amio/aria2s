@@ -46,6 +46,7 @@ _bump:
 	NEW="$${MAJOR}.$${MINOR}.$${PATCH}"; \
 	echo "  $(CUR_VER)  →  v$${NEW}"; \
 	git tag -a "v$${NEW}" -m "v$${NEW}"; \
-	git push origin "v$${NEW}"
+	BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
+	git push origin "$${BRANCH}" "v$${NEW}"
 
 
