@@ -624,19 +624,19 @@ func detailStatusLabel(detail aria2.DownloadDetail) string {
 
 func formatBytes(value int64) string {
 	if value <= 0 {
-		return "0 B"
+		return "0"
 	}
-	units := []string{"B", "KiB", "MiB", "GiB", "TiB"}
+	units := []string{"B", "K", "M", "G", "T"}
 	size := float64(value)
 	unit := 0
-	for size >= 1024 && unit < len(units)-1 {
-		size /= 1024
+	for size >= 1000 && unit < len(units)-1 {
+		size /= 1000
 		unit++
 	}
 	if unit == 0 {
-		return fmt.Sprintf("%d %s", value, units[unit])
+		return fmt.Sprintf("%d%s", value, units[unit])
 	}
-	return fmt.Sprintf("%.1f %s", size, units[unit])
+	return fmt.Sprintf("%.1f%s", size, units[unit])
 }
 
 func formatSpeed(value int64) string {
