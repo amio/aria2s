@@ -39,6 +39,30 @@ func TestAddFormSubmitReturnsTrimmedValues(t *testing.T) {
 	}
 }
 
+func TestAddFormWithRecentsPrefillsLastUsedDir(t *testing.T) {
+	form := NewAddForm("/home/user/Downloads").WithRecents([]string{
+		"/data/Movies",
+		"/data/Music",
+	})
+
+	if form.dir != "/data/Movies" {
+		t.Fatalf("dir got %q, want /data/Movies", form.dir)
+	}
+	if form.dirPick != 0 {
+		t.Fatalf("dirPick got %d, want 0", form.dirPick)
+	}
+}
+
+func TestAddFormWithRecentsDoesNotOverwriteExistingDir(t *testing.T) {
+	form := NewAddForm("/home/user/Downloads")
+	form.dir = "/custom/path"
+	form = form.WithRecents([]string{"/data/Movies"})
+
+	if form.dir != "/custom/path" {
+		t.Fatalf("dir got %q, want existing /custom/path", form.dir)
+	}
+}
+
 func TestAddFormBodyLinesIncludeRecentsWhenDirFocused(t *testing.T) {
 	form := NewAddForm("/home").WithRecents([]string{"/data/Movies"})
 	form.focus = focusDir

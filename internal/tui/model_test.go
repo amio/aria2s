@@ -158,6 +158,33 @@ func TestModelAddDirTabCyclesAndWraps(t *testing.T) {
 	}
 }
 
+func TestModelAddPrefillsLastUsedDirOnLoad(t *testing.T) {
+	service := &fakeService{
+		recentDirs: []string{"/data/Movies", "/data/Music"},
+	}
+	model := NewModel(service, time.Second)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected recent dirs load command when entering add mode")
+	}
+	msg := cmd()
+	loaded, _ := model.Update(msg)
+	model = loaded.(Model)
+
+	if model.addForm.dir != "/data/Movies" {
+		t.Fatalf("dir got %q, want /data/Movies", model.addForm.dir)
+	}
+
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://example.com/file.zip")})
+	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+
+	if len(service.addOpts) != 1 || service.addOpts[0].Dir != "/data/Movies" {
+		t.Fatalf("expected dir /data/Movies from last used, got %#v", service.addOpts)
+	}
+}
+
 func TestModelLoadsRecentDirsOnAddMode(t *testing.T) {
 	service := &fakeService{
 		recentDirs: []string{"/data/Movies", "/data/Music"},

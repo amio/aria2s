@@ -57,6 +57,10 @@ func (form AddForm) Reset() AddForm {
 
 func (form AddForm) WithRecents(dirs []string) AddForm {
 	form.recentDirs = dirs
+	if form.dir == "" && len(dirs) > 0 {
+		form.dir = dirs[0]
+		form.dirPick = 0
+	}
 	return form
 }
 
