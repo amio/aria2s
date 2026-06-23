@@ -1,8 +1,6 @@
 # `aria2s` - Your `aria2c`, always on.
 
-`aria2s` manages `aria2c` as a background service, with a TUI to manage downloads.
-
-The project builds the `aria2s` binary.
+`aria2s` runs `aria2c` as a background service and provides a TUI to manage downloads.
 
 ## Quick Start
 
