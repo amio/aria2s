@@ -54,6 +54,7 @@ type Model struct {
 	detailScroll    int
 	loaded          bool
 	loadingFrame    int
+	version         string
 	err             error
 }
 
@@ -72,9 +73,12 @@ type recentDirsMsg struct {
 	err  error
 }
 
-func NewModel(service Service, refreshInterval time.Duration) Model {
+func NewModel(service Service, refreshInterval time.Duration, version string) Model {
 	if refreshInterval <= 0 {
 		refreshInterval = time.Second
+	}
+	if version == "" {
+		version = "dev"
 	}
 	return Model{
 		service:         service,
@@ -82,6 +86,7 @@ func NewModel(service Service, refreshInterval time.Duration) Model {
 		wsEvents:        service.Subscribe(context.Background()),
 		mode:            ModeList,
 		stoppedLimit:    100,
+		version:         version,
 	}
 }
 

@@ -19,7 +19,7 @@ func TestAppImplementsConsoleService(t *testing.T) {
 
 func TestModelShowsLoadingIndicatorBeforeFirstRefresh(t *testing.T) {
 	service := &fakeService{}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 140, Height: 16})
 
 	view := model.View()
@@ -48,7 +48,7 @@ func TestModelRefreshesDownloadsAndMovesSelection(t *testing.T) {
 			Stopped: []aria2.Download{{GID: "s1", Name: "done.iso", Status: "complete"}},
 		},
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 
 	updated, _ := model.Update(refreshMsg{})
 	model = updated.(Model)
@@ -77,7 +77,7 @@ func TestModelRendersFullScreenTableLayout(t *testing.T) {
 			Stopped: []aria2.Download{{GID: "s1", Name: "done.iso", Status: "complete", CompletedLength: 300, TotalLength: 300}},
 		},
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 140, Height: 16})
 	model = updateModel(t, model, refreshMsg{})
 
@@ -93,9 +93,6 @@ func TestModelRendersFullScreenTableLayout(t *testing.T) {
 	if !strings.Contains(view, "Enter/l \x1b[2mDetail\x1b[22m") || !strings.Contains(view, "q \x1b[2mQuit\x1b[22m") {
 		t.Fatalf("view missing key help:\n%s", view)
 	}
-	if !strings.Contains(view, "▀") && !strings.Contains(view, "▄") {
-		t.Fatalf("view should use half-block header/footer rendering:\n%s", view)
-	}
 	if got := strings.Count(view, "\n") + 1; got != 16 {
 		t.Fatalf("view should fill the terminal height, got %d lines:\n%s", got, view)
 	}
@@ -103,7 +100,7 @@ func TestModelRendersFullScreenTableLayout(t *testing.T) {
 
 func TestModelAddsURIFromInputMode(t *testing.T) {
 	service := &fakeService{}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://example.com/file.zip")})
@@ -122,7 +119,7 @@ func TestModelAddsURIFromInputMode(t *testing.T) {
 
 func TestModelAddWithCustomDir(t *testing.T) {
 	service := &fakeService{defaultDir: "/home/user/Downloads"}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://example.com/file.zip")})
@@ -144,7 +141,7 @@ func TestModelAddDirRecentPick(t *testing.T) {
 		defaultDir: "/home/user/Downloads",
 		recentDirs: []string{"/data/Movies", "/data/Music"},
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	model.addForm = model.addForm.WithRecents(service.recentDirs)
@@ -162,7 +159,7 @@ func TestModelAddDirTabCyclesAndWraps(t *testing.T) {
 	service := &fakeService{
 		recentDirs: []string{"/data/Movies", "/data/Music", "/data/Books"},
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	model.addForm = model.addForm.WithRecents(service.recentDirs)
@@ -186,7 +183,7 @@ func TestModelAddPrefillsLastUsedDirOnLoad(t *testing.T) {
 	service := &fakeService{
 		recentDirs: []string{"/data/Movies", "/data/Music"},
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	model = updated.(Model)
@@ -213,7 +210,7 @@ func TestModelLoadsRecentDirsOnAddMode(t *testing.T) {
 	service := &fakeService{
 		recentDirs: []string{"/data/Movies", "/data/Music"},
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	model = updated.(Model)
@@ -241,7 +238,7 @@ func TestModelRunsTaskActionsForSelection(t *testing.T) {
 			Stopped: []aria2.Download{{GID: "s1", Name: "done.iso", Status: "complete"}},
 		},
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, refreshMsg{})
 
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
@@ -270,7 +267,7 @@ func TestModelPagesStoppedDownloads(t *testing.T) {
 			Stopped: []aria2.Download{{GID: "s1", Name: "done.iso", Status: "complete"}},
 		},
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 
 	model = updateModel(t, model, refreshMsg{})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
@@ -303,7 +300,7 @@ func TestModelDisplaysMetadataLabelForMetadataEntries(t *testing.T) {
 			},
 		},
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 140, Height: 16})
 	model = updateModel(t, model, refreshMsg{})
 
@@ -331,7 +328,7 @@ func TestModelOpensAndClosesDetailView(t *testing.T) {
 			TotalLength:     100,
 		}, "/data/downloads"),
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, refreshMsg{})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 
@@ -382,7 +379,7 @@ func TestModelNavigatesAdjacentDetailsWithJK(t *testing.T) {
 			}, "/downloads/b"),
 		},
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, refreshMsg{})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
@@ -419,7 +416,7 @@ func TestModelScrollsDetailWithArrows(t *testing.T) {
 			Files:      []aria2.DownloadFile{{Path: "/downloads/a/active.iso", Name: "active.iso"}},
 		}, "/downloads/a"),
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, refreshMsg{})
 	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
 
@@ -448,7 +445,7 @@ func TestModelQuitsFromAddAndDetailModes(t *testing.T) {
 		},
 		detail: aria2.DownloadDetail{GID: "a1", Name: "active.iso", Status: "active"},
 	}
-	model := NewModel(service, time.Second)
+	model := NewModel(service, time.Second, "dev")
 
 	addModel := updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	if !strings.Contains(addModel.View(), "Esc \x1b[2mBack\x1b[22m") || !strings.Contains(addModel.View(), "Ctrl+C \x1b[2mQuit\x1b[22m") {

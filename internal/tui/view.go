@@ -40,7 +40,8 @@ var (
 	frameEdgeColor    = rgb{87, 110, 129}
 	frameDividerColor = rgb{29, 42, 54}
 	frameTextColor    = rgb{241, 244, 247}
-	bodyColor         = rgb{9, 15, 22}
+	contentBgColor         = rgb{28, 28, 28}
+	bgColor        = rgb{16, 16, 16}
 	bodyTextColor     = rgb{210, 217, 225}
 	selectedColor     = rgb{28, 44, 58}
 	errorTextColor    = rgb{255, 152, 152}
@@ -59,11 +60,39 @@ func (model Model) View() string {
 
 func (model Model) listView() string {
 	width, height := model.viewport()
-	header := model.tableFrame(model.tableHeader(frameContentWidth(width)), true)
-	footer := model.tableFrame(joinSides(model.listStats(), model.listHelp(), frameContentWidth(width)), false)
-	bodyHeight := max(height-len(header)-len(footer), minBodyHeight)
-	body := model.listBody(width, bodyHeight)
-	return strings.Join(append(append(header, body...), footer...), "\n")
+	cWidth := frameContentWidth(width)
+	topContent := joinSides(dimText("aria2s ("+model.version+")"), []string{model.listStats()}, cWidth)
+	bottomContent := joinSides("", model.listHelp(), cWidth)
+
+	barLines := len(model.barFrame("")) * 2
+	contentHeight := max(height-barLines, minBodyHeight)
+	header := model.framedHeader(width)
+	body := model.listBody(width, contentHeight-len(header))
+
+	return model.framedView(topContent, append(header, body...), bottomContent)
+}
+
+func (model Model) barFrame(content string) []string {
+	width, _ := model.viewport()
+	return []string{
+		paddedStyledLine("", width, 0, bodyTextColor, bgColor, false),
+		paddedStyledLine(content, width, framePaddingX, frameTextColor, bgColor, false),
+		paddedStyledLine("", width, 0, bodyTextColor, bgColor, false),
+	}
+}
+
+func (model Model) framedView(topContent string, body []string, bottomContent string) string {
+	topSection := model.barFrame(topContent)
+	bottomSection := model.barFrame(bottomContent)
+	return strings.Join(append(append(topSection, body...), bottomSection...), "\n")
+}
+
+func (model Model) framedHeader(width int) []string {
+	return []string{
+		borderedLine("", width, bodyTextColor, contentBgColor, false),
+		borderedLine(model.tableHeader(contentInner(width)), width, frameTextColor, contentBgColor, true),
+		borderedLine("", width, bodyTextColor, contentBgColor, false),
+	}
 }
 
 func (model Model) addView() string {
@@ -80,7 +109,7 @@ func (model Model) detailView() string {
 	width, height := model.viewport()
 	detail := model.detail
 
-	// Header: name on left, [status] + progress on right.
+	// Top bar: name on left, [status] + progress on right.
 	rightParts := []string{
 		fmt.Sprintf("[%s]", detailStatusLabel(detail)),
 		fmt.Sprintf("%s of %s (%s)", formatBytes(detail.CompletedLength), formatBytes(detail.TotalLength), formatProgress(detail.CompletedLength, detail.TotalLength)),
@@ -102,11 +131,11 @@ func (model Model) detailView() string {
 	if ansi.StringWidth(name) > maxNameWidth {
 		name = ansi.Truncate(name, maxNameWidth, "...")
 	}
-	headerContent := joinSides(name, rightParts, fcw)
-	header := model.tableFrame(headerContent, true)
+	topContent := joinSides(name, rightParts, fcw)
+	bottomContent := joinSides(model.detailStats(), model.detailHelp(), fcw)
 
-	footer := model.tableFrame(joinSides(model.detailStats(), model.detailHelp(), fcw), false)
-	bodyHeight := max(height-len(header)-len(footer), minBodyHeight)
+	barLines := len(model.barFrame("")) * 2
+	bodyHeight := max(height-barLines, minBodyHeight)
 
 	lines := []string{
 		formatDetailLabel("GID", detail.GID),
@@ -177,8 +206,17 @@ func (model Model) detailView() string {
 		lines = lines[model.detailScroll:]
 	}
 
-	body := model.fillDetailBody(width, bodyHeight, lines)
-	return strings.Join(append(append(header, body...), footer...), "\n")
+	// Build bordered body lines with top and bottom padding.
+	body := make([]string, 0, bodyHeight)
+	body = append(body, borderedLine("", width, bodyTextColor, contentBgColor, false))
+	for i := 0; len(body) < bodyHeight-1 && i < len(lines); i++ {
+		body = append(body, borderedLine(lines[i], width, bodyTextColor, contentBgColor, false))
+	}
+	for len(body) < bodyHeight {
+		body = append(body, borderedLine("", width, bodyTextColor, contentBgColor, false))
+	}
+
+	return model.framedView(topContent, body, bottomContent)
 }
 
 func (model Model) tableHeader(contentWidth int) string {
@@ -207,14 +245,14 @@ func (model Model) tableHeader(contentWidth int) string {
 }
 
 func (model Model) listBody(width int, height int) []string {
-	contentWidth := frameContentWidth(width)
+	contentWidth := contentInner(width)
 	if contentWidth < minTableWidth {
 		return model.fillBody(width, height, []string{"Terminal is too narrow for the full table view.", "Increase the terminal width and resize again."})
 	}
 
 	body := make([]string, 0, height)
 	if model.err != nil {
-		body = append(body, paddedStyledLine(fmt.Sprintf("Error: %v", model.err), width, framePaddingX, errorTextColor, bodyColor, true))
+		body = append(body, borderedLine(fmt.Sprintf("Error: %v", model.err), width, errorTextColor, contentBgColor, true))
 	}
 
 	items := model.items()
@@ -285,7 +323,7 @@ func (model Model) blankBodyLines(width int, count int) []string {
 }
 
 func (model Model) blankBodyLine(width int, text string) string {
-	return paddedStyledLine(text, width, framePaddingX, bodyTextColor, bodyColor, false)
+	return borderedLine(text, width, bodyTextColor, contentBgColor, false)
 }
 
 var loadingFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
@@ -306,11 +344,11 @@ func (model Model) loadingBody(width int, height int) []string {
 }
 
 func (model Model) centeredBodyLine(width int, text string) string {
-	return centeredStyledLine(text, width, framePaddingX, bodyTextColor, bodyColor)
+	return borderedCenteredLine(text, width, bodyTextColor, contentBgColor)
 }
 
 func (model Model) downloadRow(width int, download aria2.Download, selected bool) string {
-	contentWidth := frameContentWidth(width)
+	contentWidth := contentInner(width)
 	l := computeLayout(contentWidth)
 	parts := make([]string, 0, 7)
 	add := func(text string, width int, right bool) {
@@ -331,7 +369,7 @@ func (model Model) downloadRow(width int, download aria2.Download, selected bool
 	add(formatSpeed(download.UploadSpeed), l.upWidth, true)
 
 	row := strings.Join(parts, columnGap)
-		background := bodyColor
+		background := contentBgColor
 		if selected {
 			background = selectedColor
 		}
@@ -341,9 +379,9 @@ func (model Model) downloadRow(width int, download aria2.Download, selected bool
 func (model Model) titleFrame(title string) []string {
 	width, _ := model.viewport()
 	return []string{
-		strings.Repeat(" ", width),
-		paddedTransparentLine(title, width, framePaddingX, frameTextColor, true),
-		transparentHalfBlockLine(width, bodyColor, '▄'),
+		paddedStyledLine("", width, 0, bodyTextColor, bgColor, false),
+		paddedStyledLine(title, width, framePaddingX, frameTextColor, bgColor, true),
+		halfBlockLine(width, frameEdgeColor, bgColor, '▄'),
 	}
 }
 
@@ -351,15 +389,15 @@ func (model Model) tableFrame(content string, top bool) []string {
 	width, _ := model.viewport()
 	if top {
 		return []string{
-			strings.Repeat(" ", width),
-			paddedTransparentLine(content, width, framePaddingX, frameTextColor, true),
-			transparentHalfBlockLine(width, bodyColor, '▄'),
+			borderedLine("", width, bodyTextColor, contentBgColor, false),
+			borderedLine(content, width, frameTextColor, contentBgColor, true),
+			borderedLine("", width, bodyTextColor, contentBgColor, false),
 		}
 	}
 	return []string{
-		transparentHalfBlockLine(width, frameDividerColor, '▀'),
-		paddedTransparentLine(content, width, framePaddingX, frameTextColor, false),
-		strings.Repeat(" ", width),
+		paddedStyledLine("", width, 0, bodyTextColor, bgColor, false),
+		paddedStyledLine(content, width, framePaddingX, frameTextColor, bgColor, false),
+		paddedStyledLine("", width, 0, bodyTextColor, bgColor, false),
 	}
 }
 
@@ -372,7 +410,7 @@ func (model Model) listStats() string {
 		upTotal += item.UploadSpeed
 	}
 	return fmt.Sprintf(
-		"Tasks %d (A%d W%d S%d) ↓%s ↑%s",
+		"Tasks %d (A%d W%d S%d) Down %s  Up %s",
 		len(items),
 		len(model.snapshot.Active),
 		len(model.snapshot.Waiting),
@@ -744,11 +782,44 @@ func paddedTransparentLine(text string, width int, padding int, foreground rgb, 
 	return colorizeForeground(line, foreground, bold)
 }
 
+func borderedLine(text string, width int, foreground rgb, contentBg rgb, bold bool) string {
+	const border = 2
+	const padding = 2
+	inner := max(width-(border+padding)*2, 0)
+	return styledLine(strings.Repeat(" ", border), foreground, bgColor, bold) +
+		styledLine(strings.Repeat(" ", padding), foreground, contentBg, bold) +
+		styledLine(fitLeft(text, inner), foreground, contentBg, bold) +
+		styledLine(strings.Repeat(" ", padding), foreground, contentBg, bold) +
+		styledLine(strings.Repeat(" ", border), foreground, bgColor, bold)
+}
+
+func borderedCenteredLine(text string, width int, foreground rgb, contentBg rgb) string {
+	const border = 2
+	const padding = 2
+	inner := max(width-(border+padding)*2, 0)
+	tw := ansi.StringWidth(text)
+	leftPad := max((inner-tw)/2, 0)
+	rightPad := max(inner-tw-leftPad, 0)
+	center := strings.Repeat(" ", leftPad) + text + strings.Repeat(" ", rightPad)
+	return styledLine(strings.Repeat(" ", border), foreground, bgColor, false) +
+		styledLine(strings.Repeat(" ", padding), foreground, contentBg, false) +
+		styledLine(center, foreground, contentBg, false) +
+		styledLine(strings.Repeat(" ", padding), foreground, contentBg, false) +
+		styledLine(strings.Repeat(" ", border), foreground, bgColor, false)
+}
+
+// contentInner returns the usable text width inside a borderedLine.
+func contentInner(width int) int {
+	const border = 2
+	const padding = 2
+	return max(width-(border+padding)*2, 1)
+}
+
 func selectedLine(text string, width int, background rgb, status rgb, selected bool) string {
 	if ansi.StringWidth(text) == 0 {
-		return paddedStyledLine("", width, framePaddingX, bodyTextColor, background, false)
+		return borderedLine("", width, bodyTextColor, background, false)
 	}
-	return paddedStyledLine(text, width, framePaddingX, status, background, false)
+	return borderedLine(text, width, status, background, false)
 }
 
 func halfBlockLine(width int, top rgb, bottom rgb, block rune) string {

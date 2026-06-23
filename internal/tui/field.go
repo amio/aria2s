@@ -52,7 +52,7 @@ func renderCursorCell(visible bool) string {
 func highlightChar(ch string) string {
 	var builder strings.Builder
 	builder.WriteString("\x1b[38;2;")
-	builder.WriteString(rgbCode(bodyColor))
+	builder.WriteString(rgbCode(contentBgColor))
 	builder.WriteString("m\x1b[48;2;")
 	builder.WriteString(rgbCode(bodyTextColor))
 	builder.WriteString("m")
@@ -66,7 +66,7 @@ func bodyStyled(text string) string {
 }
 
 func bodyStylePrefix() string {
-	return "\x1b[38;2;" + rgbCode(bodyTextColor) + "m\x1b[48;2;" + rgbCode(bodyColor) + "m"
+	return "\x1b[38;2;" + rgbCode(bodyTextColor) + "m\x1b[48;2;" + rgbCode(contentBgColor) + "m"
 }
 
 func splitFirstRune(text string) (string, string) {

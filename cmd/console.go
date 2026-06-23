@@ -11,7 +11,7 @@ import (
 )
 
 var runConsole = func(application *app.App) error {
-	program := tea.NewProgram(tui.NewModel(application, time.Second), tea.WithAltScreen())
+	program := tea.NewProgram(tui.NewModel(application, time.Second, Version), tea.WithAltScreen())
 	_, err := program.Run()
 	return err
 }
