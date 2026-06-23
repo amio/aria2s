@@ -101,12 +101,15 @@ func (model Model) framedHeader(width int) []string {
 
 func (model Model) addView() string {
 	width, height := model.viewport()
-	header := model.titleFrame("Add Download")
-	footer := model.tableFrame(joinSides("Submit a new task to local aria2 JSON-RPC.", model.addHelp(), frameContentWidth(width)), false)
-	bodyHeight := max(height-len(header)-len(footer), minBodyHeight)
+	cWidth := frameContentWidth(width)
+	topContent := joinSides("Add Download", []string{}, cWidth)
+	bottomContent := joinSides("Submit a new task to local aria2 JSON-RPC.", model.addHelp(), cWidth)
 
-	body := model.fillBody(width, bodyHeight, model.addForm.BodyLines())
-	return strings.Join(append(append(header, body...), footer...), "\n")
+	barLines := len(model.barFrame("")) * 2
+	contentHeight := max(height-barLines, minBodyHeight)
+	body := model.fillBody(width, contentHeight, model.addForm.BodyLines())
+
+	return model.framedView(topContent, body, bottomContent)
 }
 
 func (model Model) detailView() string {
@@ -377,30 +380,7 @@ func (model Model) downloadRow(width int, download aria2.Download, selected bool
 		return selectedLine(row, width, background, downloadStatusTone(download), selected)
 }
 
-func (model Model) titleFrame(title string) []string {
-	width, _ := model.viewport()
-	return []string{
-		paddedStyledLine("", width, 0, bodyTextColor, bgColor, false),
-		paddedStyledLine(title, width, framePaddingX, frameTextColor, bgColor, true),
-		halfBlockLine(width, frameEdgeColor, bgColor, '▄'),
-	}
-}
 
-func (model Model) tableFrame(content string, top bool) []string {
-	width, _ := model.viewport()
-	if top {
-		return []string{
-			borderedLine("", width, bodyTextColor, contentBgColor, false),
-			borderedLine(content, width, frameTextColor, contentBgColor, true),
-			borderedLine("", width, bodyTextColor, contentBgColor, false),
-		}
-	}
-	return []string{
-		paddedStyledLine("", width, 0, bodyTextColor, bgColor, false),
-		paddedStyledLine(content, width, framePaddingX, frameTextColor, bgColor, false),
-		paddedStyledLine("", width, 0, bodyTextColor, bgColor, false),
-	}
-}
 
 func (model Model) listStats() string {
 	items := model.items()
@@ -823,27 +803,9 @@ func selectedLine(text string, width int, background rgb, status rgb, selected b
 	return borderedLine(text, width, status, background, false)
 }
 
-func halfBlockLine(width int, top rgb, bottom rgb, block rune) string {
-	return colorize(strings.Repeat(string(block), width), foregroundForBlock(top, bottom, block), backgroundForBlock(top, bottom, block), false)
-}
 
-func transparentHalfBlockLine(width int, color rgb, block rune) string {
-	return colorizeForeground(strings.Repeat(string(block), width), color, false)
-}
 
-func foregroundForBlock(top rgb, bottom rgb, block rune) rgb {
-	if block == '▀' {
-		return top
-	}
-	return bottom
-}
 
-func backgroundForBlock(top rgb, bottom rgb, block rune) rgb {
-	if block == '▀' {
-		return bottom
-	}
-	return top
-}
 
 func colorize(text string, foreground rgb, background rgb, bold bool) string {
 	var builder strings.Builder
