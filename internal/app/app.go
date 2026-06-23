@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/amio/aria2s/internal/aria2"
@@ -78,7 +79,7 @@ func New(options Options) *App {
 		options.Service = inferServiceBackend(options.Paths)
 	}
 	if options.RPC == nil {
-		options.RPC = LocalRPC{}
+		options.RPC = &LocalRPC{}
 	}
 	if options.RPCReadyTimeout == 0 {
 		options.RPCReadyTimeout = 5 * time.Second
@@ -711,56 +712,76 @@ func isExecutable(path string) bool {
 	return err == nil && !info.IsDir() && info.Mode().Perm()&0o111 != 0
 }
 
-type LocalRPC struct{}
-
-func (LocalRPC) Version(ctx context.Context, current state.State) (string, error) {
-	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 2 * time.Second})
-	return client.Version(ctx)
+type LocalRPC struct {
+	httpOnce sync.Once
+	http     *http.Client
+	clients  sync.Map // key: rpcCacheKey, value: *aria2.RPCClient
 }
 
-func (LocalRPC) AddURI(ctx context.Context, current state.State, uri string, opts aria2.AddOptions) (string, error) {
-	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
-	return client.AddURI(ctx, uri, opts)
+func (r *LocalRPC) httpClient() *http.Client {
+	r.httpOnce.Do(func() {
+		r.http = &http.Client{
+			Timeout:   10 * time.Second,
+			Transport: http.DefaultTransport,
+		}
+	})
+	return r.http
 }
 
-func (LocalRPC) SaveSession(ctx context.Context, current state.State) error {
-	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
-	return aria2.WrapTransportError(client.SaveSession(ctx))
+func (r *LocalRPC) rpcClient(current state.State) *aria2.RPCClient {
+	key := rpcCacheKey(current.RPCPort, current.RPCSecret)
+	if cached, ok := r.clients.Load(key); ok {
+		return cached.(*aria2.RPCClient)
+	}
+	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, r.httpClient())
+	actual, _ := r.clients.LoadOrStore(key, client)
+	return actual.(*aria2.RPCClient)
 }
 
-func (LocalRPC) Shutdown(ctx context.Context, current state.State) error {
-	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
-	return aria2.WrapTransportError(client.Shutdown(ctx))
+func (r *LocalRPC) Version(ctx context.Context, current state.State) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	return r.rpcClient(current).Version(ctx)
 }
 
-func (LocalRPC) ListDownloads(ctx context.Context, current state.State, options aria2.ListOptions) (aria2.DownloadSnapshot, error) {
-	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
-	return client.ListDownloads(ctx, options)
+func (r *LocalRPC) AddURI(ctx context.Context, current state.State, uri string, opts aria2.AddOptions) (string, error) {
+	return r.rpcClient(current).AddURI(ctx, uri, opts)
 }
 
-func (LocalRPC) TaskDetail(ctx context.Context, current state.State, gid string) (aria2.DownloadDetail, error) {
-	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
-	return client.TaskDetail(ctx, gid)
+func (r *LocalRPC) SaveSession(ctx context.Context, current state.State) error {
+	return aria2.WrapTransportError(r.rpcClient(current).SaveSession(ctx))
 }
 
-func (LocalRPC) Pause(ctx context.Context, current state.State, gid string) error {
-	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
-	return client.Pause(ctx, gid)
+func (r *LocalRPC) Shutdown(ctx context.Context, current state.State) error {
+	return aria2.WrapTransportError(r.rpcClient(current).Shutdown(ctx))
 }
 
-func (LocalRPC) Resume(ctx context.Context, current state.State, gid string) error {
-	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
-	return client.Resume(ctx, gid)
+func (r *LocalRPC) ListDownloads(ctx context.Context, current state.State, options aria2.ListOptions) (aria2.DownloadSnapshot, error) {
+	return r.rpcClient(current).ListDownloads(ctx, options)
 }
 
-func (LocalRPC) Remove(ctx context.Context, current state.State, gid string) error {
-	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
-	return client.Remove(ctx, gid)
+func (r *LocalRPC) TaskDetail(ctx context.Context, current state.State, gid string) (aria2.DownloadDetail, error) {
+	return r.rpcClient(current).TaskDetail(ctx, gid)
 }
 
-func (LocalRPC) ClearStopped(ctx context.Context, current state.State, gid string) error {
-	client := aria2.NewRPCClient(endpoint(current.RPCPort), current.RPCSecret, &http.Client{Timeout: 10 * time.Second})
-	return client.RemoveDownloadResult(ctx, gid)
+func (r *LocalRPC) Pause(ctx context.Context, current state.State, gid string) error {
+	return r.rpcClient(current).Pause(ctx, gid)
+}
+
+func (r *LocalRPC) Resume(ctx context.Context, current state.State, gid string) error {
+	return r.rpcClient(current).Resume(ctx, gid)
+}
+
+func (r *LocalRPC) Remove(ctx context.Context, current state.State, gid string) error {
+	return r.rpcClient(current).Remove(ctx, gid)
+}
+
+func (r *LocalRPC) ClearStopped(ctx context.Context, current state.State, gid string) error {
+	return r.rpcClient(current).RemoveDownloadResult(ctx, gid)
+}
+
+func rpcCacheKey(port int, secret string) string {
+	return endpoint(port) + "\x00" + secret
 }
 
 func endpoint(port int) string {
