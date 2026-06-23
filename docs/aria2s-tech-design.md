@@ -381,6 +381,10 @@ State:
 
 Session:
 ~/.local/state/aria2s/session
+
+Logs:
+~/.local/state/aria2s/aria2.log
+~/.local/state/aria2s/aria2.err.log
 ```
 
 Generated unit:
@@ -392,9 +396,11 @@ After=network-online.target
 
 [Service]
 Type=simple
-ExecStart=<resolved-absolute-aria2c-path> --conf-path=%h/.config/aria2s/aria2.conf
+ExecStart=<resolved-absolute-aria2c-path> --conf-path=<absolute-config-path>
 Restart=on-failure
 RestartSec=3
+StandardOutput=append:<absolute-stdout-log-path>
+StandardError=append:<absolute-stderr-log-path>
 
 [Install]
 WantedBy=default.target
@@ -404,15 +410,12 @@ Underlying commands:
 
 ```bash
 systemctl --user daemon-reload
-systemctl --user enable --now aria2s.service
+systemctl --user enable aria2s.service
 systemctl --user start aria2s.service
 systemctl --user stop aria2s.service
 systemctl --user restart aria2s.service
 systemctl --user status aria2s.service
-journalctl --user -u aria2s.service -f
 ```
-
-Linux support can come after macOS Stage 1 is stable.
 
 ## 9. Default aria2 Config
 
@@ -692,15 +695,14 @@ aria2s console
 
 open a stable interactive terminal console for day-to-day aria2 download management, auto-installing and auto-starting when needed.
 
-### Stage 3: Linux Support
+### Stage 3: Linux Hardening
 
 Scope:
 
-* Add `systemd --user` backend.
-* Generate user service unit.
-* Use XDG paths.
-* Use `journalctl` for logs.
-* Add Linux checks to `doctor`.
+* Harden `systemd --user` error handling and recovery guidance.
+* Add stronger Linux-specific checks to `doctor`.
+* Document distro prerequisites and common `systemd --user` pitfalls.
+* Evaluate optional `journalctl` integration without giving up file-backed logs.
 
 ### Stage 4: Release Quality
 

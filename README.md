@@ -2,6 +2,11 @@
 
 `aria2s` sets up `aria2c` as a persistent background service and provides a TUI to manage downloads.
 
+Requirements:
+
+- `aria2c` must already be installed and available in `PATH`.
+- Linux service management currently targets `systemd --user`.
+
 ## Install
 
 ```bash
@@ -15,7 +20,7 @@ go install github.com/amio/aria2s@latest
 ## Uninstall
 
 ```bash
-aria2s uninstall                       # remove service and all managed files
+aria2s uninstall                       # remove the registered background service
 rm "$(command -v aria2s)"             # remove the binary
 ```
 
@@ -37,8 +42,8 @@ aria2s # ensure install/start, then open the TUI console
 | Command | What it does |
 |---------|-------------|
 | `aria2s` | Daily entrypoint: ensure `aria2c` is installed and running, then open the full-screen console. |
-| `aria2s install [--start]` | Set up `aria2c` as a background service. Re-running it repairs drift and skips work when everything is already aligned. |
-| `aria2s uninstall` | Remove the service and all managed files. |
+| `aria2s install [--start]` | Set up `aria2c` as a background service through `launchd` on macOS or `systemd --user` on Linux. Re-running it repairs drift and skips work when everything is already aligned. |
+| `aria2s uninstall` | Remove the registered background service. |
 | `aria2s start` / `stop` / `restart` | Control the background service. `start` returns immediately when the service is already healthy. Stop & restart save the session first. |
 | `aria2s status` | Show service state, port, version, and log paths at a glance. |
 | `aria2s doctor` | Check for common issues (missing binary, port conflicts, config drift). |
@@ -54,6 +59,8 @@ make test         # run all tests
 ```
 
 Smoke-test in an isolated environment:
+
+Linux note: service startup still needs a live `systemd --user` session even when `HOME` is overridden for an isolated test directory.
 
 ```bash
 TMP_HOME=$(mktemp -d)

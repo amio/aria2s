@@ -11,7 +11,7 @@ func newInstallCommand(application *app.App) *cobra.Command {
 	var start bool
 	command := &cobra.Command{
 		Use:   "install",
-		Short: "Install the macOS LaunchAgent",
+		Short: "Install the background service",
 		RunE: func(command *cobra.Command, _ []string) error {
 			if err := application.Install(command.Context(), start); err != nil {
 				return err

@@ -10,7 +10,7 @@ import (
 func newUninstallCommand(application *app.App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "uninstall",
-		Short: "Uninstall the LaunchAgent",
+		Short: "Uninstall the background service",
 		RunE: func(command *cobra.Command, _ []string) error {
 			if err := application.Uninstall(command.Context()); err != nil {
 				return err

@@ -319,6 +319,40 @@ func TestInstallStartGracefullyRestartsRunningServiceWhenManagedConfigChanges(t 
 	}
 }
 
+func TestInstallWritesSystemdUnitForLinuxPaths(t *testing.T) {
+	root := t.TempDir()
+	home := filepath.Join(root, "home")
+	servicePaths := paths.Paths{
+		ServiceName:  "aria2s.service",
+		ServiceFile:  filepath.Join(home, ".config", "systemd", "user", "aria2s.service"),
+		ConfigFile:   filepath.Join(home, ".config", "aria2s", "aria2.conf"),
+		StateFile:    filepath.Join(home, ".local", "state", "aria2s", "state.json"),
+		SessionFile:  filepath.Join(home, ".local", "state", "aria2s", "session"),
+		LogFile:      filepath.Join(home, ".local", "state", "aria2s", "aria2.log"),
+		ErrorLogFile: filepath.Join(home, ".local", "state", "aria2s", "aria2.err.log"),
+	}
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	application := newTestApp(servicePaths, aria2c, &recordingService{}, fixedRPC{version: "1.37.0"}, app.Options{
+		DownloadDir:   filepath.Join(root, "downloads"),
+		RenderService: service.RenderSystemdUnit,
+	})
+
+	if err := application.Install(context.Background(), false); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+
+	unit, err := os.ReadFile(servicePaths.ServiceFile)
+	if err != nil {
+		t.Fatalf("read service unit: %v", err)
+	}
+
+	text := string(unit)
+	assertContains(t, text, "[Unit]")
+	assertContains(t, text, "Description=aria2 RPC service managed by aria2s")
+	assertContains(t, text, "ExecStart="+aria2c+" --conf-path="+servicePaths.ConfigFile)
+	assertContains(t, text, "WantedBy=default.target")
+}
+
 func TestInstallFailsOnCorruptStateWithoutOverwritingIt(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))

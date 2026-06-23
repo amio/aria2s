@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"github.com/amio/aria2s/internal/aria2"
@@ -43,6 +44,7 @@ type Options struct {
 	Abs             func(string) (string, error)
 	IsPortAvailable func(int) bool
 	GenerateSecret  func() (string, error)
+	RenderService   func(state.State) (string, error)
 	Service         service.Backend
 	RPC             RPC
 	RPCReadyTimeout time.Duration
@@ -67,6 +69,9 @@ func New(options Options) *App {
 	if options.GenerateSecret == nil {
 		options.GenerateSecret = GenerateSecret
 	}
+	if options.RenderService == nil {
+		options.RenderService = service.RenderLaunchAgent
+	}
 	if options.RPC == nil {
 		options.RPC = LocalRPC{}
 	}
@@ -87,17 +92,33 @@ func Default() (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	servicePaths := paths.NewDarwin(home)
-	return New(Options{
+	options, err := defaultOptionsForOS(runtime.GOOS, home, os.Getuid(), service.ExecRunner{})
+	if err != nil {
+		return nil, err
+	}
+	return New(options), nil
+}
+
+func defaultOptionsForOS(goos, home string, uid int, runner service.CommandRunner) (Options, error) {
+	servicePaths, err := paths.NewForOS(goos, home)
+	if err != nil {
+		return Options{}, err
+	}
+	options := Options{
 		Paths:       servicePaths,
 		DownloadDir: filepath.Join(home, "Downloads"),
-		Service: service.NewLaunchdBackend(
-			service.ExecRunner{},
-			os.Getuid(),
-			servicePaths.ServiceName,
-			servicePaths.ServiceFile,
-		),
-	}), nil
+	}
+	switch goos {
+	case "darwin":
+		options.RenderService = service.RenderLaunchAgent
+		options.Service = service.NewLaunchdBackend(runner, uid, servicePaths.ServiceName, servicePaths.ServiceFile)
+	case "linux":
+		options.RenderService = service.RenderSystemdUnit
+		options.Service = service.NewSystemdBackend(runner, servicePaths.ServiceName)
+	default:
+		return Options{}, fmt.Errorf("unsupported OS: %s", goos)
+	}
+	return options, nil
 }
 
 func (app *App) Install(ctx context.Context, start bool) error {
@@ -161,7 +182,7 @@ func (app *App) Install(ctx context.Context, start bool) error {
 	}
 	sessionNeedsRepair := needs0600File(current.SessionPath)
 	logDirNeedsCreate := !dirExists(filepath.Dir(current.LogPath))
-	plist, err := service.RenderLaunchAgent(current)
+	serviceFile, err := app.options.RenderService(current)
 	if err != nil {
 		return err
 	}
@@ -172,7 +193,7 @@ func (app *App) Install(ctx context.Context, start bool) error {
 		serviceRunning = app.options.Service.IsRunning(ctx)
 	}
 	serviceWasRunning := serviceRunning
-	serviceChanged, err := fileContentChanged(app.options.Paths.ServiceFile, plist)
+	serviceChanged, err := fileContentChanged(app.options.Paths.ServiceFile, serviceFile)
 	if err != nil {
 		return err
 	}
@@ -220,7 +241,7 @@ func (app *App) Install(ctx context.Context, start bool) error {
 		if err := os.MkdirAll(filepath.Dir(app.options.Paths.ServiceFile), 0o755); err != nil {
 			return err
 		}
-		if err := os.WriteFile(app.options.Paths.ServiceFile, []byte(plist), 0o644); err != nil {
+		if err := os.WriteFile(app.options.Paths.ServiceFile, []byte(serviceFile), 0o644); err != nil {
 			return err
 		}
 	}
@@ -276,11 +297,11 @@ func (app *App) EnsureConsoleReady(ctx context.Context) error {
 	if aria2.HasManagedDrift(values, current) {
 		return app.Install(ctx, true)
 	}
-	plist, err := service.RenderLaunchAgent(current)
+	serviceFile, err := app.options.RenderService(current)
 	if err != nil {
 		return err
 	}
-	serviceChanged, err := fileContentChanged(app.options.Paths.ServiceFile, plist)
+	serviceChanged, err := fileContentChanged(app.options.Paths.ServiceFile, serviceFile)
 	if err != nil {
 		return err
 	}

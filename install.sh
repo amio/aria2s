@@ -82,12 +82,12 @@ chmod +x "${BINDIR}/aria2s"
 ok "aria2s ${TAG} installed to ${BINDIR}/aria2s"
 
 # --- post-install ---
-if [ "$OS" = "darwin" ]; then
-  printf "\n"
+printf "\n"
+if [ "$OS" = "linux" ] && ! command -v systemctl >/dev/null 2>&1; then
+  warn "systemctl not found; background service setup requires systemd --user"
+  info "To set up the service later:  aria2s install --start"
+  info "To open the console later:    aria2s"
+else
   info "setting up aria2c background service..."
   "${BINDIR}/aria2s" install --start
-else
-  printf "\n"
-  info "To start the service:  aria2s start"
-  info "To open the console:   aria2s"
 fi

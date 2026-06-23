@@ -40,10 +40,10 @@ func Check(ctx context.Context, options Options) Report {
 		issues = append(issues, Issue{Message: "missing service file"})
 	}
 	if options.Service != nil && !options.Service.IsLoaded(ctx) {
-		issues = append(issues, Issue{Message: "LaunchAgent unloaded"})
+		issues = append(issues, Issue{Message: "supervisor unloaded"})
 	}
 	if options.Service != nil && options.Service.IsLoaded(ctx) && !options.Service.IsRunning(ctx) {
-		issues = append(issues, Issue{Message: "LaunchAgent not running"})
+		issues = append(issues, Issue{Message: "supervisor not running"})
 	}
 	if options.RPCReachable != nil && !options.RPCReachable(ctx, current) {
 		issues = append(issues, Issue{Message: "RPC unreachable"})

@@ -150,7 +150,7 @@ func TestCheckReportsSupervisorDrift(t *testing.T) {
 		t.Fatal("expected supervisor drift report")
 	}
 	assertReportContains(t, report, "missing service file")
-	assertReportContains(t, report, "LaunchAgent unloaded")
+	assertReportContains(t, report, "supervisor unloaded")
 }
 
 func TestCheckReportsNotRunningAndRPCUnreachable(t *testing.T) {
@@ -205,7 +205,7 @@ func TestCheckReportsNotRunningAndRPCUnreachable(t *testing.T) {
 	if report.Healthy {
 		t.Fatal("expected unhealthy report")
 	}
-	assertReportContains(t, report, "LaunchAgent not running")
+	assertReportContains(t, report, "supervisor not running")
 	assertReportContains(t, report, "RPC unreachable")
 }
 
