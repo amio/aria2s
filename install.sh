@@ -95,11 +95,19 @@ if [ -n "${VERSION:-}" ]; then
   info "using specified version: ${TAG}"
 else
   info "fetching latest release..."
-  # use a temporary file for the JSON; some systems have very short ARG_MAX
-  RELEASE_JSON="$(downloader "https://api.github.com/repos/${OWNER}/${REPO}/releases/latest" -o /dev/stdout)" \
-    || err "failed to fetch release info from GitHub"
-  TAG="$(echo "$RELEASE_JSON" | grep '"tag_name":' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"
-  [ -n "$TAG" ] || err "could not determine latest version tag"
+  # Resolve /releases/latest via redirect (no GitHub API, no rate limit).
+  if command -v curl >/dev/null 2>&1; then
+    RELEASE_URL="$(curl -sS -o /dev/null -L -w '%{url_effective}' \
+      "https://github.com/${OWNER}/${REPO}/releases/latest")" \
+      || err "failed to fetch release info from GitHub"
+  else
+    err "curl is required to auto-detect the latest version.\n"\
+"       Install curl, or set VERSION manually:  curl … | VERSION=v0.0.7 sh"
+  fi
+  case "$RELEASE_URL" in
+    */tag/*) TAG="${RELEASE_URL##*/tag/}" ;;
+    *)        err "no releases found — try installing from source: go install github.com/${OWNER}/${REPO}@latest" ;;
+  esac
 fi
 
 TARBALL="${REPO}_${TAG#v}_${OS}_${ARCH}.tar.gz"
