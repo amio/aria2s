@@ -10,14 +10,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var runConsole = func(application *app.App) error {
+	program := tea.NewProgram(tui.NewModel(application, time.Second), tea.WithAltScreen())
+	_, err := program.Run()
+	return err
+}
+
 func newConsoleCommand(application *app.App) *cobra.Command {
 	return &cobra.Command{
 		Use:   "console",
 		Short: "Open the interactive aria2 console",
 		RunE: func(command *cobra.Command, _ []string) error {
-			program := tea.NewProgram(tui.NewModel(application, time.Second), tea.WithAltScreen())
-			_, err := program.Run()
-			return err
+			if err := application.EnsureConsoleReady(command.Context()); err != nil {
+				return err
+			}
+			return runConsole(application)
 		},
 	}
 }

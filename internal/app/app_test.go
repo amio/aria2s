@@ -86,6 +86,29 @@ func TestStartPreflightsStateConfigAndWaitsForRPC(t *testing.T) {
 	}
 }
 
+func TestStartSkipsServiceStartWhenAlreadyRunningAndRPCHealthy(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	serviceBackend := &recordingService{loaded: true, running: true}
+	rpc := &flakyRPC{version: "1.37.0"}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
+		RPCReadyTimeout: time.Second,
+		RPCPollInterval: time.Nanosecond,
+	})
+
+	if err := application.Start(context.Background()); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if len(serviceBackend.calls) != 0 {
+		t.Fatalf("expected start to short-circuit, got service calls %v", serviceBackend.calls)
+	}
+	if rpc.versionCalls != 1 {
+		t.Fatalf("expected one RPC health check, got %d", rpc.versionCalls)
+	}
+}
+
 func TestStartFailsWhenStoredAria2cIsMissing(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
@@ -510,6 +533,53 @@ func TestInstallRepairsFilesWithoutBootstrappingWhenServiceAlreadyLoaded(t *test
 	}
 }
 
+func TestInstallSkipsRewritesWhenAlreadyInstalled(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	current := writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	if err := touch0600ForTest(servicePaths.SessionFile); err != nil {
+		t.Fatalf("touch session: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.LogFile), 0o755); err != nil {
+		t.Fatalf("mkdir log dir: %v", err)
+	}
+	plist, err := service.RenderLaunchAgent(current)
+	if err != nil {
+		t.Fatalf("render plist: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+		t.Fatalf("mkdir service dir: %v", err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, []byte(plist), 0o644); err != nil {
+		t.Fatalf("write plist: %v", err)
+	}
+	serviceBackend := &recordingService{loaded: true}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, fixedRPC{version: "1.37.0"}, app.Options{})
+
+	stateStamp := fileModTime(t, servicePaths.StateFile)
+	configStamp := fileModTime(t, servicePaths.ConfigFile)
+	serviceStamp := fileModTime(t, servicePaths.ServiceFile)
+
+	time.Sleep(10 * time.Millisecond)
+
+	if err := application.Install(context.Background(), false); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	if len(serviceBackend.calls) != 0 {
+		t.Fatalf("expected install to short-circuit, got service calls %v", serviceBackend.calls)
+	}
+	if got := fileModTime(t, servicePaths.StateFile); !got.Equal(stateStamp) {
+		t.Fatalf("expected state file to stay untouched, got %s want %s", got, stateStamp)
+	}
+	if got := fileModTime(t, servicePaths.ConfigFile); !got.Equal(configStamp) {
+		t.Fatalf("expected config file to stay untouched, got %s want %s", got, configStamp)
+	}
+	if got := fileModTime(t, servicePaths.ServiceFile); !got.Equal(serviceStamp) {
+		t.Fatalf("expected service file to stay untouched, got %s want %s", got, serviceStamp)
+	}
+}
+
 func writeExecutable(t *testing.T, path string) string {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -545,6 +615,29 @@ func writeInstalledStateAndConfig(t *testing.T, servicePaths paths.Paths, aria2c
 		t.Fatalf("write config: %v", err)
 	}
 	return current
+}
+
+func touch0600ForTest(path string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_CREATE, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+func fileModTime(t *testing.T, path string) time.Time {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return info.ModTime()
 }
 
 func newTestApp(servicePaths paths.Paths, aria2c string, serviceBackend service.Backend, rpc app.RPC, overrides app.Options) *app.App {

@@ -17,7 +17,7 @@ asv
 Example usage:
 
 ```bash
-asv install --start
+asv
 asv status
 asv add https://example.com/file.zip
 asv console
@@ -125,6 +125,8 @@ asv console
 
 `asv console` should open an htop-like interface for live aria2 download monitoring and basic task management.
 
+Bare `asv` should be the daily entrypoint. It should run the same readiness flow as `asv console`: install if needed, start if needed, then open the console.
+
 It should support:
 
 * View active downloads.
@@ -163,6 +165,7 @@ Install policy:
 
 * `install` should be rerunnable.
 * Re-running `install` should preserve user-owned aria2 settings where possible while reasserting `aria2s`-managed settings and recreating missing service or state files.
+* When the managed state, config, session file, log directory, and supervisor file are already correct, `install` should short-circuit without rewriting files or touching the supervisor.
 * `install` should use `exec.LookPath("aria2c")`, resolve the result to an absolute executable path, and write that exact path into the generated supervisor file.
 * `status` and `doctor` should verify that the stored `aria2c` path still exists and is executable.
 * If the stored binary disappears after install, commands should fail with a targeted recovery message instead of silently falling back to a different binary.
@@ -665,6 +668,7 @@ All work reliably on macOS.
 Command:
 
 ```bash
+asv
 asv console
 ```
 
@@ -682,10 +686,11 @@ Scope:
 Exit criteria:
 
 ```bash
+asv
 asv console
 ```
 
-opens a stable interactive terminal console for day-to-day aria2 download management.
+open a stable interactive terminal console for day-to-day aria2 download management, auto-installing and auto-starting when needed.
 
 ### Stage 3: Linux Support
 

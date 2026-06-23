@@ -110,34 +110,36 @@ func (app *App) Install(ctx context.Context, start bool) error {
 		return err
 	}
 	current, err := state.Load(app.options.Paths.StateFile)
+	stateExists := true
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			current = state.State{}
+			stateExists = false
 		} else {
 			return fmt.Errorf("load state: %w", err)
 		}
 	}
-	current.Aria2cPath = aria2c
-	current.ConfigPath = app.options.Paths.ConfigFile
-	current.SessionPath = app.options.Paths.SessionFile
-	current.LogPath = app.options.Paths.LogFile
-	current.ErrorLogPath = app.options.Paths.ErrorLogFile
-	current.ServiceName = app.options.Paths.ServiceName
-	if current.RPCPort == 0 {
-		current.RPCPort, err = app.choosePort()
+	desired := current
+	desired.Aria2cPath = aria2c
+	desired.ConfigPath = app.options.Paths.ConfigFile
+	desired.SessionPath = app.options.Paths.SessionFile
+	desired.LogPath = app.options.Paths.LogFile
+	desired.ErrorLogPath = app.options.Paths.ErrorLogFile
+	desired.ServiceName = app.options.Paths.ServiceName
+	if desired.RPCPort == 0 {
+		desired.RPCPort, err = app.choosePort()
 		if err != nil {
 			return err
 		}
 	}
-	if current.RPCSecret == "" {
-		current.RPCSecret, err = app.options.GenerateSecret()
+	if desired.RPCSecret == "" {
+		desired.RPCSecret, err = app.options.GenerateSecret()
 		if err != nil {
 			return err
 		}
 	}
-	if err := state.Save(app.options.Paths.StateFile, current); err != nil {
-		return err
-	}
+	stateChanged := !stateExists || !sameState(current, desired)
+	current = desired
 	existingConfig, err := aria2.ReadConfig(current.ConfigPath)
 	if err != nil {
 		return err
@@ -153,20 +155,14 @@ func (app *App) Install(ctx context.Context, start bool) error {
 		SessionFile: current.SessionPath,
 		DownloadDir: downloadDir,
 	}, existingConfig)
-	if err := aria2.WriteConfig(current.ConfigPath, content); err != nil {
-		return err
-	}
-	if err := touch0600(current.SessionPath); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(current.LogPath), 0o755); err != nil {
-		return err
-	}
-	plist, err := service.RenderLaunchAgent(current)
+	configChanged, err := fileContentChanged(current.ConfigPath, content)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(app.options.Paths.ServiceFile), 0o755); err != nil {
+	sessionNeedsRepair := needs0600File(current.SessionPath)
+	logDirNeedsCreate := !dirExists(filepath.Dir(current.LogPath))
+	plist, err := service.RenderLaunchAgent(current)
+	if err != nil {
 		return err
 	}
 	serviceLoaded := false
@@ -180,6 +176,34 @@ func (app *App) Install(ctx context.Context, start bool) error {
 	if err != nil {
 		return err
 	}
+	if !stateChanged && !configChanged && !sessionNeedsRepair && !logDirNeedsCreate && !serviceChanged && serviceLoaded {
+		if !start {
+			return nil
+		}
+		if serviceRunning {
+			return app.waitForRPC(ctx, current)
+		}
+	}
+	if stateChanged {
+		if err := state.Save(app.options.Paths.StateFile, current); err != nil {
+			return err
+		}
+	}
+	if configChanged {
+		if err := aria2.WriteConfig(current.ConfigPath, content); err != nil {
+			return err
+		}
+	}
+	if sessionNeedsRepair {
+		if err := touch0600(current.SessionPath); err != nil {
+			return err
+		}
+	}
+	if logDirNeedsCreate {
+		if err := os.MkdirAll(filepath.Dir(current.LogPath), 0o755); err != nil {
+			return err
+		}
+	}
 	if app.options.Service != nil && serviceLoaded && serviceChanged {
 		if serviceRunning {
 			if err := app.gracefulShutdown(ctx, current); err != nil {
@@ -192,8 +216,13 @@ func (app *App) Install(ctx context.Context, start bool) error {
 		}
 		serviceLoaded = false
 	}
-	if err := os.WriteFile(app.options.Paths.ServiceFile, []byte(plist), 0o644); err != nil {
-		return err
+	if serviceChanged {
+		if err := os.MkdirAll(filepath.Dir(app.options.Paths.ServiceFile), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(app.options.Paths.ServiceFile, []byte(plist), 0o644); err != nil {
+			return err
+		}
 	}
 	if app.options.Service != nil {
 		didWaitForRPC := false
@@ -226,6 +255,44 @@ func (app *App) Install(ctx context.Context, start bool) error {
 	return nil
 }
 
+func (app *App) EnsureConsoleReady(ctx context.Context) error {
+	current, err := state.Load(app.options.Paths.StateFile)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return app.Install(ctx, true)
+		}
+		return fmt.Errorf("load state: %w", err)
+	}
+	if !isExecutable(current.Aria2cPath) {
+		return app.Install(ctx, true)
+	}
+	values, err := aria2.ReadConfig(current.ConfigPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return app.Install(ctx, true)
+		}
+		return err
+	}
+	if aria2.HasManagedDrift(values, current) {
+		return app.Install(ctx, true)
+	}
+	plist, err := service.RenderLaunchAgent(current)
+	if err != nil {
+		return err
+	}
+	serviceChanged, err := fileContentChanged(app.options.Paths.ServiceFile, plist)
+	if err != nil {
+		return err
+	}
+	if serviceChanged || needs0600File(current.SessionPath) || !dirExists(filepath.Dir(current.LogPath)) {
+		return app.Install(ctx, true)
+	}
+	if app.options.Service != nil && !app.options.Service.IsLoaded(ctx) {
+		return app.Install(ctx, true)
+	}
+	return app.Start(ctx)
+}
+
 func (app *App) Uninstall(ctx context.Context) error {
 	if app.options.Service != nil && app.options.Service.IsLoaded(ctx) {
 		if err := app.options.Service.Uninstall(ctx); err != nil {
@@ -242,6 +309,9 @@ func (app *App) Start(ctx context.Context) error {
 	current, err := app.preflightLifecycle()
 	if err != nil {
 		return err
+	}
+	if app.options.Service.IsRunning(ctx) {
+		return app.waitForRPC(ctx, current)
 	}
 	if err := app.options.Service.Start(ctx); err != nil {
 		return err
@@ -650,4 +720,37 @@ func touch0600(path string) error {
 		return err
 	}
 	return os.Chmod(path, 0o600)
+}
+
+func sameState(left, right state.State) bool {
+	if left.Aria2cPath != right.Aria2cPath ||
+		left.RPCPort != right.RPCPort ||
+		left.RPCSecret != right.RPCSecret ||
+		left.ConfigPath != right.ConfigPath ||
+		left.SessionPath != right.SessionPath ||
+		left.LogPath != right.LogPath ||
+		left.ErrorLogPath != right.ErrorLogPath ||
+		left.ServiceName != right.ServiceName ||
+		len(left.RecentDirs) != len(right.RecentDirs) {
+		return false
+	}
+	for index := range left.RecentDirs {
+		if left.RecentDirs[index] != right.RecentDirs[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func needs0600File(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return true
+	}
+	return info.IsDir() || info.Mode().Perm() != 0o600
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

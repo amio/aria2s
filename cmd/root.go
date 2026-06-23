@@ -8,10 +8,14 @@ import (
 )
 
 func NewRoot(application *app.App) *cobra.Command {
+	consoleCommand := newConsoleCommand(application)
 	root := &cobra.Command{
 		Use:          "asv",
 		Short:        "Your aria2c, always on — runs it as a background service with a TUI",
 		SilenceUsage: true,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return consoleCommand.RunE(command, nil)
+		},
 	}
 	root.AddCommand(newInstallCommand(application))
 	root.AddCommand(newUninstallCommand(application))
@@ -22,7 +26,7 @@ func NewRoot(application *app.App) *cobra.Command {
 	root.AddCommand(newLogsCommand(application))
 	root.AddCommand(newDoctorCommand(application))
 	root.AddCommand(newAddCommand(application))
-	root.AddCommand(newConsoleCommand(application))
+	root.AddCommand(consoleCommand)
 	return root
 }
 
