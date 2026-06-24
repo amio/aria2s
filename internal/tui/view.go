@@ -193,7 +193,7 @@ func (model Model) detailView() string {
 				pct = 0
 			}
 			bar := makeProgressBar(pct)
-			label := fmt.Sprintf("%s %s %s", bar, file.Name,
+			label := fmt.Sprintf("%s %s %s", bar, displayFile(file, detail.DownloadDir, detail.Name),
 				dimText(fmt.Sprintf("(%s of %s)", formatBytes(file.CompletedLength), formatBytes(file.Length))))
 			if !file.Selected {
 				label += dimText(" (unselected)")
@@ -849,6 +849,23 @@ const detailLabelWidth = 16
 
 func formatDetailLabel(label string, value string) string {
 	return dimText(fmt.Sprintf("%-*s", detailLabelWidth, label+":")) + " " + value
+}
+
+func displayFile(file aria2.DownloadFile, downloadDir, taskName string) string {
+	if downloadDir != "" {
+		rel := strings.TrimPrefix(file.Path, downloadDir)
+		rel = strings.TrimPrefix(rel, "/")
+		// Strip the top-level torrent directory name since it repeats the task name.
+		if taskName != "" {
+			rel = strings.TrimPrefix(rel, taskName+"/")
+		}
+		if strings.Contains(rel, "/") || strings.Contains(rel, "\\") {
+			dir := filepath.Dir(rel)
+			base := filepath.Base(rel)
+			return dimText(dir+"/") + base
+		}
+	}
+	return file.Name
 }
 
 func detailDownloadDir(detail aria2.DownloadDetail) string {
