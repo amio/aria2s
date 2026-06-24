@@ -116,10 +116,7 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case refreshMsg:
 		return model.refresh(), tick(model.refreshInterval)
 	case wsEventMsg:
-		return model.refresh(), tea.Batch(
-			tick(model.refreshInterval),
-			waitForWSEvent(model.wsEvents),
-		)
+		return model.refresh(), waitForWSEvent(model.wsEvents)
 	case wsDisconnectedMsg:
 		model.wsEvents = nil
 		return model, nil
