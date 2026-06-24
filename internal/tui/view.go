@@ -37,14 +37,14 @@ type rgb struct {
 }
 
 var (
-	frameEdgeColor    = rgb{87, 110, 129}
+	frameEdgeColor    = rgb{105, 140, 168}
 	frameDividerColor = rgb{29, 42, 54}
 	frameTextColor    = rgb{241, 244, 247}
 	contentBgColor    = rgb{28, 28, 28}
 	bgColor           = rgb{16, 16, 16}
 	bodyTextColor     = rgb{210, 217, 225}
-	selectedColor     = rgb{28, 44, 58}
-	errorTextColor    = rgb{255, 152, 152}
+	selectedColor     = rgb{35, 58, 80}
+	errorTextColor    = rgb{255, 125, 125}
 )
 
 func (model Model) View() string {
@@ -566,15 +566,15 @@ func statusLabel(status string) string {
 func statusTone(status string) rgb {
 	switch status {
 	case "active":
-		return rgb{191, 220, 201}
+		return rgb{125, 215, 160}
 	case "waiting":
-		return rgb{224, 215, 181}
+		return rgb{240, 210, 120}
 	case "paused":
-		return rgb{222, 202, 176}
+		return rgb{240, 182, 120}
 	case "complete":
-		return rgb{188, 211, 228}
+		return rgb{125, 210, 242}
 	case "error", "removed":
-		return rgb{236, 191, 191}
+		return rgb{250, 140, 140}
 	default:
 		return bodyTextColor
 	}
@@ -589,7 +589,7 @@ func downloadStatusLabel(download aria2.Download) string {
 
 func downloadStatusTone(download aria2.Download) rgb {
 	if download.IsMetadata {
-		return rgb{180, 190, 210}
+		return rgb{165, 180, 228}
 	}
 	return statusTone(download.Status)
 }
