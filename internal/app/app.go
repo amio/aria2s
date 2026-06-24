@@ -51,7 +51,6 @@ type Options struct {
 	RPC             RPC
 	RPCReadyTimeout time.Duration
 	RPCPollInterval time.Duration
-	ShutdownTimeout time.Duration
 	DashboardRunner func(*App) error
 }
 
@@ -86,9 +85,6 @@ func New(options Options) *App {
 	}
 	if options.RPCPollInterval == 0 {
 		options.RPCPollInterval = 100 * time.Millisecond
-	}
-	if options.ShutdownTimeout == 0 {
-		options.ShutdownTimeout = time.Minute
 	}
 	return &App{options: options}
 }
@@ -256,7 +252,7 @@ func (app *App) Install(ctx context.Context, start bool) error {
 	}
 	if app.options.Service != nil && serviceLoaded && serviceChanged {
 		if serviceRunning {
-			if err := app.gracefulShutdown(ctx, current); err != nil {
+			if err := app.options.Service.Stop(ctx); err != nil {
 				return err
 			}
 			serviceRunning = false
@@ -362,16 +358,21 @@ func (app *App) Start(ctx context.Context) error {
 }
 
 func (app *App) Stop(ctx context.Context) error {
+	var saveErr error
 	if app.options.Service.IsRunning(ctx) {
 		current, err := state.Load(app.options.Paths.StateFile)
 		if err != nil {
-			return err
-		}
-		if err := app.gracefulShutdown(ctx, current); err != nil {
-			return err
+			saveErr = err
+		} else if err := app.saveSession(ctx, current); err != nil {
+			if !errors.Is(err, aria2.ErrTransportUnavailable) {
+				saveErr = err
+			}
 		}
 	}
-	return app.options.Service.Stop(ctx)
+	if err := app.options.Service.Stop(ctx); err != nil {
+		return err
+	}
+	return saveErr
 }
 
 func (app *App) Restart(ctx context.Context) error {
@@ -384,7 +385,12 @@ func (app *App) Restart(ctx context.Context) error {
 
 func (app *App) restartServiceGracefully(ctx context.Context, current state.State) error {
 	if app.options.Service.IsRunning(ctx) {
-		if err := app.gracefulShutdown(ctx, current); err != nil {
+		if err := app.saveSession(ctx, current); err != nil {
+			if !errors.Is(err, aria2.ErrTransportUnavailable) {
+				return err
+			}
+		}
+		if err := app.options.Service.Stop(ctx); err != nil {
 			return err
 		}
 	}
@@ -394,32 +400,9 @@ func (app *App) restartServiceGracefully(ctx context.Context, current state.Stat
 	return app.waitForRPC(ctx, current)
 }
 
-func (app *App) gracefulShutdown(ctx context.Context, current state.State) error {
-	if err := app.saveSession(ctx, current); err != nil {
-		if errors.Is(err, aria2.ErrTransportUnavailable) {
-			return app.waitForServiceStop(ctx)
-		}
-		return err
-	}
-	if err := app.shutdown(ctx, current); err != nil {
-		if errors.Is(err, aria2.ErrTransportUnavailable) {
-			return app.waitForServiceStop(ctx)
-		}
-		return err
-	}
-	return app.waitForServiceStop(ctx)
-}
-
 func (app *App) saveSession(ctx context.Context, current state.State) error {
 	if err := app.options.RPC.SaveSession(ctx, current); err != nil {
 		return fmt.Errorf("save session: %w", err)
-	}
-	return nil
-}
-
-func (app *App) shutdown(ctx context.Context, current state.State) error {
-	if err := app.options.RPC.Shutdown(ctx, current); err != nil {
-		return fmt.Errorf("shutdown aria2: %w", err)
 	}
 	return nil
 }
@@ -609,25 +592,6 @@ func (app *App) waitForRPC(ctx context.Context, current state.State) error {
 		}
 		if time.Now().Add(app.options.RPCPollInterval).After(deadline) {
 			return app.rpcReadyError(current, lastErr)
-		}
-		timer := time.NewTimer(app.options.RPCPollInterval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-	}
-}
-
-func (app *App) waitForServiceStop(ctx context.Context) error {
-	deadline := time.Now().Add(app.options.ShutdownTimeout)
-	for {
-		if !app.options.Service.IsRunning(ctx) {
-			return nil
-		}
-		if time.Now().Add(app.options.RPCPollInterval).After(deadline) {
-			return fmt.Errorf("aria2 did not stop within %s after graceful shutdown", app.options.ShutdownTimeout)
 		}
 		timer := time.NewTimer(app.options.RPCPollInterval)
 		select {

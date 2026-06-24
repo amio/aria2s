@@ -65,7 +65,7 @@ func (backend *LaunchdBackend) Stop(ctx context.Context) error {
 	if !backend.IsLoaded(ctx) {
 		return nil
 	}
-	_, err := backend.runner.Run(ctx, "launchctl", "kill", "SIGTERM", backend.serviceTarget())
+	_, err := backend.runner.Run(ctx, "launchctl", "bootout", backend.domain(), backend.plistPath)
 	return err
 }
 

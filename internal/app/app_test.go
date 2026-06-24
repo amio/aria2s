@@ -207,11 +207,8 @@ func TestStopSavesSessionBeforeStoppingService(t *testing.T) {
 	if rpc.saveSessionCalls != 1 {
 		t.Fatalf("expected one saveSession call, got %d", rpc.saveSessionCalls)
 	}
-	if rpc.shutdownCalls != 1 {
-		t.Fatalf("expected one shutdown call, got %d", rpc.shutdownCalls)
-	}
-	if strings.Join(events, ",") != "saveSession,shutdown,stop" {
-		t.Fatalf("expected save, shutdown, then stop, got %v", events)
+	if strings.Join(events, ",") != "saveSession,stop" {
+		t.Fatalf("expected saveSession then stop, got %v", events)
 	}
 }
 
@@ -232,15 +229,12 @@ func TestStopSavesSessionBeforeStoppingServiceOnLinuxPaths(t *testing.T) {
 	if rpc.saveSessionCalls != 1 {
 		t.Fatalf("expected one saveSession call, got %d", rpc.saveSessionCalls)
 	}
-	if rpc.shutdownCalls != 1 {
-		t.Fatalf("expected one shutdown call, got %d", rpc.shutdownCalls)
-	}
-	if strings.Join(events, ",") != "saveSession,shutdown,stop" {
-		t.Fatalf("expected save, shutdown, then stop, got %v", events)
+	if strings.Join(events, ",") != "saveSession,stop" {
+		t.Fatalf("expected saveSession then stop, got %v", events)
 	}
 }
 
-func TestStopFailsWhenSaveSessionFails(t *testing.T) {
+func TestStopCallsServiceStopEvenWhenSaveSessionFails(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
@@ -251,12 +245,14 @@ func TestStopFailsWhenSaveSessionFails(t *testing.T) {
 
 	err := application.Stop(context.Background())
 
+	// Non-transport errors should be reported so callers know session save failed.
 	if err == nil {
-		t.Fatal("expected stop to fail when saveSession fails")
+		t.Fatal("expected stop to report save session error")
 	}
 	assertContains(t, err.Error(), "save session")
-	if len(serviceBackend.calls) != 0 {
-		t.Fatalf("expected no service calls after saveSession failure, got %v", serviceBackend.calls)
+	// Service.Stop() is always called as the definitive stop.
+	if len(serviceBackend.calls) != 1 || serviceBackend.calls[0] != "stop" {
+		t.Fatalf("expected service stop call after saveSession failure, got %v", serviceBackend.calls)
 	}
 }
 
@@ -280,11 +276,8 @@ func TestRestartSavesSessionBeforeRestartingService(t *testing.T) {
 	if rpc.saveSessionCalls != 1 {
 		t.Fatalf("expected one saveSession call, got %d", rpc.saveSessionCalls)
 	}
-	if rpc.shutdownCalls != 1 {
-		t.Fatalf("expected one shutdown call, got %d", rpc.shutdownCalls)
-	}
-	if strings.Join(events, ",") != "saveSession,shutdown,start,version" {
-		t.Fatalf("expected save, shutdown, start, then version poll, got %v", events)
+	if strings.Join(events, ",") != "saveSession,stop,start,version" {
+		t.Fatalf("expected saveSession, stop, start, version poll, got %v", events)
 	}
 }
 
@@ -308,37 +301,32 @@ func TestRestartSavesSessionBeforeRestartingServiceOnLinuxPaths(t *testing.T) {
 	if rpc.saveSessionCalls != 1 {
 		t.Fatalf("expected one saveSession call, got %d", rpc.saveSessionCalls)
 	}
-	if rpc.shutdownCalls != 1 {
-		t.Fatalf("expected one shutdown call, got %d", rpc.shutdownCalls)
-	}
-	if strings.Join(events, ",") != "saveSession,shutdown,start,version" {
-		t.Fatalf("expected save, shutdown, start, then version poll, got %v", events)
+	if strings.Join(events, ",") != "saveSession,stop,start,version" {
+		t.Fatalf("expected saveSession, stop, start, version poll, got %v", events)
 	}
 }
 
-func TestStopUsesShutdownTimeoutInsteadOfRPCReadyTimeout(t *testing.T) {
+func TestStopCallsServiceStopWhenStateLoadFails(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
-	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
-	writeInstalledStateAndConfig(t, servicePaths, aria2c)
-	serviceBackend := &recordingService{
-		loaded:            true,
-		running:           true,
-		shutdownLagChecks: 3,
-	}
-	rpc := &sessionRecordingRPC{service: serviceBackend}
-	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
-		RPCReadyTimeout: time.Nanosecond,
-		RPCPollInterval: time.Nanosecond,
-		ShutdownTimeout: 50 * time.Millisecond,
-	})
+	serviceBackend := &recordingService{loaded: true, running: true}
+	// No state file written → state.Load will fail.
+	rpc := &sessionRecordingRPC{}
+	application := newTestApp(servicePaths, "", serviceBackend, rpc, app.Options{})
 
-	if err := application.Stop(context.Background()); err != nil {
-		t.Fatalf("stop should tolerate graceful shutdown longer than RPCReadyTimeout: %v", err)
+	err := application.Stop(context.Background())
+
+	// State load failure should be reported.
+	if err == nil {
+		t.Fatal("expected stop to report state load error")
+	}
+	// Service.Stop() is always called, even when state is missing.
+	if len(serviceBackend.calls) != 1 || serviceBackend.calls[0] != "stop" {
+		t.Fatalf("expected service stop call, got %v", serviceBackend.calls)
 	}
 }
 
-func TestRestartWaitsThroughShutdownTransitionWhenRPCIsAlreadyUnavailable(t *testing.T) {
+func TestRestartStopsAndRestartsWhenRPCUnavailable(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
@@ -358,18 +346,17 @@ func TestRestartWaitsThroughShutdownTransitionWhenRPCIsAlreadyUnavailable(t *tes
 	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
 		RPCReadyTimeout: time.Second,
 		RPCPollInterval: time.Nanosecond,
-		ShutdownTimeout: 50 * time.Millisecond,
 	})
 
 	if err := application.Restart(context.Background()); err != nil {
-		t.Fatalf("restart should wait for in-flight shutdown and then start: %v", err)
+		t.Fatalf("restart should stop and restart: %v", err)
 	}
 
 	if rpc.shutdownCalls != 0 {
-		t.Fatalf("expected no extra shutdown RPC once aria2 is already unreachable, got %d", rpc.shutdownCalls)
+		t.Fatalf("expected no shutdown RPC, got %d", rpc.shutdownCalls)
 	}
-	if strings.Join(events, ",") != "saveSession,start,version" {
-		t.Fatalf("expected restart to wait through shutdown transition then start, got %v", events)
+	if strings.Join(events, ",") != "saveSession,stop,start,version" {
+		t.Fatalf("expected saveSession, stop, start, version, got %v", events)
 	}
 }
 
@@ -552,11 +539,11 @@ func TestInstallStartGracefullyStopsRunningServiceBeforeReloadingChangedPlist(t 
 		t.Fatalf("install: %v", err)
 	}
 
-	if rpc.saveSessionCalls != 1 || rpc.shutdownCalls != 1 {
-		t.Fatalf("expected one saveSession and one shutdown, got save=%d shutdown=%d", rpc.saveSessionCalls, rpc.shutdownCalls)
+	if rpc.saveSessionCalls != 0 || rpc.shutdownCalls != 0 {
+		t.Fatalf("expected no saveSession or shutdown, got save=%d shutdown=%d", rpc.saveSessionCalls, rpc.shutdownCalls)
 	}
-	if strings.Join(events, ",") != "saveSession,shutdown,uninstall,install,start,version" {
-		t.Fatalf("expected graceful shutdown before service reload, got %v", events)
+	if strings.Join(events, ",") != "stop,uninstall,install,start,version" {
+		t.Fatalf("expected stop, uninstall, install, start, version, got %v", events)
 	}
 }
 
@@ -591,8 +578,8 @@ func TestInstallPreservesRunningServiceAcrossChangedPlistWithoutStartFlag(t *tes
 		t.Fatalf("install: %v", err)
 	}
 
-	if strings.Join(events, ",") != "saveSession,shutdown,uninstall,install,start" {
-		t.Fatalf("expected install to preserve running state across plist reload, got %v", events)
+	if strings.Join(events, ",") != "stop,uninstall,install,start" {
+		t.Fatalf("expected stop, uninstall, install, start, got %v", events)
 	}
 }
 
