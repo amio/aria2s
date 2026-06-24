@@ -1,6 +1,6 @@
 # `aria2s` - Your `aria2c`, always on.
 
-`aria2s` keeps `aria2c` always running in the background, and gives you a terminal dashboard to manage your downloads.
+`aria2s` turns `aria2c` into an always-on download service with a terminal dashboard to manage downloads.
 
 Requirements:
 
@@ -61,7 +61,7 @@ make test         # run all tests
 
 Smoke-test in an isolated environment:
 
-Linux note: service startup still needs a live `systemd --user` session even when `HOME` is overridden for an isolated test directory.
+> Linux note: service startup still needs a live `systemd --user` session even when `HOME` is overridden for an isolated test directory.
 
 ```bash
 TMP_HOME=$(mktemp -d)
