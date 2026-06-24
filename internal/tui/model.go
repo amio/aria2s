@@ -14,7 +14,7 @@ import (
 	"github.com/amio/aria2s/internal/aria2"
 )
 
-/** Service is the state-backed task API used by the interactive console. */
+/** Service is the state-backed task API used by the interactive dashboard. */
 type Service interface {
 	ListDownloads(context.Context, aria2.ListOptions) (aria2.DownloadSnapshot, error)
 	TaskDetail(context.Context, string) (aria2.DownloadDetail, error)
@@ -30,7 +30,7 @@ type Service interface {
 	Subscribe(context.Context) <-chan aria2.Notification
 }
 
-/** Mode identifies the current console interaction surface. */
+/** Mode identifies the current dashboard interaction surface. */
 type Mode string
 
 const (
@@ -39,7 +39,7 @@ const (
 	ModeDetail Mode = "detail"
 )
 
-/** Model is the Bubble Tea state for the aria2 console. */
+/** Model is the Bubble Tea state for the aria2 dashboard. */
 type Model struct {
 	service         Service
 	refreshInterval time.Duration

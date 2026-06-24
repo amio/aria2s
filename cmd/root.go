@@ -8,13 +8,13 @@ import (
 )
 
 func NewRoot(application *app.App) *cobra.Command {
-	consoleCommand := newConsoleCommand(application)
+	dashboardCommand := newDashboardCommand(application)
 	root := &cobra.Command{
 		Use:          "aria2s",
-		Short:        "Your aria2c, always on — sets it up as a background service with a TUI",
+		Short:        "Your aria2c, always on — runs it as a background service with a terminal dashboard",
 		SilenceUsage: true,
 		RunE: func(command *cobra.Command, _ []string) error {
-			return consoleCommand.RunE(command, nil)
+			return dashboardCommand.RunE(command, nil)
 		},
 	}
 	root.AddCommand(newInstallCommand(application))
@@ -26,7 +26,7 @@ func NewRoot(application *app.App) *cobra.Command {
 	root.AddCommand(newLogsCommand(application))
 	root.AddCommand(newDoctorCommand(application))
 	root.AddCommand(newAddCommand(application))
-	root.AddCommand(consoleCommand)
+	root.AddCommand(dashboardCommand)
 	return root
 }
 
@@ -35,7 +35,7 @@ func Execute() error {
 	if err != nil {
 		return err
 	}
-	application.SetConsoleRunner(defaultConsoleRunner)
+	application.SetDashboardRunner(defaultDashboardRunner)
 	return NewRoot(application).Execute()
 }
 

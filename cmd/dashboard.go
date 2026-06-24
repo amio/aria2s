@@ -10,21 +10,21 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func defaultConsoleRunner(application *app.App) error {
+func defaultDashboardRunner(application *app.App) error {
 	program := tea.NewProgram(tui.NewModel(application, time.Second, Version), tea.WithAltScreen())
 	_, err := program.Run()
 	return err
 }
 
-func newConsoleCommand(application *app.App) *cobra.Command {
+func newDashboardCommand(application *app.App) *cobra.Command {
 	return &cobra.Command{
-		Use:   "console",
-		Short: "Open the interactive aria2 console",
+		Use:   "dashboard",
+		Short: "Open the interactive download dashboard",
 		RunE: func(command *cobra.Command, _ []string) error {
-			if err := application.EnsureConsoleReady(command.Context()); err != nil {
+			if err := application.EnsureDashboardReady(command.Context()); err != nil {
 				return err
 			}
-			return application.RunConsole()
+			return application.RunDashboard()
 		},
 	}
 }

@@ -15,7 +15,7 @@ import (
 	"github.com/amio/aria2s/internal/aria2"
 )
 
-func TestAppImplementsConsoleService(t *testing.T) {
+func TestAppImplementsDashboardService(t *testing.T) {
 	var _ Service = (*app.App)(nil)
 }
 

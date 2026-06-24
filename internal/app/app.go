@@ -30,7 +30,7 @@ type RPC interface {
 	Shutdown(context.Context, state.State) error
 }
 
-type consoleRPC interface {
+type dashboardRPC interface {
 	ListDownloads(context.Context, state.State, aria2.ListOptions) (aria2.DownloadSnapshot, error)
 	TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error)
 	Pause(context.Context, state.State, string) error
@@ -52,7 +52,7 @@ type Options struct {
 	RPCReadyTimeout time.Duration
 	RPCPollInterval time.Duration
 	ShutdownTimeout time.Duration
-	ConsoleRunner   func(*App) error
+	DashboardRunner   func(*App) error
 }
 
 type App struct {
@@ -321,18 +321,18 @@ func (app *App) Install(ctx context.Context, start bool) error {
 	return nil
 }
 
-func (app *App) RunConsole() error {
-	if app.options.ConsoleRunner == nil {
-		return errors.New("console runner not configured")
+func (app *App) RunDashboard() error {
+	if app.options.DashboardRunner == nil {
+		return errors.New("dashboard runner not configured")
 	}
-	return app.options.ConsoleRunner(app)
+	return app.options.DashboardRunner(app)
 }
 
-func (app *App) SetConsoleRunner(runner func(*App) error) {
-	app.options.ConsoleRunner = runner
+func (app *App) SetDashboardRunner(runner func(*App) error) {
+	app.options.DashboardRunner = runner
 }
 
-func (app *App) EnsureConsoleReady(ctx context.Context) error {
+func (app *App) EnsureDashboardReady(ctx context.Context) error {
 	current, err := state.Load(app.options.Paths.StateFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -539,7 +539,7 @@ func (app *App) recordDir(dir string) error {
 }
 
 func (app *App) ListDownloads(ctx context.Context, options aria2.ListOptions) (aria2.DownloadSnapshot, error) {
-	current, rpc, err := app.consoleRPC()
+	current, rpc, err := app.dashboardRPC()
 	if err != nil {
 		return aria2.DownloadSnapshot{}, err
 	}
@@ -547,7 +547,7 @@ func (app *App) ListDownloads(ctx context.Context, options aria2.ListOptions) (a
 }
 
 func (app *App) TaskDetail(ctx context.Context, gid string) (aria2.DownloadDetail, error) {
-	current, rpc, err := app.consoleRPC()
+	current, rpc, err := app.dashboardRPC()
 	if err != nil {
 		return aria2.DownloadDetail{}, err
 	}
@@ -555,7 +555,7 @@ func (app *App) TaskDetail(ctx context.Context, gid string) (aria2.DownloadDetai
 }
 
 func (app *App) Pause(ctx context.Context, gid string) error {
-	current, rpc, err := app.consoleRPC()
+	current, rpc, err := app.dashboardRPC()
 	if err != nil {
 		return err
 	}
@@ -563,7 +563,7 @@ func (app *App) Pause(ctx context.Context, gid string) error {
 }
 
 func (app *App) Resume(ctx context.Context, gid string) error {
-	current, rpc, err := app.consoleRPC()
+	current, rpc, err := app.dashboardRPC()
 	if err != nil {
 		return err
 	}
@@ -571,7 +571,7 @@ func (app *App) Resume(ctx context.Context, gid string) error {
 }
 
 func (app *App) Remove(ctx context.Context, gid string) error {
-	current, rpc, err := app.consoleRPC()
+	current, rpc, err := app.dashboardRPC()
 	if err != nil {
 		return err
 	}
@@ -579,7 +579,7 @@ func (app *App) Remove(ctx context.Context, gid string) error {
 }
 
 func (app *App) ClearStopped(ctx context.Context, gid string) error {
-	current, rpc, err := app.consoleRPC()
+	current, rpc, err := app.dashboardRPC()
 	if err != nil {
 		return err
 	}
@@ -603,14 +603,14 @@ func (app *App) Paths() paths.Paths {
 	return app.options.Paths
 }
 
-func (app *App) consoleRPC() (state.State, consoleRPC, error) {
+func (app *App) dashboardRPC() (state.State, dashboardRPC, error) {
 	current, err := state.Load(app.options.Paths.StateFile)
 	if err != nil {
 		return state.State{}, nil, err
 	}
-	rpc, ok := app.options.RPC.(consoleRPC)
+	rpc, ok := app.options.RPC.(dashboardRPC)
 	if !ok {
-		return state.State{}, nil, errors.New("configured RPC client does not support console task management")
+		return state.State{}, nil, errors.New("configured RPC client does not support dashboard task management")
 	}
 	return current, rpc, nil
 }

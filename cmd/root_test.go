@@ -14,7 +14,7 @@ import (
 	"github.com/amio/aria2s/internal/state"
 )
 
-func TestRootWithoutArgsOpensConsole(t *testing.T) {
+func TestRootWithoutArgsOpensDashboard(t *testing.T) {
 	rootDir := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(rootDir, "home"))
 	aria2c := writeExecutable(t, filepath.Join(rootDir, "bin", "aria2c"))
@@ -40,7 +40,7 @@ func TestRootWithoutArgsOpensConsole(t *testing.T) {
 	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc)
 
 	calls := 0
-	application.SetConsoleRunner(func(*app.App) error {
+	application.SetDashboardRunner(func(*app.App) error {
 		calls++
 		return nil
 	})
@@ -51,10 +51,10 @@ func TestRootWithoutArgsOpensConsole(t *testing.T) {
 		t.Fatalf("execute root: %v", err)
 	}
 	if calls != 1 {
-		t.Fatalf("expected root command to open console once, got %d", calls)
+		t.Fatalf("expected root command to open dashboard once, got %d", calls)
 	}
 	if len(serviceBackend.calls) != 0 {
-		t.Fatalf("expected ready console launch to skip service calls, got %v", serviceBackend.calls)
+		t.Fatalf("expected ready dashboard launch to skip service calls, got %v", serviceBackend.calls)
 	}
 	if rpc.versionCalls != 1 {
 		t.Fatalf("expected one readiness probe, got %d", rpc.versionCalls)
@@ -105,7 +105,7 @@ func TestRootWithoutArgsUsesStoredInstallWhenLookPathFails(t *testing.T) {
 	})
 
 	calls := 0
-	application.SetConsoleRunner(func(*app.App) error {
+	application.SetDashboardRunner(func(*app.App) error {
 		calls++
 		return nil
 	})
@@ -116,7 +116,7 @@ func TestRootWithoutArgsUsesStoredInstallWhenLookPathFails(t *testing.T) {
 		t.Fatalf("execute root: %v", err)
 	}
 	if calls != 1 {
-		t.Fatalf("expected root command to open console once, got %d", calls)
+		t.Fatalf("expected root command to open dashboard once, got %d", calls)
 	}
 	if rpc.versionCalls != 1 {
 		t.Fatalf("expected one readiness probe, got %d", rpc.versionCalls)

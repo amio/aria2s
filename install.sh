@@ -172,7 +172,7 @@ printf '\n'
 if [ "$OS" = "linux" ] && ! command -v systemctl >/dev/null 2>&1; then
   warn "systemctl not found; background service setup requires systemd --user"
   info "To set up the service later:  aria2s install --start"
-  info "To open the TUI console:      aria2s"
+  info "To open the terminal dashboard:  aria2s"
 else
   info "setting up aria2c background service..."
   "${BINDIR}/aria2s" install --start

@@ -1,6 +1,6 @@
 # `aria2s` - Your `aria2c`, always on.
 
-`aria2s` sets up `aria2c` as a persistent background service and provides a terminal UI to manage downloads.
+`aria2s` keeps `aria2c` always running in the background, and gives you a terminal dashboard to manage your downloads.
 
 Requirements:
 
@@ -29,20 +29,20 @@ rm "$(command -v aria2s)"  # remove the binary
 
 ```bash
 aria2s install --start     # install & launch the background service
-aria2s console             # open the interactive TUI console to manage downloads
+aria2s dashboard           # open the interactive terminal dashboard to manage downloads
 ```
 
 or simply:
 
 ```bash
-aria2s                     # ensure install/start, then open the TUI console
+aria2s                     # ensure install/start, open the terminal dashboard
 ```
 
 ## Commands
 
 | Command | What it does |
 |---------|-------------|
-| `aria2s` | Daily entrypoint: ensure `aria2c` is installed and running, then open the full-screen console. |
+| `aria2s` | Daily entrypoint: ensure the service is installed and running, open the full-screen dashboard. |
 | `aria2s install [--start]` | Set up `aria2c` as a background service through `launchd` on macOS or `systemd --user` on Linux. Re-running it repairs drift and skips work when everything is already aligned. |
 | `aria2s uninstall` | Remove the registered background service. |
 | `aria2s start` / `stop` / `restart` | Control the background service. `start` returns immediately when the service is already healthy. Stop & restart save the session first. |
@@ -50,7 +50,7 @@ aria2s                     # ensure install/start, then open the TUI console
 | `aria2s doctor` | Check for common issues (missing binary, port conflicts, config drift). |
 | `aria2s logs` | Print recent log output. |
 | `aria2s add <url-or-magnet>` | Submit a download via RPC — no need to remember the port or token. |
-| `aria2s console` | Explicit console entrypoint. Uses the same auto-install and auto-start readiness flow as bare `aria2s`. |
+| `aria2s dashboard` | Explicit dashboard entrypoint. Uses the same auto-install and auto-start readiness flow as bare `aria2s`. |
 
 ## Development
 

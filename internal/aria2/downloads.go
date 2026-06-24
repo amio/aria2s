@@ -8,14 +8,14 @@ import (
 	"strings"
 )
 
-/** ListOptions bounds aria2 history reads for the interactive console. */
+/** ListOptions bounds aria2 history reads for the interactive dashboard. */
 type ListOptions struct {
 	WaitingLimit  int
 	StoppedOffset int
 	StoppedLimit  int
 }
 
-/** DownloadSnapshot groups the live and recent stopped task windows shown by the console. */
+/** DownloadSnapshot groups the live and recent stopped task windows shown by the dashboard. */
 type DownloadSnapshot struct {
 	Active  []Download
 	Waiting []Download
