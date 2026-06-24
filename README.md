@@ -1,6 +1,6 @@
 # `aria2s` - Your `aria2c`, always on.
 
-`aria2s` sets up `aria2c` as a persistent background service and provides a TUI to manage downloads.
+`aria2s` sets up `aria2c` as a persistent background service and provides a terminal UI to manage downloads.
 
 Requirements:
 
@@ -21,21 +21,21 @@ go install github.com/amio/aria2s@latest
 ## Uninstall
 
 ```bash
-aria2s uninstall                       # remove the registered background service
-rm "$(command -v aria2s)"             # remove the binary
+aria2s uninstall           # remove the registered background service
+rm "$(command -v aria2s)"  # remove the binary
 ```
 
 ## Quick Start
 
 ```bash
-aria2s install --start # install & launch the background service
-aria2s console         # open the interactive TUI console to manage downloads
+aria2s install --start     # install & launch the background service
+aria2s console             # open the interactive TUI console to manage downloads
 ```
 
 or simply:
 
 ```bash
-aria2s # ensure install/start, then open the TUI console
+aria2s                     # ensure install/start, then open the TUI console
 ```
 
 ## Commands
