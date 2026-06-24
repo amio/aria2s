@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/amio/aria2s/internal/app"
 	"github.com/amio/aria2s/internal/aria2"
@@ -24,7 +24,7 @@ func TestModelShowsLoadingIndicatorBeforeFirstRefresh(t *testing.T) {
 	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 140, Height: 16})
 
-	view := model.View()
+	view := viewContent(model)
 	if strings.Contains(view, "No downloads yet") {
 		t.Fatalf("view should not show empty-state message before first refresh:\n%s", view)
 	}
@@ -33,7 +33,7 @@ func TestModelShowsLoadingIndicatorBeforeFirstRefresh(t *testing.T) {
 	}
 
 	model = updateModel(t, model, refreshMsg{})
-	view = model.View()
+	view = viewContent(model)
 	if strings.Contains(view, "Connecting...") {
 		t.Fatalf("view should stop showing loading indicator after first refresh:\n%s", view)
 	}
@@ -61,13 +61,14 @@ func TestModelRefreshesDownloadsAndMovesSelection(t *testing.T) {
 		t.Fatalf("selected gid got %q, want a1", got)
 	}
 
-	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	updated, _ = model.Update(keySpecial(tea.KeyDown))
 	model = updated.(Model)
 	if got := model.Selected().GID; got != "w1" {
 		t.Fatalf("selected gid got %q, want w1", got)
 	}
-	if !strings.Contains(model.View(), "waiting.iso") {
-		t.Fatalf("view should include refreshed downloads, got:\n%s", model.View())
+	view := viewContent(model)
+	if !strings.Contains(view, "waiting.iso") {
+		t.Fatalf("view should include refreshed downloads, got:\n%s", view)
 	}
 }
 
@@ -83,11 +84,15 @@ func TestModelRendersFullScreenTableLayout(t *testing.T) {
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 140, Height: 16})
 	model = updateModel(t, model, refreshMsg{})
 
-	view := model.View()
+	rendered := model.View()
+	view := rendered.Content
 	for _, header := range []string{"Status", "Name", "Size", "Downloaded", "Progress", "Down Speed", "Up Speed"} {
 		if !strings.Contains(view, header) {
 			t.Fatalf("view missing column header %q:\n%s", header, view)
 		}
+	}
+	if !rendered.AltScreen {
+		t.Fatalf("view should request alt screen mode")
 	}
 	if !strings.Contains(view, "Total 3 (A") {
 		t.Fatalf("view missing footer stats:\n%s", view)
@@ -104,9 +109,9 @@ func TestModelAddsURIFromInputMode(t *testing.T) {
 	service := &fakeService{}
 	model := NewModel(service, time.Second, "dev")
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://example.com/file.zip")})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, keyText("a"))
+	model = updateModel(t, model, keyText("https://example.com/file.zip"))
+	model = updateModel(t, model, keySpecial(tea.KeyEnter))
 
 	if len(service.added) != 1 || service.added[0] != "https://example.com/file.zip" {
 		t.Fatalf("unexpected added URIs: %#v", service.added)
@@ -123,17 +128,17 @@ func TestModelAddWithCustomDir(t *testing.T) {
 	service := &fakeService{defaultDir: "/home/user/Downloads"}
 	model := NewModel(service, time.Second, "dev")
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://example.com/file.zip")})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/data/Movies")})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, keyText("a"))
+	model = updateModel(t, model, keyText("https://example.com/file.zip"))
+	model = updateModel(t, model, keySpecial(tea.KeyTab))
+	model = updateModel(t, model, keyText("/data/Movies"))
+	model = updateModel(t, model, keySpecial(tea.KeyEnter))
 	model = updateModel(t, model, refreshMsg{})
 
 	if len(service.addOpts) != 1 || service.addOpts[0].Dir != "/data/Movies" {
 		t.Fatalf("expected dir /data/Movies, got %#v", service.addOpts)
 	}
-	if !strings.Contains(model.View(), "No downloads yet") && model.Mode() != ModeList {
+	if !strings.Contains(viewContent(model), "No downloads yet") && model.Mode() != ModeList {
 		t.Fatalf("mode got %s, want list", model.Mode())
 	}
 }
@@ -145,12 +150,12 @@ func TestModelAddDirRecentPick(t *testing.T) {
 	}
 	model := NewModel(service, time.Second, "dev")
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model = updateModel(t, model, keyText("a"))
 	model.addForm = model.addForm.WithRecents(service.recentDirs)
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://example.com/file.zip")})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, keyText("https://example.com/file.zip"))
+	model = updateModel(t, model, keySpecial(tea.KeyTab))
+	model = updateModel(t, model, keySpecial(tea.KeyDown))
+	model = updateModel(t, model, keySpecial(tea.KeyEnter))
 
 	if len(service.addOpts) != 1 || service.addOpts[0].Dir != "/data/Movies" {
 		t.Fatalf("expected dir /data/Movies picked from recents, got %#v", service.addOpts)
@@ -163,19 +168,19 @@ func TestModelAddDirTabCyclesAndWraps(t *testing.T) {
 	}
 	model := NewModel(service, time.Second, "dev")
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	model = updateModel(t, model, keyText("a"))
 	model.addForm = model.addForm.WithRecents(service.recentDirs)
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // URL -> Dir
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // -> 1st recent
+	model = updateModel(t, model, keySpecial(tea.KeyTab)) // URL -> Dir
+	model = updateModel(t, model, keySpecial(tea.KeyTab)) // -> 1st recent
 	if model.addForm.dir != "/data/Movies" {
 		t.Fatalf("first tab got %q, want /data/Movies", model.addForm.dir)
 	}
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // -> 2nd
+	model = updateModel(t, model, keySpecial(tea.KeyTab)) // -> 2nd
 	if model.addForm.dir != "/data/Music" {
 		t.Fatalf("second tab got %q, want /data/Music", model.addForm.dir)
 	}
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // -> 3rd
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab}) // wrap -> 1st
+	model = updateModel(t, model, keySpecial(tea.KeyTab)) // -> 3rd
+	model = updateModel(t, model, keySpecial(tea.KeyTab)) // wrap -> 1st
 	if model.addForm.dir != "/data/Movies" {
 		t.Fatalf("wrapped tab got %q, want /data/Movies", model.addForm.dir)
 	}
@@ -187,7 +192,7 @@ func TestModelAddPrefillsLastUsedDirOnLoad(t *testing.T) {
 	}
 	model := NewModel(service, time.Second, "dev")
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	updated, cmd := model.Update(keyText("a"))
 	model = updated.(Model)
 	if cmd == nil {
 		t.Fatal("expected recent dirs load command when entering add mode")
@@ -200,8 +205,8 @@ func TestModelAddPrefillsLastUsedDirOnLoad(t *testing.T) {
 		t.Fatalf("dir got %q, want /data/Movies", model.addForm.dir)
 	}
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("https://example.com/file.zip")})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, keyText("https://example.com/file.zip"))
+	model = updateModel(t, model, keySpecial(tea.KeyEnter))
 
 	if len(service.addOpts) != 1 || service.addOpts[0].Dir != "/data/Movies" {
 		t.Fatalf("expected dir /data/Movies from last used, got %#v", service.addOpts)
@@ -214,7 +219,7 @@ func TestModelLoadsRecentDirsOnAddMode(t *testing.T) {
 	}
 	model := NewModel(service, time.Second, "dev")
 
-	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	updated, cmd := model.Update(keyText("a"))
 	model = updated.(Model)
 	if cmd == nil {
 		t.Fatal("expected recent dirs load command when entering add mode")
@@ -222,9 +227,9 @@ func TestModelLoadsRecentDirsOnAddMode(t *testing.T) {
 	msg := cmd()
 	loaded, _ := model.Update(msg)
 	model = loaded.(Model)
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyTab})
+	model = updateModel(t, model, keySpecial(tea.KeyTab))
 
-	view := model.View()
+	view := viewContent(model)
 	if !strings.Contains(view, "/data/Movies") || !strings.Contains(view, "Recent dirs") {
 		t.Fatalf("add view should list recent dirs after load, got:\n%s", view)
 	}
@@ -243,11 +248,11 @@ func TestModelRunsTaskActionsForSelection(t *testing.T) {
 	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, refreshMsg{})
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("p")})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("d")})
+	model = updateModel(t, model, keyText("p"))
+	model = updateModel(t, model, keyText("r"))
+	model = updateModel(t, model, keyText("d"))
+	model = updateModel(t, model, keySpecial(tea.KeyDown))
+	model = updateModel(t, model, keyText("d"))
 
 	if strings.Join(service.paused, ",") != "a1" {
 		t.Fatalf("paused got %#v", service.paused)
@@ -272,8 +277,8 @@ func TestModelPagesStoppedDownloads(t *testing.T) {
 	model := NewModel(service, time.Second, "dev")
 
 	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("n")})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("b")})
+	model = updateModel(t, model, keyText("n"))
+	model = updateModel(t, model, keyText("b"))
 
 	if len(service.listOptions) != 3 {
 		t.Fatalf("expected three list calls, got %d", len(service.listOptions))
@@ -287,7 +292,7 @@ func TestModelPagesStoppedDownloads(t *testing.T) {
 	if service.listOptions[2].StoppedOffset != 0 {
 		t.Fatalf("previous page stopped offset got %d, want 0", service.listOptions[2].StoppedOffset)
 	}
-	view := model.View()
+	view := viewContent(model)
 	if !strings.Contains(view, "n/b \x1b[2mNext/Prev Page\x1b[22m") {
 		t.Fatalf("view should describe stopped paging controls, got:\n%s", view)
 	}
@@ -306,7 +311,7 @@ func TestModelDisplaysMetadataLabelForMetadataEntries(t *testing.T) {
 	model = updateModel(t, model, tea.WindowSizeMsg{Width: 140, Height: 16})
 	model = updateModel(t, model, refreshMsg{})
 
-	view := model.View()
+	view := viewContent(model)
 	if !strings.Contains(view, "Metadata") {
 		t.Fatalf("view should show 'Metadata' status for metadata entries:\n%s", view)
 	}
@@ -332,7 +337,7 @@ func TestModelOpensAndClosesDetailView(t *testing.T) {
 	}
 	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	model = updateModel(t, model, keyText("l"))
 
 	if service.detailCalls != 1 {
 		t.Fatalf("expected detail call, got %d", service.detailCalls)
@@ -340,17 +345,18 @@ func TestModelOpensAndClosesDetailView(t *testing.T) {
 	if model.Mode() != ModeDetail {
 		t.Fatalf("mode got %s, want detail", model.Mode())
 	}
-	if !strings.Contains(model.View(), "active.iso") {
-		t.Fatalf("detail view missing name in header:\n%s", model.View())
+	view := viewContent(model)
+	if !strings.Contains(view, "active.iso") {
+		t.Fatalf("detail view missing name in header:\n%s", view)
 	}
-	if !strings.Contains(model.View(), "[Active]") {
-		t.Fatalf("detail view missing status in header:\n%s", model.View())
+	if !strings.Contains(view, "[Active]") {
+		t.Fatalf("detail view missing status in header:\n%s", view)
 	}
-	if !strings.Contains(model.View(), "\x1b[2mDownload Dir:") {
-		t.Fatalf("detail view missing dim download directory:\n%s", model.View())
+	if !strings.Contains(view, "\x1b[2mDownload Dir:") {
+		t.Fatalf("detail view missing dim download directory:\n%s", view)
 	}
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("h")})
+	model = updateModel(t, model, keyText("h"))
 	if model.Mode() != ModeList {
 		t.Fatalf("mode got %s, want list", model.Mode())
 	}
@@ -383,8 +389,8 @@ func TestModelNavigatesAdjacentDetailsWithJK(t *testing.T) {
 	}
 	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	model = updateModel(t, model, keySpecial(tea.KeyEnter))
+	model = updateModel(t, model, keyText("j"))
 
 	if got := model.Selected().GID; got != "a2" {
 		t.Fatalf("selected gid got %q, want a2", got)
@@ -392,11 +398,12 @@ func TestModelNavigatesAdjacentDetailsWithJK(t *testing.T) {
 	if model.detail.GID != "a2" {
 		t.Fatalf("detail gid got %q, want a2", model.detail.GID)
 	}
-	if !strings.Contains(model.View(), "queued.iso") {
-		t.Fatalf("detail view should update to next item:\n%s", model.View())
+	view := viewContent(model)
+	if !strings.Contains(view, "queued.iso") {
+		t.Fatalf("detail view should update to next item:\n%s", view)
 	}
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("k")})
+	model = updateModel(t, model, keyText("k"))
 	if got := model.Selected().GID; got != "a1" {
 		t.Fatalf("selected gid got %q, want a1", got)
 	}
@@ -420,13 +427,13 @@ func TestModelScrollsDetailWithArrows(t *testing.T) {
 	}
 	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, keySpecial(tea.KeyEnter))
 
 	if model.detailScroll != 0 {
 		t.Fatalf("scroll got %d, want 0", model.detailScroll)
 	}
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyDown})
+	model = updateModel(t, model, keySpecial(tea.KeyDown))
 	if model.detailScroll != 1 {
 		t.Fatalf("scroll got %d, want 1 after down", model.detailScroll)
 	}
@@ -434,7 +441,7 @@ func TestModelScrollsDetailWithArrows(t *testing.T) {
 		t.Fatalf("detail gid changed to %q, down should not switch items", model.detail.GID)
 	}
 
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyUp})
+	model = updateModel(t, model, keySpecial(tea.KeyUp))
 	if model.detailScroll != 0 {
 		t.Fatalf("scroll got %d, want 0 after up", model.detailScroll)
 	}
@@ -449,39 +456,55 @@ func TestModelQuitsFromAddAndDetailModes(t *testing.T) {
 	}
 	model := NewModel(service, time.Second, "dev")
 
-	addModel := updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	if !strings.Contains(addModel.View(), "Esc \x1b[2mBack\x1b[22m") || !strings.Contains(addModel.View(), "Ctrl+C \x1b[2mQuit\x1b[22m") {
-		t.Fatalf("add view should mention Ctrl+C Quit, got:\n%s", addModel.View())
+	addModel := updateModel(t, model, keyText("a"))
+	addView := viewContent(addModel)
+	if !strings.Contains(addView, "Esc \x1b[2mBack\x1b[22m") || !strings.Contains(addView, "Ctrl+C \x1b[2mQuit\x1b[22m") {
+		t.Fatalf("add view should mention Ctrl+C Quit, got:\n%s", addView)
 	}
-	addModel = updateModel(t, addModel, tea.KeyMsg{Type: tea.KeyEsc})
+	addModel = updateModel(t, addModel, keySpecial(tea.KeyEsc))
 	if addModel.Mode() != ModeList {
 		t.Fatalf("mode got %s, want list", addModel.Mode())
 	}
 
-	// In input mode, bare runes are typed text and never act as shortcuts:
+	// In input mode, text-producing key presses are treated as typed input and
+	// never act as shortcuts:
 	// pressing "q" must append to the URL field instead of quitting. Only
-	// ctrl+c (a modified combo, not a bare rune) quits from add mode.
-	addModel = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	addModel = updateModel(t, addModel, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	// ctrl+c (a modified combo, not plain text) quits from add mode.
+	addModel = updateModel(t, model, keyText("a"))
+	addModel = updateModel(t, addModel, keyText("q"))
 	if addModel.Mode() != ModeAdd {
 		t.Fatalf("mode got %s, want add after typing q", addModel.Mode())
 	}
 	if got := addModel.addForm.url; got != "q" {
 		t.Fatalf("input got %q, want q (bare runes must be typed, not shortcuts)", got)
 	}
-	_, quitCmd := addModel.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, quitCmd := addModel.Update(keyCtrl('c'))
 	if quitCmd == nil {
 		t.Fatal("expected ctrl+c to quit from add mode")
 	}
 
 	detailModel := updateModel(t, model, refreshMsg{})
-	detailModel = updateModel(t, detailModel, tea.KeyMsg{Type: tea.KeyEnter})
-	if !strings.Contains(detailModel.View(), "Esc/h \x1b[2mBack\x1b[22m") || !strings.Contains(detailModel.View(), "j/k \x1b[2mNext/Prev\x1b[22m") {
-		t.Fatalf("detail view should mention Esc/h Back and j/k Next/Prev, got:\n%s", detailModel.View())
+	detailModel = updateModel(t, detailModel, keySpecial(tea.KeyEnter))
+	detailView := viewContent(detailModel)
+	if !strings.Contains(detailView, "Esc/h \x1b[2mBack\x1b[22m") || !strings.Contains(detailView, "j/k \x1b[2mNext/Prev\x1b[22m") {
+		t.Fatalf("detail view should mention Esc/h Back and j/k Next/Prev, got:\n%s", detailView)
 	}
-	_, detailCommand := detailModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("q")})
+	_, detailCommand := detailModel.Update(keyText("q"))
 	if detailCommand == nil {
 		t.Fatal("expected q to quit from detail mode")
+	}
+}
+
+func TestModelAcceptsPastedInputInAddMode(t *testing.T) {
+	service := &fakeService{}
+	model := NewModel(service, time.Second, "dev")
+
+	model = updateModel(t, model, keyText("a"))
+	model = updateModel(t, model, tea.PasteMsg{Content: "https://example.com/file.zip"})
+	model = updateModel(t, model, keySpecial(tea.KeyEnter))
+
+	if len(service.added) != 1 || service.added[0] != "https://example.com/file.zip" {
+		t.Fatalf("unexpected added URIs after paste: %#v", service.added)
 	}
 }
 
@@ -494,9 +517,9 @@ func TestModelDetailHelpUsesGenericFileManagerLabel(t *testing.T) {
 	}
 	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
+	model = updateModel(t, model, keySpecial(tea.KeyEnter))
 
-	view := model.View()
+	view := viewContent(model)
 	if !strings.Contains(view, "o \x1b[2mOpen in File Manager\x1b[22m") {
 		t.Fatalf("detail view should use a generic file-manager label, got:\n%s", view)
 	}
@@ -529,8 +552,8 @@ func TestModelShowsOpenErrorInsteadOfSilentlyIgnoringIt(t *testing.T) {
 
 	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	model = updateModel(t, model, keySpecial(tea.KeyEnter))
+	model = updateModel(t, model, keyText("o"))
 
 	if model.ErrorInfo() == "" {
 		t.Fatal("expected open command failure to surface through error info")
@@ -572,8 +595,8 @@ func TestModelUsesXDGOpenForLinuxDetailOpen(t *testing.T) {
 
 	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyEnter})
-	model = updateModel(t, model, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("o")})
+	model = updateModel(t, model, keySpecial(tea.KeyEnter))
+	model = updateModel(t, model, keyText("o"))
 
 	if gotName != "xdg-open" {
 		t.Fatalf("command got %q, want xdg-open", gotName)
@@ -587,6 +610,30 @@ func updateModel(t *testing.T, model Model, msg tea.Msg) Model {
 	t.Helper()
 	updated, _ := model.Update(msg)
 	return updated.(Model)
+}
+
+func viewContent(model Model) string {
+	return model.View().Content
+}
+
+func keyText(text string) tea.KeyPressMsg {
+	code := tea.KeyExtended
+	runes := []rune(text)
+	if len(runes) == 1 {
+		code = runes[0]
+	}
+	return tea.KeyPressMsg{
+		Code: code,
+		Text: text,
+	}
+}
+
+func keySpecial(code rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: code}
+}
+
+func keyCtrl(code rune) tea.KeyPressMsg {
+	return tea.KeyPressMsg{Code: code, Mod: tea.ModCtrl}
 }
 
 func withDownloadDir(t *testing.T, detail aria2.DownloadDetail, dir string) aria2.DownloadDetail {

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/amio/aria2s/internal/aria2"
 )
@@ -152,9 +152,11 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.width = msg.Width
 		model.height = msg.Height
 		return model, nil
+	case tea.PasteMsg:
+		return model.handlePaste(msg)
 	case clipboardContentMsg:
 		return model.handleClipboardAdd(msg)
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return model.handleKey(msg)
 	}
 	return model, nil
@@ -190,15 +192,15 @@ func (model Model) refresh() Model {
 	return model
 }
 
-func (model Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
-	// Input guard: in input modes, bare-rune keys are always treated as
-	// typed text and never reach a mode handler's shortcut switch. This
-	// structurally prevents single-char shortcuts (e.g. "q" to quit) from
-	// firing while a text field is focused, without each handler opting
-	// out. Modified combos (ctrl+c) and special keys (esc, enter, tab,
-	// ...) are not bare runes and reach the mode handlers normally.
-	if isInputMode(model.mode) && isBareRune(key) {
-		return model.handleInputRune(key)
+func (model Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	// Input guard: in input modes, text-producing key presses are always
+	// treated as typed input and never reach a mode handler's shortcut
+	// switch. This structurally prevents single-char shortcuts (e.g. "q" to
+	// quit) from firing while a text field is focused, without each handler
+	// opting out. Modified combos (ctrl+c) and special keys (esc, enter,
+	// tab, ...) have no text payload and reach the mode handlers normally.
+	if isInputMode(model.mode) && isTextInputKey(key) {
+		return model.handleInputTextKey(key)
 	}
 	switch model.mode {
 	case ModeAdd:
@@ -210,19 +212,27 @@ func (model Model) handleKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 }
 
-/*
-* handleInputRune routes a bare-rune key to the focused text field of
-the current input mode. It is the only path by which typed characters
-reach input fields, keeping field routing out of handleKey.
-*/
-func (model Model) handleInputRune(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+// handleInputTextKey routes a text-producing key to the focused text field of
+// the current input mode. It is the only path by which direct text entry
+// reaches input fields, keeping field routing out of handleKey.
+func (model Model) handleInputTextKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if model.mode == ModeAdd {
 		return model.applyAddForm(model.addForm.HandleKey(key))
 	}
 	return model, nil
 }
 
-func (model Model) handleListKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (model Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
+	if !isInputMode(model.mode) {
+		return model, nil
+	}
+	if model.mode == ModeAdd {
+		return model.applyAddForm(model.addForm.HandlePaste(msg.Content))
+	}
+	return model, nil
+}
+
+func (model Model) handleListKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "ctrl+c", "q":
 		return model, tea.Quit
@@ -271,7 +281,7 @@ func (model Model) handleListKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return model, nil
 }
 
-func (model Model) handleAddKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (model Model) handleAddKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return model.applyAddForm(model.addForm.HandleKey(key))
 }
 
@@ -301,7 +311,7 @@ func (model Model) applyAddForm(form AddForm, cmd tea.Cmd, action AddFormAction)
 	}
 }
 
-func (model Model) handleDetailKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (model Model) handleDetailKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch key.String() {
 	case "q", "ctrl+c":
 		return model, tea.Quit

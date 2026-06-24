@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/amio/aria2s/internal/aria2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -47,15 +48,19 @@ var (
 	errorTextColor    = rgb{255, 125, 125}
 )
 
-func (model Model) View() string {
+func (model Model) View() tea.View {
+	var content string
 	switch model.mode {
 	case ModeAdd:
-		return model.addView()
+		content = model.addView()
 	case ModeDetail:
-		return model.detailView()
+		content = model.detailView()
 	default:
-		return model.listView()
+		content = model.listView()
 	}
+	view := tea.NewView(content)
+	view.AltScreen = true
+	return view
 }
 
 func (model Model) listView() string {

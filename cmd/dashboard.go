@@ -3,7 +3,7 @@ package cmd
 import (
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 
 	"github.com/amio/aria2s/internal/app"
 	"github.com/amio/aria2s/internal/tui"
@@ -11,7 +11,7 @@ import (
 )
 
 func defaultDashboardRunner(application *app.App) error {
-	program := tea.NewProgram(tui.NewModel(application, time.Second, Version), tea.WithAltScreen())
+	program := tea.NewProgram(tui.NewModel(application, time.Second, Version))
 	_, err := program.Run()
 	return err
 }

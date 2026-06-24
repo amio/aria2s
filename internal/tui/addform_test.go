@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestAddFormTabCyclesRecents(t *testing.T) {
@@ -13,12 +13,12 @@ func TestAddFormTabCyclesRecents(t *testing.T) {
 		"/data/Music",
 	})
 
-	form, _, _ = stepKey(form, tea.KeyMsg{Type: tea.KeyTab}) // URL -> Dir
-	form, _, _ = stepKey(form, tea.KeyMsg{Type: tea.KeyTab}) // pick 1st
+	form, _, _ = stepKey(form, keySpecial(tea.KeyTab)) // URL -> Dir
+	form, _, _ = stepKey(form, keySpecial(tea.KeyTab)) // pick 1st
 	if form.dir != "/data/Movies" {
 		t.Fatalf("first tab got %q, want /data/Movies", form.dir)
 	}
-	form, _, _ = stepKey(form, tea.KeyMsg{Type: tea.KeyTab}) // pick 2nd
+	form, _, _ = stepKey(form, keySpecial(tea.KeyTab)) // pick 2nd
 	if form.dir != "/data/Music" {
 		t.Fatalf("second tab got %q, want /data/Music", form.dir)
 	}
@@ -29,7 +29,7 @@ func TestAddFormSubmitReturnsTrimmedValues(t *testing.T) {
 	form.url = "  https://example.com  "
 	form.dir = "  /data/Movies  "
 
-	form, _, action := stepKey(form, tea.KeyMsg{Type: tea.KeyEnter})
+	form, _, action := stepKey(form, keySpecial(tea.KeyEnter))
 	if action != AddFormSubmit {
 		t.Fatalf("action got %v, want submit", action)
 	}
@@ -74,6 +74,6 @@ func TestAddFormBodyLinesIncludeRecentsWhenDirFocused(t *testing.T) {
 	}
 }
 
-func stepKey(form AddForm, key tea.KeyMsg) (AddForm, tea.Cmd, AddFormAction) {
+func stepKey(form AddForm, key tea.KeyPressMsg) (AddForm, tea.Cmd, AddFormAction) {
 	return form.HandleKey(key)
 }

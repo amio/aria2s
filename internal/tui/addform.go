@@ -4,8 +4,9 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 const cursorBlinkInterval = 530 * time.Millisecond
@@ -29,9 +30,9 @@ const (
 
 type cursorBlinkMsg struct{}
 
-/** AddForm owns the add-download form: two text fields, recent-dir
-picker, focus, and cursor blink. Rendering and input behavior are
-encapsulated here; Model only wires it to mode transitions and RPC. */
+// AddForm owns the add-download form: two text fields, recent-dir picker,
+// focus, and cursor blink. Rendering and input behavior are encapsulated
+// here; Model only wires it to mode transitions and RPC.
 type AddForm struct {
 	url           string
 	dir           string
@@ -81,8 +82,8 @@ func (form AddForm) Values() (uri string, dir string) {
 
 func (form AddForm) URLField() TextField {
 	return TextField{
-		Label:  "URL",
-		Value:  form.url,
+		Label:   "URL",
+		Value:   form.url,
 		Focused: form.focus == focusURL,
 	}
 }
@@ -120,7 +121,7 @@ func (form AddForm) BodyLines() []string {
 	return lines
 }
 
-func (form AddForm) HandleKey(key tea.KeyMsg) (AddForm, tea.Cmd, AddFormAction) {
+func (form AddForm) HandleKey(key tea.KeyPressMsg) (AddForm, tea.Cmd, AddFormAction) {
 	switch key.String() {
 	case "ctrl+c":
 		return form, nil, AddFormQuit
@@ -133,47 +134,69 @@ func (form AddForm) HandleKey(key tea.KeyMsg) (AddForm, tea.Cmd, AddFormAction) 
 	return form.handleURLKey(key)
 }
 
-func (form AddForm) handleURLKey(key tea.KeyMsg) (AddForm, tea.Cmd, AddFormAction) {
-	switch key.Type {
-	case tea.KeyTab:
+func (form AddForm) HandlePaste(content string) (AddForm, tea.Cmd, AddFormAction) {
+	text := strings.NewReplacer("\r\n", "", "\n", "", "\r", "").Replace(content)
+	if text == "" {
+		return form, nil, AddFormNone
+	}
+	if form.focus == focusDir {
+		form.dir += text
+		form.dirPick = -1
+		return form, nil, AddFormNone
+	}
+	form.url += text
+	return form, nil, AddFormNone
+}
+
+func (form AddForm) handleURLKey(key tea.KeyPressMsg) (AddForm, tea.Cmd, AddFormAction) {
+	switch key.String() {
+	case "tab":
 		form.focus = focusDir
 		form.dirPick = -1
 		form.cursorVisible = true
-	case tea.KeyEnter:
+	case "enter":
 		return form, nil, AddFormSubmit
-	case tea.KeyBackspace:
-		if form.url != "" {
-			form.url = form.url[:len(form.url)-1]
+	case "backspace":
+		form.url = trimLastRune(form.url)
+	default:
+		if key.Text != "" {
+			form.url += key.Text
 		}
-	case tea.KeyRunes:
-		form.url += string(key.Runes)
 	}
 	return form, nil, AddFormNone
 }
 
-func (form AddForm) handleDirKey(key tea.KeyMsg) (AddForm, tea.Cmd, AddFormAction) {
-	switch key.Type {
-	case tea.KeyShiftTab:
+func (form AddForm) handleDirKey(key tea.KeyPressMsg) (AddForm, tea.Cmd, AddFormAction) {
+	switch key.String() {
+	case "shift+tab":
 		form.focus = focusURL
 		form.cursorVisible = true
-	case tea.KeyTab:
+	case "tab":
 		form.cycleRecents()
-	case tea.KeyEnter:
+	case "enter":
 		return form, nil, AddFormSubmit
-	case tea.KeyBackspace:
-		if form.dir != "" {
-			form.dir = form.dir[:len(form.dir)-1]
-		}
+	case "backspace":
+		form.dir = trimLastRune(form.dir)
 		form.dirPick = -1
-	case tea.KeyUp:
+	case "up":
 		form.navigateRecents(false)
-	case tea.KeyDown:
+	case "down":
 		form.navigateRecents(true)
-	case tea.KeyRunes:
-		form.dir += string(key.Runes)
-		form.dirPick = -1
+	default:
+		if key.Text != "" {
+			form.dir += key.Text
+			form.dirPick = -1
+		}
 	}
 	return form, nil, AddFormNone
+}
+
+func trimLastRune(text string) string {
+	if text == "" {
+		return ""
+	}
+	_, size := utf8.DecodeLastRuneInString(text)
+	return text[:len(text)-size]
 }
 
 func (form *AddForm) cycleRecents() {
@@ -200,4 +223,3 @@ func (form *AddForm) navigateRecents(down bool) {
 	}
 	form.dir = form.recentDirs[form.dirPick]
 }
-

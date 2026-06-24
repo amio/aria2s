@@ -59,6 +59,8 @@ make build        # build
 make test         # run all tests
 ```
 
+Dashboard runtime migration notes live in `docs/implemented/bubbletea-v2-upgrade.md`.
+
 Smoke-test in an isolated environment:
 
 > Linux note: service startup still needs a live `systemd --user` session even when `HOME` is overridden for an isolated test directory.
