@@ -150,7 +150,7 @@ func (client *RPCClient) GetURIs(ctx context.Context, gid string) ([]rawURI, err
 
 func (client *RPCClient) Pause(ctx context.Context, gid string) error {
 	var ignored string
-	return client.call(ctx, "aria2.pause", []any{gid}, &ignored)
+	return client.call(ctx, "aria2.forcePause", []any{gid}, &ignored)
 }
 
 func (client *RPCClient) Resume(ctx context.Context, gid string) error {
