@@ -6,7 +6,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/amio/aria2s/internal/aria2"
 	"github.com/amio/aria2s/internal/paths"
 	"github.com/amio/aria2s/internal/state"
 )
@@ -50,12 +49,6 @@ func Check(ctx context.Context, options Options) Report {
 	}
 	if options.IsPortAvailable != nil && !options.IsPortAvailable(current.RPCPort) && !managedServiceOwnsPort(ctx, options, current) {
 		issues = append(issues, Issue{Message: "port conflict"})
-	}
-	values, err := aria2.ReadConfig(current.ConfigPath)
-	if err != nil {
-		issues = append(issues, Issue{Message: "config unreadable"})
-	} else if aria2.HasManagedDrift(values, current) {
-		issues = append(issues, Issue{Message: "managed config drift"})
 	}
 	return Report{Healthy: len(issues) == 0, Issues: issues}
 }

@@ -12,7 +12,9 @@ import (
 func TestRenderLaunchAgentUsesAbsoluteAria2cPathWithoutShell(t *testing.T) {
 	current := state.State{
 		Aria2cPath:   "/opt/homebrew/bin/aria2c",
-		ConfigPath:   "/Users/amio/Library/Application Support/aria2s/aria2.conf",
+		RPCPort:      6800,
+		RPCSecret:    "secret-token",
+		SessionPath:  "/Users/amio/Library/Application Support/aria2s/session",
 		LogPath:      "/Users/amio/Library/Logs/aria2s/aria2.log",
 		ErrorLogPath: "/Users/amio/Library/Logs/aria2s/aria2.err.log",
 		ServiceName:  "io.github.amio.aria2s",
@@ -25,7 +27,14 @@ func TestRenderLaunchAgentUsesAbsoluteAria2cPathWithoutShell(t *testing.T) {
 
 	assertContains(t, rendered, "<key>ProgramArguments</key>")
 	assertContains(t, rendered, "<string>/opt/homebrew/bin/aria2c</string>")
-	assertContains(t, rendered, "<string>--conf-path=/Users/amio/Library/Application Support/aria2s/aria2.conf</string>")
+	assertContains(t, rendered, "<string>--enable-rpc=true</string>")
+	assertContains(t, rendered, "<string>--rpc-listen-all=false</string>")
+	assertContains(t, rendered, "<string>--rpc-listen-port=6800</string>")
+	assertContains(t, rendered, "<string>--rpc-secret=secret-token</string>")
+	assertContains(t, rendered, "<string>--input-file=/Users/amio/Library/Application Support/aria2s/session</string>")
+	assertContains(t, rendered, "<string>--save-session=/Users/amio/Library/Application Support/aria2s/session</string>")
+	assertContains(t, rendered, "<string>--force-save=true</string>")
+	assertContains(t, rendered, "<string>--save-session-interval=60</string>")
 	assertContains(t, rendered, "<key>RunAtLoad</key>")
 	assertContains(t, rendered, "<false/>")
 	assertContains(t, rendered, "<key>KeepAlive</key>")

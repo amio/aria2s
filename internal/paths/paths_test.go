@@ -14,7 +14,7 @@ func TestNewDarwinBuildsStage1PathsUnderHome(t *testing.T) {
 
 	assertEqual(t, got.ServiceName, "io.github.amio.aria2s")
 	assertEqual(t, got.ServiceFile, filepath.Join(home, "Library", "LaunchAgents", "io.github.amio.aria2s.plist"))
-	assertEqual(t, got.ConfigFile, filepath.Join(home, "Library", "Application Support", "aria2s", "aria2.conf"))
+	assertEqual(t, got.ConfigFile, filepath.Join(home, ".aria2", "aria2.conf"))
 	assertEqual(t, got.StateFile, filepath.Join(home, "Library", "Application Support", "aria2s", "state.json"))
 	assertEqual(t, got.SessionFile, filepath.Join(home, "Library", "Application Support", "aria2s", "session"))
 	assertEqual(t, got.LogFile, filepath.Join(home, "Library", "Logs", "aria2s", "aria2.log"))
@@ -28,7 +28,7 @@ func TestNewLinuxBuildsStage1PathsUnderHome(t *testing.T) {
 
 	assertEqual(t, got.ServiceName, "aria2s.service")
 	assertEqual(t, got.ServiceFile, filepath.Join(home, ".config", "systemd", "user", "aria2s.service"))
-	assertEqual(t, got.ConfigFile, filepath.Join(home, ".config", "aria2s", "aria2.conf"))
+	assertEqual(t, got.ConfigFile, filepath.Join(home, ".aria2", "aria2.conf"))
 	assertEqual(t, got.StateFile, filepath.Join(home, ".local", "state", "aria2s", "state.json"))
 	assertEqual(t, got.SessionFile, filepath.Join(home, ".local", "state", "aria2s", "session"))
 	assertEqual(t, got.LogFile, filepath.Join(home, ".local", "state", "aria2s", "aria2.log"))

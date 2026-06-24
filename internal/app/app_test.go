@@ -147,26 +147,46 @@ func TestStartFailsWhenStoredAria2cIsMissing(t *testing.T) {
 	}
 }
 
-func TestRestartFailsWhenManagedConfigDrifted(t *testing.T) {
+func TestEnsureDashboardReadyIgnoresMissingUserConfig(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
 	writeInstalledStateAndConfig(t, servicePaths, aria2c)
-	if err := aria2.WriteConfig(servicePaths.ConfigFile, "rpc-listen-port=9999\nrpc-secret=wrong\n"); err != nil {
-		t.Fatalf("write drifted config: %v", err)
+	if err := touch0600ForTest(servicePaths.SessionFile); err != nil {
+		t.Fatalf("touch session: %v", err)
 	}
-	serviceBackend := &recordingService{}
-	application := newTestApp(servicePaths, aria2c, serviceBackend, fixedRPC{version: "1.37.0"}, app.Options{})
-
-	err := application.Restart(context.Background())
-
-	if err == nil {
-		t.Fatal("expected config drift to fail restart")
+	if err := os.MkdirAll(filepath.Dir(servicePaths.LogFile), 0o755); err != nil {
+		t.Fatalf("mkdir log dir: %v", err)
 	}
-	assertContains(t, err.Error(), "managed config drift")
-	assertContains(t, err.Error(), "aria2s install")
+	current, err := state.Load(servicePaths.StateFile)
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+	plist, err := service.RenderLaunchAgent(current)
+	if err != nil {
+		t.Fatalf("render plist: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+		t.Fatalf("mkdir service dir: %v", err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, []byte(plist), 0o644); err != nil {
+		t.Fatalf("write plist: %v", err)
+	}
+	serviceBackend := &recordingService{loaded: true, running: true}
+	rpc := &flakyRPC{version: "1.37.0"}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
+		RPCReadyTimeout: time.Second,
+		RPCPollInterval: time.Nanosecond,
+	})
+
+	if err := application.EnsureDashboardReady(context.Background()); err != nil {
+		t.Fatalf("ensure dashboard ready: %v", err)
+	}
 	if len(serviceBackend.calls) != 0 {
 		t.Fatalf("expected no service calls, got %v", serviceBackend.calls)
+	}
+	if rpc.versionCalls != 1 {
+		t.Fatalf("expected one readiness probe, got %d", rpc.versionCalls)
 	}
 }
 
@@ -353,13 +373,13 @@ func TestRestartWaitsThroughShutdownTransitionWhenRPCIsAlreadyUnavailable(t *tes
 	}
 }
 
-func TestInstallStartGracefullyRestartsRunningServiceWhenManagedConfigChanges(t *testing.T) {
+func TestInstallStartIgnoresExistingUserConfigChanges(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
 	current := writeInstalledStateAndConfig(t, servicePaths, aria2c)
-	if err := aria2.WriteConfig(servicePaths.ConfigFile, "rpc-listen-port=9999\nrpc-secret=wrong\n"); err != nil {
-		t.Fatalf("write drifted config: %v", err)
+	if err := aria2.WriteConfig(servicePaths.ConfigFile, "dir=/tmp/custom\nsplit=16\n"); err != nil {
+		t.Fatalf("write custom config: %v", err)
 	}
 	plist, err := service.RenderLaunchAgent(current)
 	if err != nil {
@@ -370,6 +390,12 @@ func TestInstallStartGracefullyRestartsRunningServiceWhenManagedConfigChanges(t 
 	}
 	if err := os.WriteFile(servicePaths.ServiceFile, []byte(plist), 0o644); err != nil {
 		t.Fatalf("write plist: %v", err)
+	}
+	if err := touch0600ForTest(servicePaths.SessionFile); err != nil {
+		t.Fatalf("touch session: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.LogFile), 0o755); err != nil {
+		t.Fatalf("mkdir log dir: %v", err)
 	}
 	events := []string{}
 	serviceBackend := &recordingService{loaded: true, running: true, events: &events}
@@ -383,11 +409,11 @@ func TestInstallStartGracefullyRestartsRunningServiceWhenManagedConfigChanges(t 
 		t.Fatalf("install --start: %v", err)
 	}
 
-	if rpc.saveSessionCalls != 1 || rpc.shutdownCalls != 1 {
-		t.Fatalf("expected one saveSession and one shutdown, got save=%d shutdown=%d", rpc.saveSessionCalls, rpc.shutdownCalls)
+	if rpc.saveSessionCalls != 0 || rpc.shutdownCalls != 0 {
+		t.Fatalf("expected no graceful restart, got save=%d shutdown=%d", rpc.saveSessionCalls, rpc.shutdownCalls)
 	}
-	if strings.Join(events, ",") != "saveSession,shutdown,start,version" {
-		t.Fatalf("expected graceful restart sequence after config repair, got %v", events)
+	if strings.Join(events, ",") != "version" {
+		t.Fatalf("expected config changes to be ignored, got %v", events)
 	}
 }
 
@@ -397,7 +423,7 @@ func TestInstallWritesSystemdUnitForLinuxPaths(t *testing.T) {
 	servicePaths := paths.Paths{
 		ServiceName:  "aria2s.service",
 		ServiceFile:  filepath.Join(home, ".config", "systemd", "user", "aria2s.service"),
-		ConfigFile:   filepath.Join(home, ".config", "aria2s", "aria2.conf"),
+		ConfigFile:   filepath.Join(home, ".aria2", "aria2.conf"),
 		StateFile:    filepath.Join(home, ".local", "state", "aria2s", "state.json"),
 		SessionFile:  filepath.Join(home, ".local", "state", "aria2s", "session"),
 		LogFile:      filepath.Join(home, ".local", "state", "aria2s", "aria2.log"),
@@ -407,6 +433,9 @@ func TestInstallWritesSystemdUnitForLinuxPaths(t *testing.T) {
 	application := newTestApp(servicePaths, aria2c, &recordingService{}, fixedRPC{version: "1.37.0"}, app.Options{
 		DownloadDir:   filepath.Join(root, "downloads"),
 		RenderService: service.RenderSystemdUnit,
+		IsPortAvailable: func(int) bool {
+			return true
+		},
 	})
 
 	if err := application.Install(context.Background(), false); err != nil {
@@ -421,7 +450,7 @@ func TestInstallWritesSystemdUnitForLinuxPaths(t *testing.T) {
 	text := string(unit)
 	assertContains(t, text, "[Unit]")
 	assertContains(t, text, "Description=aria2 RPC service managed by aria2s")
-	assertContains(t, text, "ExecStart="+aria2c+" --conf-path="+servicePaths.ConfigFile)
+	assertContains(t, text, "ExecStart="+aria2c+" --enable-rpc=true --rpc-listen-all=false --rpc-listen-port=6800 --rpc-secret=secret-token --input-file="+servicePaths.SessionFile+" --save-session="+servicePaths.SessionFile+" --force-save=true --save-session-interval=60")
 	assertContains(t, text, "WantedBy=default.target")
 }
 
@@ -462,7 +491,6 @@ func TestInstallReloadsLoadedServiceWhenPlistChanges(t *testing.T) {
 		Aria2cPath:   aria2c,
 		RPCPort:      6800,
 		RPCSecret:    "secret-token",
-		ConfigPath:   servicePaths.ConfigFile,
 		SessionPath:  servicePaths.SessionFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,
@@ -498,7 +526,6 @@ func TestInstallStartGracefullyStopsRunningServiceBeforeReloadingChangedPlist(t 
 		Aria2cPath:   aria2c,
 		RPCPort:      6800,
 		RPCSecret:    "secret-token",
-		ConfigPath:   servicePaths.ConfigFile,
 		SessionPath:  servicePaths.SessionFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,
@@ -541,7 +568,6 @@ func TestInstallPreservesRunningServiceAcrossChangedPlistWithoutStartFlag(t *tes
 		Aria2cPath:   aria2c,
 		RPCPort:      6800,
 		RPCSecret:    "secret-token",
-		ConfigPath:   servicePaths.ConfigFile,
 		SessionPath:  servicePaths.SessionFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,
@@ -590,7 +616,7 @@ func TestUninstallRemovesPlistWhenServiceAlreadyUnloaded(t *testing.T) {
 	}
 }
 
-func TestInstallRepairsFilesWithoutBootstrappingWhenServiceAlreadyLoaded(t *testing.T) {
+func TestInstallWritesDefaultConfigWithoutBootstrappingWhenServiceAlreadyLoaded(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
@@ -598,7 +624,6 @@ func TestInstallRepairsFilesWithoutBootstrappingWhenServiceAlreadyLoaded(t *test
 		Aria2cPath:   aria2c,
 		RPCPort:      6800,
 		RPCSecret:    "secret-token",
-		ConfigPath:   servicePaths.ConfigFile,
 		SessionPath:  servicePaths.SessionFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,
@@ -606,9 +631,6 @@ func TestInstallRepairsFilesWithoutBootstrappingWhenServiceAlreadyLoaded(t *test
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
-	}
-	if err := aria2.WriteConfig(servicePaths.ConfigFile, "rpc-listen-port=9999\nrpc-secret=wrong\n"); err != nil {
-		t.Fatalf("write drifted config: %v", err)
 	}
 	plist, err := service.RenderLaunchAgent(current)
 	if err != nil {
@@ -624,26 +646,29 @@ func TestInstallRepairsFilesWithoutBootstrappingWhenServiceAlreadyLoaded(t *test
 	application := newTestApp(servicePaths, aria2c, loadedService, fixedRPC{version: "1.37.0"}, app.Options{})
 
 	if err := application.Install(context.Background(), false); err != nil {
-		t.Fatalf("install should repair loaded service without bootstrap: %v", err)
+		t.Fatalf("install should write default config without bootstrap: %v", err)
 	}
 	if loadedService.installCalls != 0 {
 		t.Fatalf("expected no bootstrap for already loaded service, got %d calls", loadedService.installCalls)
 	}
 
-	values, err := aria2.ReadConfig(servicePaths.ConfigFile)
+	config, err := os.ReadFile(servicePaths.ConfigFile)
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
-	if aria2.HasManagedDrift(values, current) {
-		t.Fatal("expected install to repair managed config drift")
-	}
+	assertContains(t, string(config), "dir=")
+	assertContains(t, string(config), "continue=true")
+	assertNotContains(t, string(config), "rpc-secret")
 }
 
-func TestInstallSkipsRewritesWhenAlreadyInstalled(t *testing.T) {
+func TestInstallLeavesExistingConfigUntouchedWhenAlreadyInstalled(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
 	current := writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	if err := aria2.WriteConfig(servicePaths.ConfigFile, "dir=/tmp/custom\nsplit=16\n"); err != nil {
+		t.Fatalf("write existing config: %v", err)
+	}
 	if err := touch0600ForTest(servicePaths.SessionFile); err != nil {
 		t.Fatalf("touch session: %v", err)
 	}
@@ -703,7 +728,6 @@ func writeInstalledStateAndConfig(t *testing.T, servicePaths paths.Paths, aria2c
 		Aria2cPath:   aria2c,
 		RPCPort:      6800,
 		RPCSecret:    "secret-token",
-		ConfigPath:   servicePaths.ConfigFile,
 		SessionPath:  servicePaths.SessionFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,
@@ -711,14 +735,6 @@ func writeInstalledStateAndConfig(t *testing.T, servicePaths paths.Paths, aria2c
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
-	}
-	if err := aria2.WriteConfig(servicePaths.ConfigFile, aria2.BuildConfig(aria2.ManagedConfig{
-		RPCPort:     current.RPCPort,
-		RPCSecret:   current.RPCSecret,
-		SessionFile: current.SessionPath,
-		DownloadDir: filepath.Join(filepath.Dir(servicePaths.ConfigFile), "downloads"),
-	}, nil)); err != nil {
-		t.Fatalf("write config: %v", err)
 	}
 	return current
 }
@@ -1062,5 +1078,12 @@ func assertContains(t *testing.T, text, want string) {
 	t.Helper()
 	if !strings.Contains(text, want) {
 		t.Fatalf("expected %q to contain %q", text, want)
+	}
+}
+
+func assertNotContains(t *testing.T, text, want string) {
+	t.Helper()
+	if strings.Contains(text, want) {
+		t.Fatalf("expected %q not to contain %q", text, want)
 	}
 }

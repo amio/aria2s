@@ -22,7 +22,6 @@ func TestDefaultOptionsForLinuxUseSystemdPathsAndRenderer(t *testing.T) {
 	}
 	unit, err := options.RenderService(state.State{
 		Aria2cPath:   "/usr/bin/aria2c",
-		ConfigPath:   options.Paths.ConfigFile,
 		LogPath:      options.Paths.LogFile,
 		ErrorLogPath: options.Paths.ErrorLogFile,
 	})
@@ -45,7 +44,6 @@ func TestNewInfersLinuxServiceDefaultsFromLinuxPaths(t *testing.T) {
 	}
 	unit, err := application.options.RenderService(state.State{
 		Aria2cPath:   "/usr/bin/aria2c",
-		ConfigPath:   servicePaths.ConfigFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,
 	})

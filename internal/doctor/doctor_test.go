@@ -17,14 +17,13 @@ import (
 	"github.com/amio/aria2s/internal/state"
 )
 
-func TestCheckDetectsMissingBinaryPortConflictAndManagedConfigDrift(t *testing.T) {
+func TestCheckDetectsMissingBinaryAndPortConflict(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	current := state.State{
 		Aria2cPath:   filepath.Join(root, "missing-aria2c"),
 		RPCPort:      6800,
 		RPCSecret:    "secret-token",
-		ConfigPath:   servicePaths.ConfigFile,
 		SessionPath:  servicePaths.SessionFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,
@@ -32,9 +31,6 @@ func TestCheckDetectsMissingBinaryPortConflictAndManagedConfigDrift(t *testing.T
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
-	}
-	if err := aria2.WriteConfig(servicePaths.ConfigFile, "rpc-listen-port=9999\nrpc-secret=wrong\n"); err != nil {
-		t.Fatalf("write config: %v", err)
 	}
 
 	report := doctor.Check(context.Background(), doctor.Options{
@@ -49,7 +45,6 @@ func TestCheckDetectsMissingBinaryPortConflictAndManagedConfigDrift(t *testing.T
 	}
 	assertReportContains(t, report, "missing aria2c binary")
 	assertReportContains(t, report, "port conflict")
-	assertReportContains(t, report, "managed config drift")
 }
 
 func TestCheckDoesNotReportPortConflictWhenManagedRPCIsReachable(t *testing.T) {
@@ -63,7 +58,6 @@ func TestCheckDoesNotReportPortConflictWhenManagedRPCIsReachable(t *testing.T) {
 		Aria2cPath:   aria2c,
 		RPCPort:      6800,
 		RPCSecret:    "secret-token",
-		ConfigPath:   servicePaths.ConfigFile,
 		SessionPath:  servicePaths.SessionFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,
@@ -71,14 +65,6 @@ func TestCheckDoesNotReportPortConflictWhenManagedRPCIsReachable(t *testing.T) {
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
-	}
-	if err := aria2.WriteConfig(servicePaths.ConfigFile, aria2.BuildConfig(aria2.ManagedConfig{
-		RPCPort:     current.RPCPort,
-		RPCSecret:   current.RPCSecret,
-		SessionFile: current.SessionPath,
-		DownloadDir: filepath.Join(root, "Downloads"),
-	}, nil)); err != nil {
-		t.Fatalf("write config: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
 		t.Fatalf("mkdir service dir: %v", err)
@@ -117,7 +103,6 @@ func TestCheckReportsSupervisorDrift(t *testing.T) {
 		Aria2cPath:   aria2c,
 		RPCPort:      6800,
 		RPCSecret:    "secret-token",
-		ConfigPath:   servicePaths.ConfigFile,
 		SessionPath:  servicePaths.SessionFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,
@@ -125,14 +110,6 @@ func TestCheckReportsSupervisorDrift(t *testing.T) {
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
-	}
-	if err := aria2.WriteConfig(servicePaths.ConfigFile, aria2.BuildConfig(aria2.ManagedConfig{
-		RPCPort:     current.RPCPort,
-		RPCSecret:   current.RPCSecret,
-		SessionFile: current.SessionPath,
-		DownloadDir: filepath.Join(root, "Downloads"),
-	}, nil)); err != nil {
-		t.Fatalf("write config: %v", err)
 	}
 
 	report := doctor.Check(context.Background(), doctor.Options{
@@ -164,7 +141,6 @@ func TestCheckReportsNotRunningAndRPCUnreachable(t *testing.T) {
 		Aria2cPath:   aria2c,
 		RPCPort:      6800,
 		RPCSecret:    "secret-token",
-		ConfigPath:   servicePaths.ConfigFile,
 		SessionPath:  servicePaths.SessionFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,
@@ -172,14 +148,6 @@ func TestCheckReportsNotRunningAndRPCUnreachable(t *testing.T) {
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
-	}
-	if err := aria2.WriteConfig(servicePaths.ConfigFile, aria2.BuildConfig(aria2.ManagedConfig{
-		RPCPort:     current.RPCPort,
-		RPCSecret:   current.RPCSecret,
-		SessionFile: current.SessionPath,
-		DownloadDir: filepath.Join(root, "Downloads"),
-	}, nil)); err != nil {
-		t.Fatalf("write config: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
 		t.Fatalf("mkdir service dir: %v", err)
@@ -220,7 +188,6 @@ func TestStatusReportOmitsRPCSecret(t *testing.T) {
 		Aria2cPath:   aria2c,
 		RPCPort:      6800,
 		RPCSecret:    "secret-token",
-		ConfigPath:   servicePaths.ConfigFile,
 		SessionPath:  servicePaths.SessionFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,
@@ -228,14 +195,6 @@ func TestStatusReportOmitsRPCSecret(t *testing.T) {
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
-	}
-	if err := aria2.WriteConfig(servicePaths.ConfigFile, aria2.BuildConfig(aria2.ManagedConfig{
-		RPCPort:     6800,
-		RPCSecret:   "secret-token",
-		SessionFile: servicePaths.SessionFile,
-		DownloadDir: filepath.Join(root, "Downloads"),
-	}, nil)); err != nil {
-		t.Fatalf("write config: %v", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
 		t.Fatalf("mkdir service dir: %v", err)

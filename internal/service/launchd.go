@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/amio/aria2s/internal/aria2"
 	"github.com/amio/aria2s/internal/state"
 )
 
@@ -101,7 +102,9 @@ func RenderLaunchAgent(current state.State) (string, error) {
 	writePlistString(&builder, "Label", current.ServiceName)
 	builder.WriteString("  <key>ProgramArguments</key>\n  <array>\n")
 	writePlistArrayString(&builder, current.Aria2cPath)
-	writePlistArrayString(&builder, "--conf-path="+current.ConfigPath)
+	for _, arg := range aria2.ManagedArgs(current) {
+		writePlistArrayString(&builder, arg)
+	}
 	builder.WriteString("  </array>\n")
 	builder.WriteString("  <key>RunAtLoad</key>\n  <false/>\n")
 	builder.WriteString("  <key>KeepAlive</key>\n  <dict>\n")

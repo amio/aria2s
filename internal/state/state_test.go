@@ -17,7 +17,6 @@ func TestSaveStateWrites0600AndRoundTrips(t *testing.T) {
 		Aria2cPath:   "/opt/homebrew/bin/aria2c",
 		RPCPort:      6800,
 		RPCSecret:    "secret-token",
-		ConfigPath:   servicePaths.ConfigFile,
 		SessionPath:  servicePaths.SessionFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,

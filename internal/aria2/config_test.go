@@ -10,32 +10,18 @@ import (
 	"github.com/amio/aria2s/internal/state"
 )
 
-func TestBuildManagedConfigRepairsManagedKeysButPreservesUserKeys(t *testing.T) {
-	managed := aria2.ManagedConfig{
-		RPCPort:     6800,
-		RPCSecret:   "secret-token",
-		SessionFile: "/tmp/session",
-		DownloadDir: "/tmp/downloads",
-	}
-	current := map[string]string{
-		"dir":                   "/Users/amio/Downloads/custom",
-		"split":                 "16",
-		"rpc-listen-port":       "9999",
-		"save-session-interval": "10",
-	}
+func TestDefaultConfigIncludesFriendlyDefaults(t *testing.T) {
+	rendered := aria2.DefaultConfig("/tmp/downloads")
 
-	rendered := aria2.BuildConfig(managed, current)
-
-	assertContains(t, rendered, "enable-rpc=true")
-	assertContains(t, rendered, "rpc-listen-all=false")
-	assertContains(t, rendered, "rpc-listen-port=6800")
-	assertContains(t, rendered, "rpc-secret=secret-token")
-	assertContains(t, rendered, "input-file=/tmp/session")
-	assertContains(t, rendered, "save-session=/tmp/session")
-	assertContains(t, rendered, "force-save=true")
-	assertContains(t, rendered, "save-session-interval=60")
-	assertContains(t, rendered, "dir=/Users/amio/Downloads/custom")
-	assertContains(t, rendered, "split=16")
+	assertContains(t, rendered, "dir=/tmp/downloads")
+	assertContains(t, rendered, "continue=true")
+	assertContains(t, rendered, "max-concurrent-downloads=5")
+	assertContains(t, rendered, "split=8")
+	assertContains(t, rendered, "max-connection-per-server=8")
+	assertContains(t, rendered, "min-split-size=10M")
+	assertNotContains(t, rendered, "rpc-listen-port")
+	assertNotContains(t, rendered, "rpc-secret")
+	assertNotContains(t, rendered, "save-session")
 }
 
 func TestWriteConfigWrites0600(t *testing.T) {
@@ -54,26 +40,23 @@ func TestWriteConfigWrites0600(t *testing.T) {
 	}
 }
 
-func TestHasManagedDriftDetectsMissingForceSave(t *testing.T) {
+func TestManagedArgsIncludeRPCAndSessionFlags(t *testing.T) {
 	current := state.State{
 		RPCPort:     6800,
 		RPCSecret:   "secret-token",
 		SessionPath: "/tmp/session",
 	}
 
-	values := map[string]string{
-		"enable-rpc":            "true",
-		"rpc-listen-all":        "false",
-		"rpc-listen-port":       "6800",
-		"rpc-secret":            "secret-token",
-		"input-file":            "/tmp/session",
-		"save-session":          "/tmp/session",
-		"save-session-interval": "60",
-	}
+	args := aria2.ManagedArgs(current)
 
-	if !aria2.HasManagedDrift(values, current) {
-		t.Fatal("expected missing force-save to count as managed drift")
-	}
+	assertSliceContains(t, args, "--enable-rpc=true")
+	assertSliceContains(t, args, "--rpc-listen-all=false")
+	assertSliceContains(t, args, "--rpc-listen-port=6800")
+	assertSliceContains(t, args, "--rpc-secret=secret-token")
+	assertSliceContains(t, args, "--input-file=/tmp/session")
+	assertSliceContains(t, args, "--save-session=/tmp/session")
+	assertSliceContains(t, args, "--force-save=true")
+	assertSliceContains(t, args, "--save-session-interval=60")
 }
 
 func assertContains(t *testing.T, text, want string) {
@@ -81,4 +64,21 @@ func assertContains(t *testing.T, text, want string) {
 	if !strings.Contains(text, want) {
 		t.Fatalf("expected %q to contain %q", text, want)
 	}
+}
+
+func assertNotContains(t *testing.T, text, want string) {
+	t.Helper()
+	if strings.Contains(text, want) {
+		t.Fatalf("expected %q not to contain %q", text, want)
+	}
+}
+
+func assertSliceContains(t *testing.T, values []string, want string) {
+	t.Helper()
+	for _, value := range values {
+		if value == want {
+			return
+		}
+	}
+	t.Fatalf("expected %v to contain %q", values, want)
 }

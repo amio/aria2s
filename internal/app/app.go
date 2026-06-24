@@ -52,7 +52,7 @@ type Options struct {
 	RPCReadyTimeout time.Duration
 	RPCPollInterval time.Duration
 	ShutdownTimeout time.Duration
-	DashboardRunner   func(*App) error
+	DashboardRunner func(*App) error
 }
 
 type App struct {
@@ -187,7 +187,6 @@ func (app *App) Install(ctx context.Context, start bool) error {
 	}
 	desired := current
 	desired.Aria2cPath = aria2c
-	desired.ConfigPath = app.options.Paths.ConfigFile
 	desired.SessionPath = app.options.Paths.SessionFile
 	desired.LogPath = app.options.Paths.LogFile
 	desired.ErrorLogPath = app.options.Paths.ErrorLogFile
@@ -206,22 +205,7 @@ func (app *App) Install(ctx context.Context, start bool) error {
 	}
 	stateChanged := !stateExists || !sameState(current, desired)
 	current = desired
-	existingConfig, err := aria2.ReadConfig(current.ConfigPath)
-	if err != nil {
-		return err
-	}
-	managedConfigChanged := aria2.HasManagedDrift(existingConfig, current)
-	downloadDir := app.options.DownloadDir
-	if downloadDir == "" {
-		downloadDir = filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(current.ConfigPath))), "Downloads")
-	}
-	content := aria2.BuildConfig(aria2.ManagedConfig{
-		RPCPort:     current.RPCPort,
-		RPCSecret:   current.RPCSecret,
-		SessionFile: current.SessionPath,
-		DownloadDir: downloadDir,
-	}, existingConfig)
-	configChanged, err := fileContentChanged(current.ConfigPath, content)
+	configNeedsCreate, err := fileMissing(app.options.Paths.ConfigFile)
 	if err != nil {
 		return err
 	}
@@ -242,7 +226,7 @@ func (app *App) Install(ctx context.Context, start bool) error {
 	if err != nil {
 		return err
 	}
-	if !stateChanged && !configChanged && !sessionNeedsRepair && !logDirNeedsCreate && !serviceChanged && serviceLoaded {
+	if !stateChanged && !configNeedsCreate && !sessionNeedsRepair && !logDirNeedsCreate && !serviceChanged && serviceLoaded {
 		if !start {
 			return nil
 		}
@@ -255,8 +239,8 @@ func (app *App) Install(ctx context.Context, start bool) error {
 			return err
 		}
 	}
-	if configChanged {
-		if err := aria2.WriteConfig(current.ConfigPath, content); err != nil {
+	if configNeedsCreate {
+		if err := aria2.WriteConfig(app.options.Paths.ConfigFile, aria2.DefaultConfig(app.defaultDownloadDir())); err != nil {
 			return err
 		}
 	}
@@ -291,19 +275,13 @@ func (app *App) Install(ctx context.Context, start bool) error {
 		}
 	}
 	if app.options.Service != nil {
-		didWaitForRPC := false
 		if !serviceLoaded {
 			if err := app.options.Service.Install(ctx); err != nil {
 				return err
 			}
 		}
 		if start {
-			if serviceWasRunning && managedConfigChanged && !serviceChanged {
-				if err := app.restartServiceGracefully(ctx, current); err != nil {
-					return err
-				}
-				didWaitForRPC = true
-			} else if err := app.options.Service.Start(ctx); err != nil {
+			if err := app.options.Service.Start(ctx); err != nil {
 				return err
 			}
 		} else if serviceWasRunning && serviceChanged {
@@ -312,9 +290,6 @@ func (app *App) Install(ctx context.Context, start bool) error {
 			}
 		}
 		if start {
-			if didWaitForRPC {
-				return nil
-			}
 			return app.waitForRPC(ctx, current)
 		}
 	}
@@ -341,16 +316,6 @@ func (app *App) EnsureDashboardReady(ctx context.Context) error {
 		return fmt.Errorf("load state: %w", err)
 	}
 	if !isExecutable(current.Aria2cPath) {
-		return app.Install(ctx, true)
-	}
-	values, err := aria2.ReadConfig(current.ConfigPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return app.Install(ctx, true)
-		}
-		return err
-	}
-	if aria2.HasManagedDrift(values, current) {
 		return app.Install(ctx, true)
 	}
 	serviceFile, err := app.options.RenderService(current)
@@ -501,7 +466,14 @@ func (app *App) AddURI(ctx context.Context, uri string, opts aria2.AddOptions) (
 }
 
 func (app *App) DefaultDir() string {
-	return app.options.DownloadDir
+	return app.defaultDownloadDir()
+}
+
+func (app *App) defaultDownloadDir() string {
+	if app.options.DownloadDir != "" {
+		return app.options.DownloadDir
+	}
+	return filepath.Join(filepath.Dir(filepath.Dir(app.options.Paths.ConfigFile)), "Downloads")
 }
 
 func (app *App) RecentDirs(context.Context) ([]string, error) {
@@ -623,13 +595,6 @@ func (app *App) preflightLifecycle() (state.State, error) {
 	if !isExecutable(current.Aria2cPath) {
 		return state.State{}, fmt.Errorf("stored aria2c path is not executable: %s", current.Aria2cPath)
 	}
-	values, err := aria2.ReadConfig(current.ConfigPath)
-	if err != nil {
-		return state.State{}, err
-	}
-	if aria2.HasManagedDrift(values, current) {
-		return state.State{}, fmt.Errorf("managed config drift detected; run `aria2s install` to repair %s", current.ConfigPath)
-	}
 	return current, nil
 }
 
@@ -705,6 +670,17 @@ func fileContentChanged(path, content string) (bool, error) {
 		return false, err
 	}
 	return string(data) != content, nil
+}
+
+func fileMissing(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return false, nil
+	}
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	return false, err
 }
 
 func isExecutable(path string) bool {
@@ -823,7 +799,6 @@ func sameState(left, right state.State) bool {
 	if left.Aria2cPath != right.Aria2cPath ||
 		left.RPCPort != right.RPCPort ||
 		left.RPCSecret != right.RPCSecret ||
-		left.ConfigPath != right.ConfigPath ||
 		left.SessionPath != right.SessionPath ||
 		left.LogPath != right.LogPath ||
 		left.ErrorLogPath != right.ErrorLogPath ||

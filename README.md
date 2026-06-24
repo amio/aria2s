@@ -43,14 +43,16 @@ aria2s                     # ensure install/start, open the terminal dashboard
 | Command | What it does |
 |---------|-------------|
 | `aria2s` | Daily entrypoint: ensure the service is installed and running, open the full-screen dashboard. |
-| `aria2s install [--start]` | Set up `aria2c` as a background service through `launchd` on macOS or `systemd --user` on Linux. Re-running it repairs drift and skips work when everything is already aligned. |
+| `aria2s install [--start]` | Set up `aria2c` as a background service through `launchd` on macOS or `systemd --user` on Linux. Re-running it reasserts the managed service state and writes a default `~/.aria2/aria2.conf` only when that file is missing. |
 | `aria2s uninstall` | Remove the registered background service. |
 | `aria2s start` / `stop` / `restart` | Control the background service. `start` returns immediately when the service is already healthy. Stop & restart save the session first. |
 | `aria2s status` | Show service state, port, version, and log paths at a glance. |
-| `aria2s doctor` | Check for common issues (missing binary, port conflicts, config drift). |
+| `aria2s doctor` | Check for common issues (missing binary, port conflicts, unloaded or stopped supervisor). |
 | `aria2s logs` | Print recent log output. |
 | `aria2s add <url-or-magnet>` | Submit a download via RPC — no need to remember the port or token. |
 | `aria2s dashboard` | Explicit dashboard entrypoint. Uses the same auto-install and auto-start readiness flow as bare `aria2s`. |
+
+`aria2s` is a thin wrapper around `aria2c`: user-tuned download settings live in `~/.aria2/aria2.conf`, while the managed RPC and session flags are passed to `aria2c` through the service definition.
 
 ## Development
 

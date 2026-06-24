@@ -140,7 +140,6 @@ func writeInstalledStateAndConfig(t *testing.T, servicePaths paths.Paths, aria2c
 		Aria2cPath:   aria2c,
 		RPCPort:      6800,
 		RPCSecret:    "secret-token",
-		ConfigPath:   servicePaths.ConfigFile,
 		SessionPath:  servicePaths.SessionFile,
 		LogPath:      servicePaths.LogFile,
 		ErrorLogPath: servicePaths.ErrorLogFile,
@@ -148,14 +147,6 @@ func writeInstalledStateAndConfig(t *testing.T, servicePaths paths.Paths, aria2c
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
-	}
-	if err := aria2.WriteConfig(servicePaths.ConfigFile, aria2.BuildConfig(aria2.ManagedConfig{
-		RPCPort:     current.RPCPort,
-		RPCSecret:   current.RPCSecret,
-		SessionFile: current.SessionPath,
-		DownloadDir: filepath.Join(filepath.Dir(servicePaths.ConfigFile), "downloads"),
-	}, nil)); err != nil {
-		t.Fatalf("write config: %v", err)
 	}
 	return current
 }

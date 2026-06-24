@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/amio/aria2s/internal/aria2"
 	"github.com/amio/aria2s/internal/state"
 )
 
@@ -93,9 +94,6 @@ func RenderSystemdUnit(current state.State) (string, error) {
 	if current.Aria2cPath == "" {
 		return "", fmt.Errorf("aria2c path is required")
 	}
-	if current.ConfigPath == "" {
-		return "", fmt.Errorf("config path is required")
-	}
 	var builder strings.Builder
 	builder.WriteString("[Unit]\n")
 	builder.WriteString("Description=aria2 RPC service managed by aria2s\n")
@@ -104,8 +102,10 @@ func RenderSystemdUnit(current state.State) (string, error) {
 	builder.WriteString("Type=simple\n")
 	builder.WriteString("ExecStart=")
 	builder.WriteString(current.Aria2cPath)
-	builder.WriteString(" --conf-path=")
-	builder.WriteString(current.ConfigPath)
+	for _, arg := range aria2.ManagedArgs(current) {
+		builder.WriteByte(' ')
+		builder.WriteString(arg)
+	}
 	builder.WriteString("\n")
 	builder.WriteString("Restart=on-failure\n")
 	builder.WriteString("RestartSec=3\n")

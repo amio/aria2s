@@ -10,7 +10,7 @@ func NewDarwin(home string) Paths {
 	return Paths{
 		ServiceName:  serviceName,
 		ServiceFile:  filepath.Join(home, "Library", "LaunchAgents", serviceName+".plist"),
-		ConfigFile:   filepath.Join(configDir, "aria2.conf"),
+		ConfigFile:   filepath.Join(home, ".aria2", "aria2.conf"),
 		StateFile:    filepath.Join(configDir, "state.json"),
 		SessionFile:  filepath.Join(configDir, "session"),
 		LogFile:      filepath.Join(logDir, "aria2.log"),

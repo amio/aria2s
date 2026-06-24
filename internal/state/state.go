@@ -11,7 +11,6 @@ type State struct {
 	Aria2cPath   string   `json:"aria2cPath"`
 	RPCPort      int      `json:"rpcPort"`
 	RPCSecret    string   `json:"rpcSecret"`
-	ConfigPath   string   `json:"configPath"`
 	SessionPath  string   `json:"sessionPath"`
 	LogPath      string   `json:"logPath"`
 	ErrorLogPath string   `json:"errorLogPath"`
