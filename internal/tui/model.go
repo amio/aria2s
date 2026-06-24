@@ -3,10 +3,12 @@ package tui
 import (
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -77,6 +79,11 @@ type recentDirsMsg struct {
 	err  error
 }
 
+type clipboardContentMsg struct {
+	uri string
+	err error
+}
+
 var runtimeGOOS = runtime.GOOS
 
 var startExternalCommand = func(name string, args ...string) error {
@@ -145,6 +152,8 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.width = msg.Width
 		model.height = msg.Height
 		return model, nil
+	case clipboardContentMsg:
+		return model.handleClipboardAdd(msg)
 	case tea.KeyMsg:
 		return model.handleKey(msg)
 	}
@@ -225,6 +234,8 @@ func (model Model) handleListKey(key tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if model.selected > 0 {
 			model.selected--
 		}
+	case "ctrl+p":
+		return model, readClipboardCommand()
 	case "a":
 		model.mode = ModeAdd
 		model.addForm = NewAddForm(model.service.DefaultDir())
@@ -445,6 +456,80 @@ func loadingTick() tea.Cmd {
 	return tea.Tick(loadingTickInterval, func(time.Time) tea.Msg {
 		return loadingTickMsg{}
 	})
+}
+
+func (model Model) handleClipboardAdd(msg clipboardContentMsg) (tea.Model, tea.Cmd) {
+	if msg.err != nil {
+		model.setError(msg.err)
+		return model, nil
+	}
+
+	// Use the most recent directory as the download target.
+	dirs, err := model.service.RecentDirs(context.Background())
+	lastDir := model.service.DefaultDir()
+	if err == nil && len(dirs) > 0 {
+		lastDir = dirs[0]
+	}
+
+	opts := aria2.AddOptions{}
+	if lastDir != "" {
+		opts.Dir = lastDir
+	}
+
+	_, err = model.service.AddURI(context.Background(), msg.uri, opts)
+	model.setError(err)
+	return model, nil
+}
+
+func readClipboardCommand() tea.Cmd {
+	return func() tea.Msg {
+		content, err := readClipboardContent()
+		if err != nil {
+			return clipboardContentMsg{err: err}
+		}
+		uri := strings.TrimSpace(content)
+		if uri == "" {
+			return clipboardContentMsg{err: fmt.Errorf("clipboard is empty")}
+		}
+		if !isValidURI(uri) {
+			return clipboardContentMsg{err: fmt.Errorf("not a valid URL or magnet link")}
+		}
+		return clipboardContentMsg{uri: uri}
+	}
+}
+
+func readClipboardContent() (string, error) {
+	switch runtimeGOOS {
+	case "darwin":
+		data, err := exec.Command("pbpaste").Output()
+		if err != nil {
+			return "", fmt.Errorf("read clipboard: %w", err)
+		}
+		return string(data), nil
+	case "linux":
+		data, err := exec.Command("xclip", "-selection", "clipboard", "-o").Output()
+		if err != nil {
+			return "", fmt.Errorf("read clipboard: %w", err)
+		}
+		return string(data), nil
+	default:
+		return "", fmt.Errorf("clipboard not supported on %s", runtimeGOOS)
+	}
+}
+
+func isValidURI(s string) bool {
+	if strings.HasPrefix(s, "magnet:?") {
+		return true
+	}
+	u, err := url.ParseRequestURI(s)
+	if err != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "http", "https", "ftp", "ftps", "sftp":
+		return true
+	}
+	return false
 }
 
 func loadRecentDirs(service Service) tea.Cmd {
