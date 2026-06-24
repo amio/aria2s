@@ -6,6 +6,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 )
 
@@ -121,17 +122,17 @@ func (form AddForm) BodyLines() []string {
 	return lines
 }
 
-func (form AddForm) HandleKey(key tea.KeyPressMsg) (AddForm, tea.Cmd, AddFormAction) {
-	switch key.String() {
-	case "ctrl+c":
+func (form AddForm) HandleKey(msg tea.KeyPressMsg) (AddForm, tea.Cmd, AddFormAction) {
+	switch {
+	case key.Matches(msg, dashboardKeys.Add.Quit):
 		return form, nil, AddFormQuit
-	case "esc":
+	case key.Matches(msg, dashboardKeys.Add.Cancel):
 		return form.Reset(), nil, AddFormCancel
 	}
 	if form.focus == focusDir {
-		return form.handleDirKey(key)
+		return form.handleDirKey(msg)
 	}
-	return form.handleURLKey(key)
+	return form.handleURLKey(msg)
 }
 
 func (form AddForm) HandlePaste(content string) (AddForm, tea.Cmd, AddFormAction) {
@@ -148,43 +149,43 @@ func (form AddForm) HandlePaste(content string) (AddForm, tea.Cmd, AddFormAction
 	return form, nil, AddFormNone
 }
 
-func (form AddForm) handleURLKey(key tea.KeyPressMsg) (AddForm, tea.Cmd, AddFormAction) {
-	switch key.String() {
-	case "tab":
+func (form AddForm) handleURLKey(msg tea.KeyPressMsg) (AddForm, tea.Cmd, AddFormAction) {
+	switch {
+	case key.Matches(msg, dashboardKeys.Add.NextField):
 		form.focus = focusDir
 		form.dirPick = -1
 		form.cursorVisible = true
-	case "enter":
+	case key.Matches(msg, dashboardKeys.Add.Submit):
 		return form, nil, AddFormSubmit
-	case "backspace":
+	case key.Matches(msg, dashboardKeys.Add.Backspace):
 		form.url = trimLastRune(form.url)
 	default:
-		if key.Text != "" {
-			form.url += key.Text
+		if msg.Text != "" {
+			form.url += msg.Text
 		}
 	}
 	return form, nil, AddFormNone
 }
 
-func (form AddForm) handleDirKey(key tea.KeyPressMsg) (AddForm, tea.Cmd, AddFormAction) {
-	switch key.String() {
-	case "shift+tab":
+func (form AddForm) handleDirKey(msg tea.KeyPressMsg) (AddForm, tea.Cmd, AddFormAction) {
+	switch {
+	case key.Matches(msg, dashboardKeys.Add.PrevField):
 		form.focus = focusURL
 		form.cursorVisible = true
-	case "tab":
+	case key.Matches(msg, dashboardKeys.Add.NextField):
 		form.cycleRecents()
-	case "enter":
+	case key.Matches(msg, dashboardKeys.Add.Submit):
 		return form, nil, AddFormSubmit
-	case "backspace":
+	case key.Matches(msg, dashboardKeys.Add.Backspace):
 		form.dir = trimLastRune(form.dir)
 		form.dirPick = -1
-	case "up":
+	case key.Matches(msg, dashboardKeys.Add.RecentUp):
 		form.navigateRecents(false)
-	case "down":
+	case key.Matches(msg, dashboardKeys.Add.RecentDown):
 		form.navigateRecents(true)
 	default:
-		if key.Text != "" {
-			form.dir += key.Text
+		if msg.Text != "" {
+			form.dir += msg.Text
 			form.dirPick = -1
 		}
 	}

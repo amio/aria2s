@@ -409,35 +409,15 @@ func (model Model) detailStats() string {
 }
 
 func (model Model) listHelp() []string {
-	return helpSegments(
-		helpItem{key: "j/k", desc: "Select"},
-		helpItem{key: "Enter/l", desc: "Detail"},
-		helpItem{key: "a", desc: "Add"},
-		helpItem{key: "p", desc: "Pause"},
-		helpItem{key: "r", desc: "Resume"},
-		helpItem{key: "d", desc: "Remove"},
-		helpItem{key: "n/b", desc: "Next/Prev Page"},
-		helpItem{key: "q", desc: "Quit"},
-	)
+	return helpSegments(dashboardKeys.List.HelpItems()...)
 }
 
 func (model Model) addHelp() []string {
-	return helpSegments(
-		helpItem{key: "Enter", desc: "Submit"},
-		helpItem{key: "Tab", desc: "Next"},
-		helpItem{key: "Esc", desc: "Back"},
-		helpItem{key: "Ctrl+C", desc: "Quit"},
-	)
+	return helpSegments(dashboardKeys.Add.HelpItems()...)
 }
 
 func (model Model) detailHelp() []string {
-	return helpSegments(
-		helpItem{key: "Esc/h", desc: "Back"},
-		helpItem{key: "j/k", desc: "Next/Prev"},
-		helpItem{key: "n/b", desc: "Page"},
-		helpItem{key: "o", desc: "Open in File Manager"},
-		helpItem{key: "q", desc: "Quit"},
-	)
+	return helpSegments(dashboardKeys.Detail.HelpItems()...)
 }
 
 func (model Model) viewport() (int, int) {

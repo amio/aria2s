@@ -59,7 +59,7 @@ make build        # build
 make test         # run all tests
 ```
 
-Dashboard runtime migration notes live in `docs/implemented/bubbletea-v2-upgrade.md`.
+Dashboard runtime and shortcut-key migration notes live in `docs/implemented/bubbletea-v2-upgrade.md`.
 
 Smoke-test in an isolated environment:
 

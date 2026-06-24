@@ -100,6 +100,9 @@ func TestModelRendersFullScreenTableLayout(t *testing.T) {
 	if !strings.Contains(view, "Enter/l \x1b[2mDetail\x1b[22m") || !strings.Contains(view, "q \x1b[2mQuit\x1b[22m") {
 		t.Fatalf("view missing key help:\n%s", view)
 	}
+	if !strings.Contains(view, "Ctrl+P \x1b[2mPaste URL\x1b[22m") {
+		t.Fatalf("view missing clipboard help:\n%s", view)
+	}
 	if got := strings.Count(view, "\n") + 1; got != 16 {
 		t.Fatalf("view should fill the terminal height, got %d lines:\n%s", got, view)
 	}

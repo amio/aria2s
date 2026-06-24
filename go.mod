@@ -3,6 +3,7 @@ module github.com/amio/aria2s
 go 1.26
 
 require (
+	charm.land/bubbles/v2 v2.1.0
 	charm.land/bubbletea/v2 v2.0.7
 	github.com/charmbracelet/x/ansi v0.11.7
 	github.com/coder/websocket v1.8.15

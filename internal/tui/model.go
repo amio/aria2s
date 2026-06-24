@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/amio/aria2s/internal/aria2"
@@ -192,32 +193,32 @@ func (model Model) refresh() Model {
 	return model
 }
 
-func (model Model) handleKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (model Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	// Input guard: in input modes, text-producing key presses are always
 	// treated as typed input and never reach a mode handler's shortcut
 	// switch. This structurally prevents single-char shortcuts (e.g. "q" to
 	// quit) from firing while a text field is focused, without each handler
 	// opting out. Modified combos (ctrl+c) and special keys (esc, enter,
 	// tab, ...) have no text payload and reach the mode handlers normally.
-	if isInputMode(model.mode) && isTextInputKey(key) {
-		return model.handleInputTextKey(key)
+	if isInputMode(model.mode) && isTextInputKey(msg) {
+		return model.handleInputTextKey(msg)
 	}
 	switch model.mode {
 	case ModeAdd:
-		return model.handleAddKey(key)
+		return model.handleAddKey(msg)
 	case ModeDetail:
-		return model.handleDetailKey(key)
+		return model.handleDetailKey(msg)
 	default:
-		return model.handleListKey(key)
+		return model.handleListKey(msg)
 	}
 }
 
 // handleInputTextKey routes a text-producing key to the focused text field of
 // the current input mode. It is the only path by which direct text entry
 // reaches input fields, keeping field routing out of handleKey.
-func (model Model) handleInputTextKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+func (model Model) handleInputTextKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if model.mode == ModeAdd {
-		return model.applyAddForm(model.addForm.HandleKey(key))
+		return model.applyAddForm(model.addForm.HandleKey(msg))
 	}
 	return model, nil
 }
@@ -232,33 +233,33 @@ func (model Model) handlePaste(msg tea.PasteMsg) (tea.Model, tea.Cmd) {
 	return model, nil
 }
 
-func (model Model) handleListKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch key.String() {
-	case "ctrl+c", "q":
+func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, dashboardKeys.List.Quit):
 		return model, tea.Quit
-	case "down", "j":
+	case key.Matches(msg, dashboardKeys.List.SelectDown):
 		if model.selected < len(model.items())-1 {
 			model.selected++
 		}
-	case "up", "k":
+	case key.Matches(msg, dashboardKeys.List.SelectUp):
 		if model.selected > 0 {
 			model.selected--
 		}
-	case "ctrl+p":
+	case key.Matches(msg, dashboardKeys.List.PasteURL):
 		return model, readClipboardCommand()
-	case "a":
+	case key.Matches(msg, dashboardKeys.List.Add):
 		model.mode = ModeAdd
 		model.addForm = NewAddForm(model.service.DefaultDir())
 		return model, loadRecentDirs(model.service)
-	case "p":
+	case key.Matches(msg, dashboardKeys.List.Pause):
 		model.runSelected(func(ctx context.Context, gid string) error {
 			return model.service.Pause(ctx, gid)
 		})
-	case "r":
+	case key.Matches(msg, dashboardKeys.List.Resume):
 		model.runSelected(func(ctx context.Context, gid string) error {
 			return model.service.Resume(ctx, gid)
 		})
-	case "d":
+	case key.Matches(msg, dashboardKeys.List.Remove):
 		selected := model.Selected()
 		if selected.GID != "" && isStopped(selected) {
 			model.setError(model.service.ClearStopped(context.Background(), selected.GID))
@@ -267,22 +268,22 @@ func (model Model) handleListKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 				return model.service.Remove(ctx, gid)
 			})
 		}
-	case "n":
+	case key.Matches(msg, dashboardKeys.List.NextPage):
 		model.stoppedPage++
 		return model.refresh(), nil
-	case "b":
+	case key.Matches(msg, dashboardKeys.List.PrevPage):
 		if model.stoppedPage > 0 {
 			model.stoppedPage--
 		}
 		return model.refresh(), nil
-	case "enter", "l":
+	case key.Matches(msg, dashboardKeys.List.Detail):
 		model = model.openDetailAt(model.selected)
 	}
 	return model, nil
 }
 
-func (model Model) handleAddKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	return model.applyAddForm(model.addForm.HandleKey(key))
+func (model Model) handleAddKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	return model.applyAddForm(model.addForm.HandleKey(msg))
 }
 
 func (model Model) applyAddForm(form AddForm, cmd tea.Cmd, action AddFormAction) (tea.Model, tea.Cmd) {
@@ -311,32 +312,32 @@ func (model Model) applyAddForm(form AddForm, cmd tea.Cmd, action AddFormAction)
 	}
 }
 
-func (model Model) handleDetailKey(key tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	switch key.String() {
-	case "q", "ctrl+c":
+func (model Model) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch {
+	case key.Matches(msg, dashboardKeys.Detail.Quit):
 		return model, tea.Quit
-	case "esc", "h", "enter":
+	case key.Matches(msg, dashboardKeys.Detail.Back):
 		model.mode = ModeList
-	case "j":
+	case key.Matches(msg, dashboardKeys.Detail.Next):
 		model = model.openDetailAt(model.selected + 1)
-	case "k":
+	case key.Matches(msg, dashboardKeys.Detail.Prev):
 		model = model.openDetailAt(model.selected - 1)
-	case "down":
+	case key.Matches(msg, dashboardKeys.Detail.ScrollDown):
 		model.detailScroll++
-	case "up":
+	case key.Matches(msg, dashboardKeys.Detail.ScrollUp):
 		if model.detailScroll > 0 {
 			model.detailScroll--
 		}
-	case "n":
+	case key.Matches(msg, dashboardKeys.Detail.NextPage):
 		page := max(model.height/2, 5)
 		model.detailScroll += page
-	case "b":
+	case key.Matches(msg, dashboardKeys.Detail.PrevPage):
 		page := max(model.height/2, 5)
 		model.detailScroll -= page
 		if model.detailScroll < 0 {
 			model.detailScroll = 0
 		}
-	case "o":
+	case key.Matches(msg, dashboardKeys.Detail.Open):
 		target := downloadTargetPath(model.detail)
 		if target == "" {
 			break
