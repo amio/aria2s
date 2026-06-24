@@ -251,11 +251,11 @@ func TestModelRunsTaskActionsForSelection(t *testing.T) {
 	model := NewModel(service, time.Second, "dev")
 	model = updateModel(t, model, refreshMsg{})
 
-	model = updateModel(t, model, keyText("p"))
-	model = updateModel(t, model, keyText("r"))
-	model = updateModel(t, model, keyText("d"))
+	model = updateAndDrain(t, model, keyText("p"))
+	model = updateAndDrain(t, model, keyText("r"))
+	model = updateAndDrain(t, model, keyText("d"))
 	model = updateModel(t, model, keySpecial(tea.KeyDown))
-	model = updateModel(t, model, keyText("d"))
+	model = updateAndDrain(t, model, keyText("d"))
 
 	if strings.Join(service.paused, ",") != "a1" {
 		t.Fatalf("paused got %#v", service.paused)
@@ -613,6 +613,23 @@ func updateModel(t *testing.T, model Model, msg tea.Msg) Model {
 	t.Helper()
 	updated, _ := model.Update(msg)
 	return updated.(Model)
+}
+
+// updateAndDrain is like updateModel but also executes any returned tea.Cmd,
+// feeding the resulting message back into Update. This is needed for testing
+// actions that run asynchronously (e.g. pause, resume, remove).
+func updateAndDrain(t *testing.T, model Model, msg tea.Msg) Model {
+	t.Helper()
+	updated, cmd := model.Update(msg)
+	model = updated.(Model)
+	if cmd != nil {
+		result := cmd()
+		if result != nil {
+			updated, _ := model.Update(result)
+			model = updated.(Model)
+		}
+	}
+	return model
 }
 
 func viewContent(model Model) string {

@@ -80,6 +80,10 @@ type recentDirsMsg struct {
 	err  error
 }
 
+type actionResultMsg struct {
+	err error
+}
+
 type clipboardContentMsg struct {
 	uri string
 	err error
@@ -149,6 +153,9 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return model, model.addForm.BlinkCmd()
 		}
 		return model, nil
+	case actionResultMsg:
+		model.setError(msg.err)
+		return model.refresh(), nil
 	case tea.WindowSizeMsg:
 		model.width = msg.Width
 		model.height = msg.Height
@@ -252,22 +259,24 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		model.addForm = NewAddForm(model.service.DefaultDir())
 		return model, loadRecentDirs(model.service)
 	case key.Matches(msg, dashboardKeys.List.Pause):
-		model.runSelected(func(ctx context.Context, gid string) error {
+		return model, model.runSelectedCmd(func(ctx context.Context, gid string) error {
 			return model.service.Pause(ctx, gid)
 		})
 	case key.Matches(msg, dashboardKeys.List.Resume):
-		model.runSelected(func(ctx context.Context, gid string) error {
+		return model, model.runSelectedCmd(func(ctx context.Context, gid string) error {
 			return model.service.Resume(ctx, gid)
 		})
 	case key.Matches(msg, dashboardKeys.List.Remove):
 		selected := model.Selected()
 		if selected.GID != "" && isStopped(selected) {
-			model.setError(model.service.ClearStopped(context.Background(), selected.GID))
-		} else {
-			model.runSelected(func(ctx context.Context, gid string) error {
-				return model.service.Remove(ctx, gid)
-			})
+			gid := selected.GID
+			return model, func() tea.Msg {
+				return actionResultMsg{err: model.service.ClearStopped(context.Background(), gid)}
+			}
 		}
+		return model, model.runSelectedCmd(func(ctx context.Context, gid string) error {
+			return model.service.Remove(ctx, gid)
+		})
 	case key.Matches(msg, dashboardKeys.List.NextPage):
 		model.stoppedPage++
 		return model.refresh(), nil
@@ -419,12 +428,17 @@ func (model Model) ErrorInfo() string {
 	return ""
 }
 
-func (model *Model) runSelected(action func(context.Context, string) error) {
+// runSelectedCmd returns a tea.Cmd that executes the action asynchronously and
+// delivers the result as an actionResultMsg so the UI stays responsive.
+func (model Model) runSelectedCmd(action func(context.Context, string) error) tea.Cmd {
 	selected := model.Selected()
 	if selected.GID == "" {
-		return
+		return nil
 	}
-	model.setError(action(context.Background(), selected.GID))
+	gid := selected.GID
+	return func() tea.Msg {
+		return actionResultMsg{err: action(context.Background(), gid)}
+	}
 }
 
 func (model Model) items() []aria2.Download {
