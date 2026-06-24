@@ -86,6 +86,25 @@ func printErr(command *cobra.Command, format string, args ...any) {
 }
 
 func customRootHelp(cmd *cobra.Command, _ []string) {
+	// Subcommands should use the default cobra help behavior,
+	// not this root-specific custom layout.
+	if cmd.HasParent() {
+		w := cmd.OutOrStdout()
+		usage := cmd.Long
+		if usage == "" {
+			usage = cmd.Short
+		}
+		usage = strings.TrimSpace(usage)
+		if usage != "" {
+			fmt.Fprintln(w, usage)
+			fmt.Fprintln(w)
+		}
+		if cmd.Runnable() || cmd.HasSubCommands() {
+			fmt.Fprint(w, cmd.UsageString())
+		}
+		return
+	}
+
 	w := cmd.OutOrStdout()
 
 	// Header description.
