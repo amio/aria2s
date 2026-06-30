@@ -2,10 +2,7 @@
 
 `aria2s` turns `aria2c` into an always-on download service with a terminal dashboard to manage downloads.
 
-Requirements:
-
-- `aria2c` must already be installed and available in `PATH`.
-- Linux service management currently targets `systemd --user`.
+![](./docs/screenshot.png)
 
 ## Install
 

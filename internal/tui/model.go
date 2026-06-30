@@ -443,9 +443,23 @@ func (model Model) runSelectedCmd(action func(context.Context, string) error) te
 
 func (model Model) items() []aria2.Download {
 	items := make([]aria2.Download, 0, len(model.snapshot.Active)+len(model.snapshot.Waiting)+len(model.snapshot.Stopped))
-	items = append(items, model.snapshot.Active...)
-	items = append(items, model.snapshot.Waiting...)
-	items = append(items, model.snapshot.Stopped...)
+	appendBucket := func(downloads []aria2.Download, wantMetadata bool) {
+		for _, download := range downloads {
+			if download.IsMetadata == wantMetadata {
+				items = append(items, download)
+			}
+		}
+	}
+
+	// Metadata rows render as their own status, so keep them in one contiguous
+	// bucket instead of splitting them across aria2's active/waiting/stopped
+	// windows.
+	appendBucket(model.snapshot.Active, false)
+	appendBucket(model.snapshot.Active, true)
+	appendBucket(model.snapshot.Waiting, true)
+	appendBucket(model.snapshot.Stopped, true)
+	appendBucket(model.snapshot.Waiting, false)
+	appendBucket(model.snapshot.Stopped, false)
 	return items
 }
 

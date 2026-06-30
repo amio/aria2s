@@ -323,6 +323,35 @@ func TestModelDisplaysMetadataLabelForMetadataEntries(t *testing.T) {
 	}
 }
 
+func TestModelGroupsMetadataRowsIntoOneStatusBucket(t *testing.T) {
+	service := &fakeService{
+		snapshot: aria2.DownloadSnapshot{
+			Active: []aria2.Download{
+				{GID: "a1", Name: "movie.mkv", Status: "active"},
+				{GID: "m1", Name: "meta-active.torrent", Status: "active", IsMetadata: true},
+			},
+			Waiting: []aria2.Download{
+				{GID: "p1", Name: "paused.iso", Status: "paused"},
+				{GID: "m2", Name: "meta-paused.torrent", Status: "paused", IsMetadata: true},
+			},
+			Stopped: []aria2.Download{
+				{GID: "d1", Name: "done.iso", Status: "complete"},
+			},
+		},
+	}
+	model := NewModel(service, time.Second, "dev")
+	model = updateModel(t, model, refreshMsg{})
+
+	got := make([]string, 0, len(model.items()))
+	for _, item := range model.items() {
+		got = append(got, item.GID)
+	}
+	want := []string{"a1", "m1", "m2", "p1", "d1"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("item order got %#v, want %#v", got, want)
+	}
+}
+
 func TestModelOpensAndClosesDetailView(t *testing.T) {
 	service := &fakeService{
 		snapshot: aria2.DownloadSnapshot{
