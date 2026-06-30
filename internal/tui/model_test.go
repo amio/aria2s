@@ -552,8 +552,8 @@ func TestModelDetailHelpUsesGenericFileManagerLabel(t *testing.T) {
 	model = updateModel(t, model, keySpecial(tea.KeyEnter))
 
 	view := viewContent(model)
-	if !strings.Contains(view, "o \x1b[2mOpen in File Manager\x1b[22m") {
-		t.Fatalf("detail view should use a generic file-manager label, got:\n%s", view)
+	if !strings.Contains(view, "o \x1b[2mOpen\x1b[22m") {
+		t.Fatalf("detail view should show the open label, got:\n%s", view)
 	}
 }
 

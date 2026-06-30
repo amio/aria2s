@@ -17,18 +17,19 @@ type dashboardKeyMaps struct {
 }
 
 type listKeyMap struct {
-	Quit       key.Binding
-	SelectDown key.Binding
-	SelectUp   key.Binding
-	Detail     key.Binding
-	Add        key.Binding
-	PasteURL   key.Binding
-	Pause      key.Binding
-	Resume     key.Binding
-	Remove     key.Binding
-	NextPage   key.Binding
-	PrevPage   key.Binding
-}
+		Quit       key.Binding
+		SelectDown key.Binding
+		SelectUp   key.Binding
+		Detail     key.Binding
+		Add        key.Binding
+		PasteURL   key.Binding
+		Pause      key.Binding
+		Resume     key.Binding
+		Remove     key.Binding
+		Open       key.Binding
+		NextPage   key.Binding
+		PrevPage   key.Binding
+	}
 
 type addKeyMap struct {
 	Quit       key.Binding
@@ -65,6 +66,7 @@ func newDashboardKeyMaps() dashboardKeyMaps {
 			Pause:      newBinding("p", "Pause", "p"),
 			Resume:     newBinding("r", "Resume", "r"),
 			Remove:     newBinding("d", "Remove", "d"),
+			Open:       newBinding("o", "Open", "o"),
 			NextPage:   newBinding("n", "Next/Prev Page", "n"),
 			PrevPage:   newBinding("b", "Next/Prev Page", "b"),
 		},
@@ -87,7 +89,7 @@ func newDashboardKeyMaps() dashboardKeyMaps {
 			ScrollUp:   newHiddenBinding("up"),
 			NextPage:   newBinding("n", "Page", "n"),
 			PrevPage:   newBinding("b", "Page", "b"),
-			Open:       newBinding("o", "Open in File Manager", "o"),
+			Open:       newBinding("o", "Open", "o"),
 		},
 	}
 }
@@ -101,6 +103,7 @@ func (keys listKeyMap) HelpItems() []helpItem {
 		helpGroup(keys.Pause),
 		helpGroup(keys.Resume),
 		helpGroup(keys.Remove),
+		helpGroup(keys.Open),
 		helpGroup(keys.NextPage, keys.PrevPage),
 		helpGroup(keys.Quit),
 	)

@@ -287,6 +287,8 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return model.refresh(), nil
 	case key.Matches(msg, dashboardKeys.List.Detail):
 		model = model.openDetailAt(model.selected)
+	case key.Matches(msg, dashboardKeys.List.Open):
+		return model, model.runOpenCmd()
 	}
 	return model, nil
 }
@@ -581,6 +583,25 @@ func loadRecentDirs(service Service) tea.Cmd {
 // downloadTargetPath returns the on-disk path for the downloaded content.
 // For single-file downloads it returns the file path; for multi-file
 // torrents it returns the content directory.
+func (model Model) runOpenCmd() tea.Cmd {
+	selected := model.Selected()
+	if selected.GID == "" {
+		return nil
+	}
+	gid := selected.GID
+	return func() tea.Msg {
+		detail, err := model.service.TaskDetail(context.Background(), gid)
+		if err != nil {
+			return actionResultMsg{err: err}
+		}
+		target := downloadTargetPath(detail)
+		if target == "" {
+			return actionResultMsg{err: fmt.Errorf("download path is unavailable")}
+		}
+		return actionResultMsg{err: openInFileManager(target)}
+	}
+}
+
 func downloadTargetPath(detail aria2.DownloadDetail) string {
 	// Single file: prefer the file's absolute path.
 	if len(detail.Files) == 1 && detail.Files[0].Path != "" {
