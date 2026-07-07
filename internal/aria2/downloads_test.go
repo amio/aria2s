@@ -162,6 +162,87 @@ func TestTaskDetailParsesSelectedTaskPayload(t *testing.T) {
 	assertRequestIncludesField(t, request, "dir")
 }
 
+func TestRetryRemovesFailedDownloadAndReaddsURIs(t *testing.T) {
+	var requests []rpcCall
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := decodeRPCCall(t, r)
+		requests = append(requests, call)
+		switch call.Method {
+		case "aria2.tellStatus":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":{"gid":"e1","status":"error","dir":"/data/downloads","files":[{"path":"/tmp/failed.iso","length":"1000","completedLength":"250","uris":[{"uri":"https://example.com/failed.iso"}]}],"completedLength":"250","totalLength":"1000","downloadSpeed":"0","uploadSpeed":"0","connections":"0","errorCode":"18","errorMessage":"disk error"}}`)
+		case "aria2.getUris":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[{"uri":"https://example.com/failed.iso","status":"used"}]}`)
+		case "aria2.removeDownloadResult":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":"OK"}`)
+		case "aria2.addUri":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":"e2"}`)
+		default:
+			t.Fatalf("unexpected method %s", call.Method)
+		}
+	}))
+	defer server.Close()
+	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
+
+	newGID, err := client.Retry(context.Background(), "e1")
+	if err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if newGID != "e2" {
+		t.Fatalf("new gid got %q, want e2", newGID)
+	}
+	if len(requests) != 4 {
+		t.Fatalf("expected 4 RPC calls, got %d: %#v", len(requests), requests)
+	}
+	assertRPCRequest(t, requests[0], "aria2.tellStatus", "token:secret-token", "e1")
+	assertRPCRequest(t, requests[1], "aria2.getUris", "token:secret-token", "e1")
+	assertRPCRequest(t, requests[2], "aria2.removeDownloadResult", "token:secret-token", "e1")
+	assertRPCRequest(t, requests[3], "aria2.addUri", "token:secret-token")
+	if len(requests[3].Params) < 3 {
+		t.Fatalf("addUri params got %#v, want uri list and options", requests[3].Params)
+	}
+	uris, ok := requests[3].Params[1].([]any)
+	if !ok || len(uris) != 1 || uris[0] != "https://example.com/failed.iso" {
+		t.Fatalf("addUri uris got %#v", requests[3].Params[1])
+	}
+	opts, ok := requests[3].Params[2].(map[string]any)
+	if !ok || opts["dir"] != "/data/downloads" {
+		t.Fatalf("addUri options got %#v", requests[3].Params[2])
+	}
+}
+
+func TestRetryBuildsMagnetFromInfoHashWhenURIsMissing(t *testing.T) {
+	var addParams []any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := decodeRPCCall(t, r)
+		switch call.Method {
+		case "aria2.tellStatus":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":{"gid":"e1","status":"error","dir":"/data/downloads","files":[{"path":"/tmp/torrent","length":"0","completedLength":"0","uris":[]}],"bittorrent":{"info":{"name":"Movie"}},"infoHash":"ABCDEF0123456789ABCDEF0123456789ABCDEF","completedLength":"0","totalLength":"0","downloadSpeed":"0","uploadSpeed":"0","connections":"0","errorCode":"1","errorMessage":"timeout"}}`)
+		case "aria2.getUris":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[]}`)
+		case "aria2.removeDownloadResult":
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":"OK"}`)
+		case "aria2.addUri":
+			addParams = call.Params
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":"e2"}`)
+		default:
+			t.Fatalf("unexpected method %s", call.Method)
+		}
+	}))
+	defer server.Close()
+	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
+
+	if _, err := client.Retry(context.Background(), "e1"); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	uris, ok := addParams[1].([]any)
+	if !ok || len(uris) != 1 {
+		t.Fatalf("addUri params got %#v, want one URI", addParams)
+	}
+	if uris[0] != "magnet:?xt=urn:btih:abcdef0123456789abcdef0123456789abcdef" {
+		t.Fatalf("magnet uri got %q", uris[0])
+	}
+}
+
 func TestSessionLifecycleRPCMethodsUseExpectedAria2Calls(t *testing.T) {
 	var requests []rpcCall
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

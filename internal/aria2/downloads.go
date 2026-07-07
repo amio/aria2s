@@ -2,6 +2,7 @@ package aria2
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"path/filepath"
 	"strconv"
@@ -166,6 +167,70 @@ func (client *RPCClient) Remove(ctx context.Context, gid string) error {
 func (client *RPCClient) RemoveDownloadResult(ctx context.Context, gid string) error {
 	var ignored string
 	return client.call(ctx, "aria2.removeDownloadResult", []any{gid}, &ignored)
+}
+
+// Retry re-queues a failed download by removing the old result and adding it
+// again with the same URIs and download directory. aria2 has no dedicated
+// retry RPC; unpause only works for paused downloads.
+func (client *RPCClient) Retry(ctx context.Context, gid string) (string, error) {
+	detail, err := client.TaskDetail(ctx, gid)
+	if err != nil {
+		return "", err
+	}
+	if detail.Status != "error" {
+		return "", fmt.Errorf("download status is %q, not error", detail.Status)
+	}
+	uris, err := client.retryURIs(ctx, gid, detail)
+	if err != nil {
+		return "", err
+	}
+	opts := AddOptions{Dir: detail.DownloadDir}
+	if err := client.RemoveDownloadResult(ctx, gid); err != nil {
+		return "", fmt.Errorf("remove failed download: %w", err)
+	}
+	return client.addURIs(ctx, uris, opts)
+}
+
+func (client *RPCClient) retryURIs(ctx context.Context, gid string, detail DownloadDetail) ([]string, error) {
+	if uris, err := client.GetURIs(ctx, gid); err == nil {
+		supported := make([]string, 0, len(uris))
+		for _, uri := range uris {
+			if uri.URI != "" && isSupportedURI(uri.URI) {
+				supported = append(supported, uri.URI)
+			}
+		}
+		if len(supported) > 0 {
+			return supported, nil
+		}
+	}
+	if detail.PrimaryURI != "" && isSupportedURI(detail.PrimaryURI) {
+		return []string{detail.PrimaryURI}, nil
+	}
+	if detail.InfoHash != "" {
+		return []string{magnetURI(detail.InfoHash)}, nil
+	}
+	return nil, fmt.Errorf("no supported URI found for download %s", gid)
+}
+
+func magnetURI(infoHash string) string {
+	return "magnet:?xt=urn:btih:" + strings.ToLower(infoHash)
+}
+
+func (client *RPCClient) addURIs(ctx context.Context, uris []string, opts AddOptions) (string, error) {
+	for _, uri := range uris {
+		if !isSupportedURI(uri) {
+			return "", fmt.Errorf("unsupported URI: %s", uri)
+		}
+	}
+	params := []any{uris}
+	if opts.Dir != "" {
+		params = append(params, map[string]string{"dir": opts.Dir})
+	}
+	var newGID string
+	if err := client.call(ctx, "aria2.addUri", params, &newGID); err != nil {
+		return "", err
+	}
+	return newGID, nil
 }
 
 func (client *RPCClient) SaveSession(ctx context.Context) error {

@@ -35,6 +35,7 @@ type dashboardRPC interface {
 	TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error)
 	Pause(context.Context, state.State, string) error
 	Resume(context.Context, state.State, string) error
+	Retry(context.Context, state.State, string) (string, error)
 	Remove(context.Context, state.State, string) error
 	ClearStopped(context.Context, state.State, string) error
 }
@@ -525,6 +526,14 @@ func (app *App) Resume(ctx context.Context, gid string) error {
 	return rpc.Resume(ctx, current, gid)
 }
 
+func (app *App) Retry(ctx context.Context, gid string) (string, error) {
+	current, rpc, err := app.dashboardRPC()
+	if err != nil {
+		return "", err
+	}
+	return rpc.Retry(ctx, current, gid)
+}
+
 func (app *App) Remove(ctx context.Context, gid string) error {
 	current, rpc, err := app.dashboardRPC()
 	if err != nil {
@@ -710,6 +719,10 @@ func (r *LocalRPC) Pause(ctx context.Context, current state.State, gid string) e
 
 func (r *LocalRPC) Resume(ctx context.Context, current state.State, gid string) error {
 	return r.rpcClient(current).Resume(ctx, gid)
+}
+
+func (r *LocalRPC) Retry(ctx context.Context, current state.State, gid string) (string, error) {
+	return r.rpcClient(current).Retry(ctx, gid)
 }
 
 func (r *LocalRPC) Remove(ctx context.Context, current state.State, gid string) error {

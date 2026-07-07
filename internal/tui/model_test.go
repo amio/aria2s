@@ -557,6 +557,28 @@ func TestModelDetailHelpUsesGenericFileManagerLabel(t *testing.T) {
 	}
 }
 
+func TestModelRetriesErrorDownloadWithR(t *testing.T) {
+	service := &fakeService{
+		snapshot: aria2.DownloadSnapshot{
+			Stopped: []aria2.Download{{GID: "e1", Name: "failed.iso", Status: "error"}},
+		},
+		retryGID: "e2",
+	}
+	model := NewModel(service, time.Second, "dev")
+	model = updateModel(t, model, refreshMsg{})
+	model = updateAndDrain(t, model, keyText("r"))
+
+	if len(service.retried) != 1 || service.retried[0] != "e1" {
+		t.Fatalf("retry calls got %v, want [e1]", service.retried)
+	}
+	if len(service.resumed) != 0 {
+		t.Fatalf("resume should not be called for error downloads, got %v", service.resumed)
+	}
+	if model.Selected().GID != "e2" {
+		t.Fatalf("selected gid got %q, want e2", model.Selected().GID)
+	}
+}
+
 func TestModelDetailViewWrapsLongErrorMessage(t *testing.T) {
 	errorMessage := "disk error: insufficient space on volume /very/long/path/to/downloads/folder/that/should/not/be/truncated"
 	service := &fakeService{
@@ -744,6 +766,8 @@ type fakeService struct {
 	recentCalls    int
 	paused         []string
 	resumed        []string
+	retried        []string
+	retryGID       string
 	removed        []string
 	cleared        []string
 }
@@ -788,6 +812,25 @@ func (service *fakeService) Pause(_ context.Context, gid string) error {
 func (service *fakeService) Resume(_ context.Context, gid string) error {
 	service.resumed = append(service.resumed, gid)
 	return nil
+}
+
+func (service *fakeService) Retry(_ context.Context, gid string) (string, error) {
+	service.retried = append(service.retried, gid)
+	if service.retryGID == "" {
+		service.retryGID = "retried-gid"
+	}
+	for i, item := range service.snapshot.Stopped {
+		if item.GID == gid {
+			service.snapshot.Stopped = append(service.snapshot.Stopped[:i], service.snapshot.Stopped[i+1:]...)
+			break
+		}
+	}
+	service.snapshot.Waiting = append(service.snapshot.Waiting, aria2.Download{
+		GID:    service.retryGID,
+		Name:   "retried.iso",
+		Status: "waiting",
+	})
+	return service.retryGID, nil
 }
 
 func (service *fakeService) Remove(_ context.Context, gid string) error {

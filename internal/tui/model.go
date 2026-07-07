@@ -26,6 +26,7 @@ type Service interface {
 	DefaultDir() string
 	Pause(context.Context, string) error
 	Resume(context.Context, string) error
+	Retry(context.Context, string) (string, error)
 	Remove(context.Context, string) error
 	ClearStopped(context.Context, string) error
 	// Subscribe returns a channel of aria2 WebSocket notification events.
@@ -81,6 +82,11 @@ type recentDirsMsg struct {
 }
 
 type actionResultMsg struct {
+	err error
+}
+
+type retryResultMsg struct {
+	gid string
 	err error
 }
 
@@ -156,6 +162,16 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case actionResultMsg:
 		model.setError(msg.err)
 		return model.refresh(), nil
+	case retryResultMsg:
+		model.setError(msg.err)
+		model = model.refresh()
+		if msg.err == nil && msg.gid != "" {
+			model.selected = model.indexOf(msg.gid)
+			if model.mode == ModeDetail {
+				model = model.openDetailAt(model.selected)
+			}
+		}
+		return model, nil
 	case tea.WindowSizeMsg:
 		model.width = msg.Width
 		model.height = msg.Height
@@ -263,6 +279,10 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return model.service.Pause(ctx, gid)
 		})
 	case key.Matches(msg, dashboardKeys.List.Resume):
+		selected := model.Selected()
+		if selected.Status == "error" {
+			return model, model.runRetryCmd(selected.GID)
+		}
 		return model, model.runSelectedCmd(func(ctx context.Context, gid string) error {
 			return model.service.Resume(ctx, gid)
 		})
@@ -354,6 +374,10 @@ func (model Model) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			break
 		}
 		model.setError(openInFileManager(target))
+	case key.Matches(msg, dashboardKeys.Detail.Retry):
+		if model.detail.Status == "error" {
+			return model, model.runRetryCmd(model.detail.GID)
+		}
 	}
 	return model, nil
 }
@@ -432,6 +456,16 @@ func (model Model) ErrorInfo() string {
 
 // runSelectedCmd returns a tea.Cmd that executes the action asynchronously and
 // delivers the result as an actionResultMsg so the UI stays responsive.
+func (model Model) runRetryCmd(gid string) tea.Cmd {
+	if gid == "" {
+		return nil
+	}
+	return func() tea.Msg {
+		newGID, err := model.service.Retry(context.Background(), gid)
+		return retryResultMsg{gid: newGID, err: err}
+	}
+}
+
 func (model Model) runSelectedCmd(action func(context.Context, string) error) tea.Cmd {
 	selected := model.Selected()
 	if selected.GID == "" {

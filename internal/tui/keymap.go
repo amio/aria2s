@@ -52,6 +52,7 @@ type detailKeyMap struct {
 	NextPage   key.Binding
 	PrevPage   key.Binding
 	Open       key.Binding
+	Retry      key.Binding
 }
 
 func newDashboardKeyMaps() dashboardKeyMaps {
@@ -64,7 +65,7 @@ func newDashboardKeyMaps() dashboardKeyMaps {
 			Add:        newBinding("a", "Add", "a"),
 			PasteURL:   newBinding("ctrl+p", "Paste URL", "ctrl+p"),
 			Pause:      newBinding("p", "Pause", "p"),
-			Resume:     newBinding("r", "Resume", "r"),
+			Resume:     newBinding("r", "Retry/Resume", "r"),
 			Remove:     newBinding("d", "Remove", "d"),
 			Open:       newBinding("o", "Open", "o"),
 			NextPage:   newBinding("n", "Next/Prev Page", "n"),
@@ -90,6 +91,7 @@ func newDashboardKeyMaps() dashboardKeyMaps {
 			NextPage:   newBinding("n", "Page", "n"),
 			PrevPage:   newBinding("b", "Page", "b"),
 			Open:       newBinding("o", "Open", "o"),
+			Retry:      newBinding("r", "Retry", "r"),
 		},
 	}
 }
@@ -124,6 +126,7 @@ func (keys detailKeyMap) HelpItems() []helpItem {
 		helpGroup(keys.Next, keys.Prev),
 		helpGroup(keys.NextPage, keys.PrevPage),
 		helpGroup(keys.Open),
+		helpGroup(keys.Retry),
 		helpGroup(keys.Quit),
 	)
 }
