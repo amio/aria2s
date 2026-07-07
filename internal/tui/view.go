@@ -120,6 +120,7 @@ func (model Model) addView() string {
 func (model Model) detailView() string {
 	width, height := model.viewport()
 	detail := model.detail
+	contentWidth := contentInner(width)
 
 	// Top bar: name on left, [status] + progress on right.
 	rightParts := []string{
@@ -149,41 +150,38 @@ func (model Model) detailView() string {
 	barLines := len(model.barFrame("")) * 2
 	bodyHeight := max(height-barLines, minBodyHeight)
 
-	lines := []string{
-		formatDetailLabel("GID", detail.GID),
-	}
+	lines := []string{}
+	lines = appendDetailLabelLines(lines, "GID", detail.GID, contentWidth)
 	if detail.InfoHash != "" {
-		lines = append(lines, formatDetailLabel("Info Hash", detail.InfoHash))
+		lines = appendDetailLabelLines(lines, "Info Hash", detail.InfoHash, contentWidth)
 	}
-	lines = append(lines,
-		formatDetailLabel("Download Dir", detailDownloadDir(detail)),
-		"",
-		formatDetailLabel("Down", formatSpeed(detail.DownloadSpeed)),
-		formatDetailLabel("Up", formatSpeed(detail.UploadSpeed)),
-		formatDetailLabel("Uploaded", formatBytes(detail.UploadLength)),
-		formatDetailLabel("Connections", fmt.Sprintf("%d", detail.Connections)),
-	)
+	lines = appendDetailLabelLines(lines, "Download Dir", detailDownloadDir(detail), contentWidth)
+	lines = append(lines, "")
+	lines = appendDetailLabelLines(lines, "Down", formatSpeed(detail.DownloadSpeed), contentWidth)
+	lines = appendDetailLabelLines(lines, "Up", formatSpeed(detail.UploadSpeed), contentWidth)
+	lines = appendDetailLabelLines(lines, "Uploaded", formatBytes(detail.UploadLength), contentWidth)
+	lines = appendDetailLabelLines(lines, "Connections", fmt.Sprintf("%d", detail.Connections), contentWidth)
 	if detail.NumSeeders > 0 {
-		lines = append(lines, formatDetailLabel("Seeders", fmt.Sprintf("%d", detail.NumSeeders)))
+		lines = appendDetailLabelLines(lines, "Seeders", fmt.Sprintf("%d", detail.NumSeeders), contentWidth)
 	}
 	if detail.Seeder {
-		lines = append(lines, formatDetailLabel("Seeding", "yes"))
+		lines = appendDetailLabelLines(lines, "Seeding", "yes", contentWidth)
 	}
 	lines = append(lines, "")
 	if detail.PieceLength > 0 {
-		lines = append(lines, formatDetailLabel("Piece Length", formatBytes(detail.PieceLength)))
+		lines = appendDetailLabelLines(lines, "Piece Length", formatBytes(detail.PieceLength), contentWidth)
 	}
 	if detail.NumPieces > 0 {
-		lines = append(lines, formatDetailLabel("Pieces", fmt.Sprintf("%d", detail.NumPieces)))
+		lines = appendDetailLabelLines(lines, "Pieces", fmt.Sprintf("%d", detail.NumPieces), contentWidth)
 	}
 	if detail.VerifiedLength > 0 {
-		lines = append(lines, formatDetailLabel("Verified", formatBytes(detail.VerifiedLength)))
+		lines = appendDetailLabelLines(lines, "Verified", formatBytes(detail.VerifiedLength), contentWidth)
 	}
 	if detail.VerifyIntegrityPending {
-		lines = append(lines, formatDetailLabel("Hash Check", "pending"))
+		lines = appendDetailLabelLines(lines, "Hash Check", "pending", contentWidth)
 	}
 	if detail.ErrorMessage != "" {
-		lines = append(lines, formatDetailLabel("Error "+detail.ErrorCode, detail.ErrorMessage))
+		lines = appendDetailLabelLines(lines, "Error "+detail.ErrorCode, detail.ErrorMessage, contentWidth)
 	}
 	if len(detail.Files) > 0 {
 		lines = append(lines, "", "Files:")
@@ -856,8 +854,27 @@ func boldText(text string) string {
 
 const detailLabelWidth = 16
 
-func formatDetailLabel(label string, value string) string {
-	return dimText(fmt.Sprintf("%-*s", detailLabelWidth, label+":")) + " " + value
+func detailLabelPrefix(label string) string {
+	return dimText(fmt.Sprintf("%-*s", detailLabelWidth, label+":"))
+}
+
+func appendDetailLabelLines(lines []string, label, value string, width int) []string {
+	prefix := detailLabelPrefix(label)
+	indent := strings.Repeat(" ", detailLabelWidth+1)
+	valueWidth := max(width-(detailLabelWidth+1), 1)
+	cleaned := strings.ReplaceAll(value, "\n", " ")
+	if cleaned == "" {
+		return append(lines, prefix)
+	}
+	wrapped := ansi.Wrap(cleaned, valueWidth, " ")
+	for i, part := range strings.Split(wrapped, "\n") {
+		if i == 0 {
+			lines = append(lines, prefix+" "+part)
+			continue
+		}
+		lines = append(lines, indent+part)
+	}
+	return lines
 }
 
 func displayFile(file aria2.DownloadFile, downloadDir, taskName string) string {

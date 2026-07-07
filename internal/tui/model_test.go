@@ -557,6 +557,37 @@ func TestModelDetailHelpUsesGenericFileManagerLabel(t *testing.T) {
 	}
 }
 
+func TestModelDetailViewWrapsLongErrorMessage(t *testing.T) {
+	errorMessage := "disk error: insufficient space on volume /very/long/path/to/downloads/folder/that/should/not/be/truncated"
+	service := &fakeService{
+		snapshot: aria2.DownloadSnapshot{
+			Stopped: []aria2.Download{{GID: "e1", Name: "failed.iso", Status: "error"}},
+		},
+		detail: withDownloadDir(t, aria2.DownloadDetail{
+			GID:          "e1",
+			Name:         "failed.iso",
+			Status:       "error",
+			ErrorCode:    "18",
+			ErrorMessage: errorMessage,
+			Files:        []aria2.DownloadFile{{Path: "/downloads/failed.iso", Name: "failed.iso"}},
+		}, "/downloads"),
+	}
+	model := NewModel(service, time.Second, "dev")
+	model = updateModel(t, model, tea.WindowSizeMsg{Width: 60, Height: 24})
+	model = updateModel(t, model, refreshMsg{})
+	model = updateModel(t, model, keySpecial(tea.KeyEnter))
+
+	view := viewContent(model)
+	if strings.Contains(view, "...") {
+		t.Fatalf("detail view should not truncate error message:\n%s", view)
+	}
+	for _, part := range []string{"disk error:", "insufficient space", "downloads/folder"} {
+		if !strings.Contains(view, part) {
+			t.Fatalf("detail view missing error fragment %q:\n%s", part, view)
+		}
+	}
+}
+
 func TestModelShowsOpenErrorInsteadOfSilentlyIgnoringIt(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "active.iso")
