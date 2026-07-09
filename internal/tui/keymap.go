@@ -61,7 +61,7 @@ func newDashboardKeyMaps() dashboardKeyMaps {
 			SelectUp:   newBinding("k", "Select", "k", "up"),
 			Detail:     newBinding("Enter/l", "Detail", "enter", "l"),
 			Add:        newBinding("a", "Add", "a"),
-			PasteURL:   newBinding("Ctrl+P", "Paste URL", "ctrl+p"),
+			PasteURL:   newBinding("ctrl+p", "Paste URL", "ctrl+p"),
 			Pause:      newBinding("p", "Pause", "p"),
 			Resume:     newBinding("r", "Resume", "r"),
 			Remove:     newBinding("d", "Remove", "d"),
