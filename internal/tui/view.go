@@ -273,8 +273,7 @@ func (model Model) listBody(width int, height int) []string {
 		if !model.loaded && model.err == nil {
 			return model.loadingBody(width, height)
 		}
-		body = append(body, model.blankBodyLine(width, "No downloads yet. Press a to add one."))
-		return append(body, model.blankBodyLines(width, height-len(body))...)
+		return model.emptyBody(width, height)
 	}
 
 	start := tableStart(model.selected, len(items), remaining)
@@ -340,11 +339,21 @@ var loadingFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 func (model Model) loadingBody(width int, height int) []string {
 	frame := loadingFrames[model.loadingFrame%len(loadingFrames)]
 	indicator := frame + " Connecting..."
+	return model.centeredMessageBody(width, height, indicator)
+}
+
+func (model Model) emptyBody(width int, height int) []string {
+	// Dim the whole prompt except the add shortcut key.
+	msg := dimText("No downloads yet. Press ") + "a" + dimText(" to add one.")
+	return model.centeredMessageBody(width, height, msg)
+}
+
+func (model Model) centeredMessageBody(width int, height int, text string) []string {
 	body := make([]string, 0, height)
 	centerRow := height / 2
 	for row := 0; row < height; row++ {
 		if row == centerRow {
-			body = append(body, model.centeredBodyLine(width, indicator))
+			body = append(body, model.centeredBodyLine(width, text))
 			continue
 		}
 		body = append(body, model.blankBodyLine(width, ""))
