@@ -106,6 +106,9 @@ func (client *RPCClient) TaskDetail(ctx context.Context, gid string) (DownloadDe
 			primaryURI = uris[0].URI
 		}
 	}
+	if primaryURI == "" && raw.InfoHash != "" {
+		primaryURI = magnetURI(raw.InfoHash)
+	}
 	detail := DownloadDetail{
 		GID:                    download.GID,
 		Status:                 download.Status,

@@ -155,6 +155,9 @@ func (model Model) detailView() string {
 	if detail.InfoHash != "" {
 		lines = appendDetailLabelLines(lines, "Info Hash", detail.InfoHash, contentWidth)
 	}
+	if detail.PrimaryURI != "" {
+		lines = appendDetailLabelLines(lines, "Source URL", detail.PrimaryURI, contentWidth)
+	}
 	lines = appendDetailLabelLines(lines, "Download Dir", detailDownloadDir(detail), contentWidth)
 	lines = append(lines, "")
 	lines = appendDetailLabelLines(lines, "Down", formatSpeed(detail.DownloadSpeed), contentWidth)
@@ -181,10 +184,11 @@ func (model Model) detailView() string {
 		lines = appendDetailLabelLines(lines, "Hash Check", "pending", contentWidth)
 	}
 	if detail.ErrorMessage != "" {
-		lines = appendDetailLabelLines(lines, "Error "+detail.ErrorCode, detail.ErrorMessage, contentWidth)
+		lines = append(lines, "")
+		lines = appendDetailErrorLines(lines, "Error "+detail.ErrorCode, detail.ErrorMessage, contentWidth)
 	}
 	if len(detail.Files) > 0 {
-		lines = append(lines, "", "Files:")
+		lines = append(lines, "", detailLabelPrefix("Files"), "")
 		for _, file := range detail.Files {
 			pct := float64(file.CompletedLength) / float64(file.Length)
 			if file.Length <= 0 {
@@ -873,6 +877,26 @@ func appendDetailLabelLines(lines []string, label, value string, width int) []st
 			continue
 		}
 		lines = append(lines, indent+part)
+	}
+	return lines
+}
+
+func appendDetailErrorLines(lines []string, label, value string, width int) []string {
+	prefix := detailLabelPrefix(label)
+	indent := strings.Repeat(" ", detailLabelWidth+1)
+	valueWidth := max(width-(detailLabelWidth+1), 1)
+	cleaned := strings.ReplaceAll(value, "\n", " ")
+	if cleaned == "" {
+		return append(lines, prefix)
+	}
+	wrapped := ansi.Wrap(cleaned, valueWidth, " ")
+	for i, part := range strings.Split(wrapped, "\n") {
+		colored := colorizeForeground(part, errorTextColor, true)
+		if i == 0 {
+			lines = append(lines, prefix+" "+colored)
+			continue
+		}
+		lines = append(lines, indent+colored)
 	}
 	return lines
 }
