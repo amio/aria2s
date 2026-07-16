@@ -27,7 +27,7 @@ func TestRenderSystemdUnitUsesAbsoluteAria2cPathWithoutShell(t *testing.T) {
 
 	assertContains(t, rendered, "[Unit]")
 	assertContains(t, rendered, "Description=aria2 RPC service managed by aria2s")
-	assertContains(t, rendered, "ExecStart=/usr/bin/aria2c --enable-rpc=true --rpc-listen-all=false --rpc-listen-port=6800 --rpc-secret=secret-token --input-file=/home/amio/.local/state/aria2s/session --save-session=/home/amio/.local/state/aria2s/session --force-save=true --save-session-interval=60")
+	assertContains(t, rendered, "ExecStart=/usr/bin/aria2c --enable-rpc=true --rpc-listen-all=false --rpc-listen-port=6800 --rpc-secret=secret-token --input-file=/home/amio/.local/state/aria2s/session --save-session=/home/amio/.local/state/aria2s/session --save-session-interval=60")
 	assertContains(t, rendered, "StandardOutput=append:/home/amio/.local/state/aria2s/aria2.log")
 	assertContains(t, rendered, "StandardError=append:/home/amio/.local/state/aria2s/aria2.err.log")
 	assertContains(t, rendered, "[Install]")

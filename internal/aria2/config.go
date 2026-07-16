@@ -67,7 +67,6 @@ func ManagedArgs(current state.State) []string {
 		"--rpc-secret=" + current.RPCSecret,
 		"--input-file=" + current.SessionPath,
 		"--save-session=" + current.SessionPath,
-		"--force-save=true",
 		"--save-session-interval=60",
 	}
 }

@@ -33,7 +33,6 @@ func TestRenderLaunchAgentUsesAbsoluteAria2cPathWithoutShell(t *testing.T) {
 	assertContains(t, rendered, "<string>--rpc-secret=secret-token</string>")
 	assertContains(t, rendered, "<string>--input-file=/Users/amio/Library/Application Support/aria2s/session</string>")
 	assertContains(t, rendered, "<string>--save-session=/Users/amio/Library/Application Support/aria2s/session</string>")
-	assertContains(t, rendered, "<string>--force-save=true</string>")
 	assertContains(t, rendered, "<string>--save-session-interval=60</string>")
 	assertContains(t, rendered, "<key>RunAtLoad</key>")
 	assertContains(t, rendered, "<false/>")

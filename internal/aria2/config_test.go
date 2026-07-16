@@ -55,7 +55,6 @@ func TestManagedArgsIncludeRPCAndSessionFlags(t *testing.T) {
 	assertSliceContains(t, args, "--rpc-secret=secret-token")
 	assertSliceContains(t, args, "--input-file=/tmp/session")
 	assertSliceContains(t, args, "--save-session=/tmp/session")
-	assertSliceContains(t, args, "--force-save=true")
 	assertSliceContains(t, args, "--save-session-interval=60")
 }
 

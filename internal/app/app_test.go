@@ -437,7 +437,7 @@ func TestInstallWritesSystemdUnitForLinuxPaths(t *testing.T) {
 	text := string(unit)
 	assertContains(t, text, "[Unit]")
 	assertContains(t, text, "Description=aria2 RPC service managed by aria2s")
-	assertContains(t, text, "ExecStart="+aria2c+" --enable-rpc=true --rpc-listen-all=false --rpc-listen-port=6800 --rpc-secret=secret-token --input-file="+servicePaths.SessionFile+" --save-session="+servicePaths.SessionFile+" --force-save=true --save-session-interval=60")
+	assertContains(t, text, "ExecStart="+aria2c+" --enable-rpc=true --rpc-listen-all=false --rpc-listen-port=6800 --rpc-secret=secret-token --input-file="+servicePaths.SessionFile+" --save-session="+servicePaths.SessionFile+" --save-session-interval=60")
 	assertContains(t, text, "WantedBy=default.target")
 }
 
