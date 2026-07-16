@@ -285,9 +285,11 @@ On a current result, list success updates `ListState.Applied` and list timestamp
 detail fails; `ListErr` preserves the old list without blocking a valid detail. `tellStatus`
 failure updates only `DetailState.LastError` and preserves matching detail data. Successful
 `tellStatus` applies its immutable result-query GID immediately. A source found in
-`tellStatus` resolves the source even if the redundant `getUris` call faults. Otherwise a
-`getUris` fault retains a prior source for the same GID and sets `SourceError`. An old detail
-is never rendered for a different requested GID.
+`tellStatus` (or retained for the same GID) resolves the source and suppresses a redundant
+`getUris` fault. aria2's permanent `No URI data is available` answer also resolves without
+retry or SOURCE noise (common for completed downloads). Other empty-source `getUris` faults
+keep `SourceError` and retry until resolved. An old detail is never rendered for a different
+requested GID.
 
 The transitions are exact:
 

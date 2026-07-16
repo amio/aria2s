@@ -132,8 +132,43 @@ func TestDetailSourceFailureRetainsPriorSourceForSameGID(t *testing.T) {
 	query := model.query()
 	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: query, read: aria2.DashboardRead{Downloads: aria2.DownloadSnapshot{}, Detail: &detail, DetailSourceErr: errors.New("source timeout")}})
 	model = updated.(Model)
-	if model.detail.PrimaryURI != "magnet:?old" || model.detailState.SourceError == nil {
+	// Prior source is kept; known PrimaryURI means getUris fault is not user-facing SOURCE noise.
+	if model.detail.PrimaryURI != "magnet:?old" || model.detailState.SourceError != nil || !model.detailState.SourceResolved {
 		t.Fatalf("source partial merge failed: %#v", model.detailState)
+	}
+}
+
+func TestDetailAbsentURIDataStopsSourceRetry(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.detailState = DetailState{RequestedGID: "a", SourceResolved: false}
+	detail := aria2.DownloadDetail{GID: "a"}
+	query := model.query()
+	if !query.ResolveDetailSource {
+		t.Fatal("expected first detail open to resolve source")
+	}
+	sourceErr := &aria2.RPCError{Method: "aria2.getUris", Code: 1, Message: "No URI data is available for GID#a"}
+	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: query, read: aria2.DashboardRead{Downloads: aria2.DownloadSnapshot{}, Detail: &detail, DetailSourceErr: sourceErr}})
+	model = updated.(Model)
+	if model.detailState.SourceError != nil || !model.detailState.SourceResolved {
+		t.Fatalf("permanent no-URI answer should resolve silently: %#v", model.detailState)
+	}
+	if model.query().ResolveDetailSource {
+		t.Fatal("subsequent polls must not re-call getUris")
+	}
+}
+
+func TestDetailTransientSourceFaultRetries(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.detailState = DetailState{RequestedGID: "a", SourceResolved: false}
+	detail := aria2.DownloadDetail{GID: "a"}
+	query := model.query()
+	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: query, read: aria2.DashboardRead{Downloads: aria2.DownloadSnapshot{}, Detail: &detail, DetailSourceErr: errors.New("source timeout")}})
+	model = updated.(Model)
+	if model.detailState.SourceError == nil || model.detailState.SourceResolved {
+		t.Fatalf("transient source fault should surface and retry: %#v", model.detailState)
+	}
+	if !model.query().ResolveDetailSource {
+		t.Fatal("expected getUris retry while source remains unresolved")
 	}
 }
 

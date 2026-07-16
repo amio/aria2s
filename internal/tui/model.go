@@ -323,9 +323,22 @@ func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 					model.detailState.Detail, model.detail = *msg.read.Detail, *msg.read.Detail
 					model.detailState.AppliedGID, model.detailState.HasDetail = msg.query.DetailGID, true
 				}
+				// getUris is a one-shot fallback while resolving PrimaryURI. tellStatus may
+				// already carry files/magnet; completed downloads often permanently answer
+				// "No URI data is available", which must not retry every poll as SOURCE noise.
 				model.detailState.SourceError = msg.read.DetailSourceErr
-				if msg.read.Detail != nil && (msg.read.Detail.PrimaryURI != "" || msg.read.DetailSourceErr == nil) {
-					model.detailState.SourceResolved = true
+				if msg.read.Detail != nil {
+					switch {
+					case msg.read.Detail.PrimaryURI != "":
+						model.detailState.SourceError = nil
+						model.detailState.SourceResolved = true
+					case msg.read.DetailSourceErr == nil:
+						model.detailState.SourceResolved = true
+					case isAbsentURIData(msg.read.DetailSourceErr):
+						model.detailState.SourceError = nil
+						model.detailState.SourceResolved = true
+					}
+					// Transient getUris faults with empty PrimaryURI keep SourceError and retry.
 				}
 			}
 		}
@@ -667,6 +680,18 @@ func (model Model) setNotice(err error) (tea.Model, tea.Cmd) {
 	model.notice = err.Error()
 	id := model.noticeID
 	return model, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return noticeExpiredMsg{id: id} })
+}
+
+/** isAbsentURIData reports aria2's permanent empty-URI answer (common for completed tasks). */
+func isAbsentURIData(err error) bool {
+	if err == nil {
+		return false
+	}
+	var rpcErr *aria2.RPCError
+	if errors.As(err, &rpcErr) {
+		return strings.Contains(rpcErr.Message, "No URI data is available")
+	}
+	return strings.Contains(err.Error(), "No URI data is available")
 }
 
 /** flashInapplicable shows a short top-bar tip when a key is pressed on a wrong-status row. */
