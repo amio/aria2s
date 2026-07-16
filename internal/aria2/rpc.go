@@ -14,6 +14,30 @@ import (
 )
 
 var ErrTransportUnavailable = errors.New("aria2 rpc transport unavailable")
+var ErrOutcomeUnknown = errors.New("aria2 mutation outcome unknown")
+
+/** RPCError is a confirmed JSON-RPC rejection. */
+type RPCError struct {
+	Method  string
+	Code    int
+	Message string
+}
+
+func (err *RPCError) Error() string {
+	return fmt.Sprintf("%s failed (%d): %s", err.Method, err.Code, err.Message)
+}
+
+/** OutcomeUnknownError marks a dispatched mutation whose server outcome was not confirmed. */
+type OutcomeUnknownError struct {
+	Method string
+	Cause  error
+}
+
+func (err *OutcomeUnknownError) Error() string {
+	return fmt.Sprintf("%s: %v", ErrOutcomeUnknown, err.Cause)
+}
+
+func (err *OutcomeUnknownError) Unwrap() []error { return []error{ErrOutcomeUnknown, err.Cause} }
 
 type RPCClient struct {
 	endpoint string
@@ -42,7 +66,7 @@ func (client *RPCClient) AddURI(ctx context.Context, uri string, opts AddOptions
 		params = append(params, map[string]string{"dir": opts.Dir})
 	}
 	var gid string
-	if err := client.call(ctx, "aria2.addUri", params, &gid); err != nil {
+	if err := client.mutation(ctx, "aria2.addUri", params, &gid); err != nil {
 		return "", err
 	}
 	return gid, nil
@@ -59,12 +83,24 @@ func (client *RPCClient) Version(ctx context.Context) (string, error) {
 }
 
 func (client *RPCClient) call(ctx context.Context, method string, params []any, result any) error {
+	return client.doCall(ctx, method, params, result, false)
+}
+
+func (client *RPCClient) mutation(ctx context.Context, method string, params []any, result any) error {
+	return client.doCall(ctx, method, params, result, true)
+}
+
+func (client *RPCClient) doCall(ctx context.Context, method string, params []any, result any, mutation bool) error {
 	payload := rpcRequest{
 		JSONRPC: "2.0",
 		ID:      "1",
 		Method:  method,
 		Params:  append([]any{"token:" + client.secret}, params...),
 	}
+	return client.dispatch(ctx, method, payload, result, mutation)
+}
+
+func (client *RPCClient) dispatch(ctx context.Context, method string, payload rpcRequest, result any, mutation bool) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return err
@@ -76,23 +112,37 @@ func (client *RPCClient) call(ctx context.Context, method string, params []any, 
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := client.client.Do(req)
 	if err != nil {
-		return err
+		return classifyDispatched(method, err, mutation)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("aria2 RPC returned HTTP %d", resp.StatusCode)
+		return classifyDispatched(method, fmt.Errorf("%w: aria2 RPC returned HTTP %d", ErrTransportUnavailable, resp.StatusCode), mutation)
 	}
 	var decoded rpcResponse
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return err
+		return classifyDispatched(method, err, mutation)
 	}
 	if decoded.Error != nil {
-		return errors.New(decoded.Error.Message)
+		return &RPCError{Method: method, Code: decoded.Error.Code, Message: decoded.Error.Message}
 	}
 	if result == nil {
 		return nil
 	}
-	return json.Unmarshal(decoded.Result, result)
+	if len(decoded.Result) == 0 || bytes.Equal(decoded.Result, []byte("null")) {
+		return classifyDispatched(method, errors.New("missing RPC result"), mutation)
+	}
+	if err := json.Unmarshal(decoded.Result, result); err != nil {
+		return classifyDispatched(method, err, mutation)
+	}
+	return nil
+}
+
+func classifyDispatched(method string, err error, mutation bool) error {
+	err = WrapTransportError(err)
+	if mutation {
+		return &OutcomeUnknownError{Method: method, Cause: err}
+	}
+	return err
 }
 
 type rpcRequest struct {
@@ -108,6 +158,7 @@ type rpcResponse struct {
 }
 
 type rpcError struct {
+	Code    int    `json:"code"`
 	Message string `json:"message"`
 }
 

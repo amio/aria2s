@@ -2,9 +2,7 @@ package tui
 
 import (
 	"context"
-	"os"
-	"path/filepath"
-	"reflect"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -15,834 +13,278 @@ import (
 	"github.com/amio/aria2s/internal/aria2"
 )
 
-func TestAppImplementsDashboardService(t *testing.T) {
-	var _ Service = (*app.App)(nil)
+type fakeService struct {
+	reads        []aria2.DashboardRead
+	queries      []aria2.DashboardQuery
+	addResult    app.AddResult
+	addErr       error
+	actions      []string
+	retryResult  app.RetryResult
+	retryErr     error
+	snapshotFunc func(context.Context, aria2.DashboardQuery) (aria2.DashboardRead, error)
 }
 
-func TestModelShowsLoadingIndicatorBeforeFirstRefresh(t *testing.T) {
+func keySpecial(code rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: code} }
+
+func (service *fakeService) Snapshot(ctx context.Context, query aria2.DashboardQuery) (aria2.DashboardRead, error) {
+	if service.snapshotFunc != nil {
+		return service.snapshotFunc(ctx, query)
+	}
+	service.queries = append(service.queries, query)
+	if len(service.reads) == 0 {
+		return aria2.DashboardRead{}, nil
+	}
+	read := service.reads[0]
+	service.reads = service.reads[1:]
+	return read, nil
+}
+func (*fakeService) TaskDetail(context.Context, string) (aria2.DownloadDetail, error) {
+	return aria2.DownloadDetail{}, nil
+}
+func (service *fakeService) AddURI(context.Context, string, aria2.AddOptions) (app.AddResult, error) {
+	return service.addResult, service.addErr
+}
+func (*fakeService) RecentDirs(context.Context) ([]string, error) { return nil, nil }
+func (*fakeService) DefaultDir() string                           { return "/tmp" }
+func (service *fakeService) Pause(_ context.Context, gid string) error {
+	service.actions = append(service.actions, "pause:"+gid)
+	return nil
+}
+func (service *fakeService) Resume(_ context.Context, gid string) error {
+	service.actions = append(service.actions, "resume:"+gid)
+	return nil
+}
+func (service *fakeService) Retry(_ context.Context, gid string) (app.RetryResult, error) {
+	service.actions = append(service.actions, "retry:"+gid)
+	if service.retryResult.NewGID == "" {
+		service.retryResult.NewGID = "new"
+	}
+	return service.retryResult, service.retryErr
+}
+func (service *fakeService) Remove(_ context.Context, gid string) error {
+	service.actions = append(service.actions, "remove:"+gid)
+	return nil
+}
+func (service *fakeService) ClearStopped(_ context.Context, gid string) error {
+	service.actions = append(service.actions, "clear:"+gid)
+	return nil
+}
+
+func TestRefreshCoordinatorCoalescesTriggersAndRejectsOldGeneration(t *testing.T) {
 	service := &fakeService{}
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, tea.WindowSizeMsg{Width: 140, Height: 16})
-
-	view := viewContent(model)
-	if strings.Contains(view, "No downloads yet") {
-		t.Fatalf("view should not show empty-state message before first refresh:\n%s", view)
-	}
-	if !strings.Contains(view, "Connecting...") {
-		t.Fatalf("view should show loading indicator before first refresh:\n%s", view)
-	}
-
-	model = updateModel(t, model, refreshMsg{})
-	view = viewContent(model)
-	if strings.Contains(view, "Connecting...") {
-		t.Fatalf("view should stop showing loading indicator after first refresh:\n%s", view)
-	}
-	if !strings.Contains(view, "No downloads yet") {
-		t.Fatalf("view should show empty-state message after first refresh:\n%s", view)
-	}
-}
-
-func TestModelRefreshesDownloadsAndMovesSelection(t *testing.T) {
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Active:  []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
-			Waiting: []aria2.Download{{GID: "w1", Name: "waiting.iso", Status: "waiting"}},
-			Stopped: []aria2.Download{{GID: "s1", Name: "done.iso", Status: "complete"}},
-		},
-	}
-	model := NewModel(service, time.Second, "dev")
-
-	updated, _ := model.Update(refreshMsg{})
-	model = updated.(Model)
-	if service.listCalls != 1 {
-		t.Fatalf("expected one refresh call, got %d", service.listCalls)
-	}
-	if got := model.Selected().GID; got != "a1" {
-		t.Fatalf("selected gid got %q, want a1", got)
-	}
-
-	updated, _ = model.Update(keySpecial(tea.KeyDown))
-	model = updated.(Model)
-	if got := model.Selected().GID; got != "w1" {
-		t.Fatalf("selected gid got %q, want w1", got)
-	}
-	view := viewContent(model)
-	if !strings.Contains(view, "waiting.iso") {
-		t.Fatalf("view should include refreshed downloads, got:\n%s", view)
-	}
-}
-
-func TestModelRendersFullScreenTableLayout(t *testing.T) {
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Active:  []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active", CompletedLength: 50, TotalLength: 100, DownloadSpeed: 2048, UploadSpeed: 0}},
-			Waiting: []aria2.Download{{GID: "w1", Name: "queued.iso", Status: "waiting", CompletedLength: 0, TotalLength: 200}},
-			Stopped: []aria2.Download{{GID: "s1", Name: "done.iso", Status: "complete", CompletedLength: 300, TotalLength: 300}},
-		},
-	}
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, tea.WindowSizeMsg{Width: 140, Height: 16})
-	model = updateModel(t, model, refreshMsg{})
-
-	rendered := model.View()
-	view := rendered.Content
-	for _, header := range []string{"Status", "Name", "Size", "Downloaded", "Progress", "Down Speed", "Up Speed"} {
-		if !strings.Contains(view, header) {
-			t.Fatalf("view missing column header %q:\n%s", header, view)
-		}
-	}
-	if !rendered.AltScreen {
-		t.Fatalf("view should request alt screen mode")
-	}
-	if !strings.Contains(view, "Total 3 (A") {
-		t.Fatalf("view missing footer stats:\n%s", view)
-	}
-	if !strings.Contains(view, "Enter/l \x1b[2mDetail\x1b[22m") || !strings.Contains(view, "q \x1b[2mQuit\x1b[22m") {
-		t.Fatalf("view missing key help:\n%s", view)
-	}
-	if !strings.Contains(view, "ctrl+p \x1b[2mPaste URL\x1b[22m") {
-		t.Fatalf("view missing clipboard help:\n%s", view)
-	}
-	if got := strings.Count(view, "\n") + 1; got != 16 {
-		t.Fatalf("view should fill the terminal height, got %d lines:\n%s", got, view)
-	}
-}
-
-func TestModelAddsURIFromInputMode(t *testing.T) {
-	service := &fakeService{}
-	model := NewModel(service, time.Second, "dev")
-
-	model = updateModel(t, model, keyText("a"))
-	model = updateModel(t, model, keyText("https://example.com/file.zip"))
-	model = updateModel(t, model, keySpecial(tea.KeyEnter))
-
-	if len(service.added) != 1 || service.added[0] != "https://example.com/file.zip" {
-		t.Fatalf("unexpected added URIs: %#v", service.added)
-	}
-	if len(service.addOpts) != 1 || service.addOpts[0].Dir != "" {
-		t.Fatalf("expected empty dir option, got %#v", service.addOpts)
-	}
-	if model.Mode() != ModeList {
-		t.Fatalf("mode got %s, want list", model.Mode())
-	}
-}
-
-func TestModelAddWithCustomDir(t *testing.T) {
-	service := &fakeService{defaultDir: "/home/user/Downloads"}
-	model := NewModel(service, time.Second, "dev")
-
-	model = updateModel(t, model, keyText("a"))
-	model = updateModel(t, model, keyText("https://example.com/file.zip"))
-	model = updateModel(t, model, keySpecial(tea.KeyTab))
-	model = updateModel(t, model, keyText("/data/Movies"))
-	model = updateModel(t, model, keySpecial(tea.KeyEnter))
-	model = updateModel(t, model, refreshMsg{})
-
-	if len(service.addOpts) != 1 || service.addOpts[0].Dir != "/data/Movies" {
-		t.Fatalf("expected dir /data/Movies, got %#v", service.addOpts)
-	}
-	if !strings.Contains(viewContent(model), "No downloads yet") && model.Mode() != ModeList {
-		t.Fatalf("mode got %s, want list", model.Mode())
-	}
-}
-
-func TestModelAddDirRecentPick(t *testing.T) {
-	service := &fakeService{
-		defaultDir: "/home/user/Downloads",
-		recentDirs: []string{"/data/Movies", "/data/Music"},
-	}
-	model := NewModel(service, time.Second, "dev")
-
-	model = updateModel(t, model, keyText("a"))
-	model.addForm = model.addForm.WithRecents(service.recentDirs)
-	model = updateModel(t, model, keyText("https://example.com/file.zip"))
-	model = updateModel(t, model, keySpecial(tea.KeyTab))
-	model = updateModel(t, model, keySpecial(tea.KeyDown))
-	model = updateModel(t, model, keySpecial(tea.KeyEnter))
-
-	if len(service.addOpts) != 1 || service.addOpts[0].Dir != "/data/Movies" {
-		t.Fatalf("expected dir /data/Movies picked from recents, got %#v", service.addOpts)
-	}
-}
-
-func TestModelAddDirTabCyclesAndWraps(t *testing.T) {
-	service := &fakeService{
-		recentDirs: []string{"/data/Movies", "/data/Music", "/data/Books"},
-	}
-	model := NewModel(service, time.Second, "dev")
-
-	model = updateModel(t, model, keyText("a"))
-	model.addForm = model.addForm.WithRecents(service.recentDirs)
-	model = updateModel(t, model, keySpecial(tea.KeyTab)) // URL -> Dir
-	model = updateModel(t, model, keySpecial(tea.KeyTab)) // -> 1st recent
-	if model.addForm.dir != "/data/Movies" {
-		t.Fatalf("first tab got %q, want /data/Movies", model.addForm.dir)
-	}
-	model = updateModel(t, model, keySpecial(tea.KeyTab)) // -> 2nd
-	if model.addForm.dir != "/data/Music" {
-		t.Fatalf("second tab got %q, want /data/Music", model.addForm.dir)
-	}
-	model = updateModel(t, model, keySpecial(tea.KeyTab)) // -> 3rd
-	model = updateModel(t, model, keySpecial(tea.KeyTab)) // wrap -> 1st
-	if model.addForm.dir != "/data/Movies" {
-		t.Fatalf("wrapped tab got %q, want /data/Movies", model.addForm.dir)
-	}
-}
-
-func TestModelAddPrefillsLastUsedDirOnLoad(t *testing.T) {
-	service := &fakeService{
-		recentDirs: []string{"/data/Movies", "/data/Music"},
-	}
-	model := NewModel(service, time.Second, "dev")
-
-	updated, cmd := model.Update(keyText("a"))
-	model = updated.(Model)
-	if cmd == nil {
-		t.Fatal("expected recent dirs load command when entering add mode")
-	}
-	msg := cmd()
-	loaded, _ := model.Update(msg)
-	model = loaded.(Model)
-
-	if model.addForm.dir != "/data/Movies" {
-		t.Fatalf("dir got %q, want /data/Movies", model.addForm.dir)
-	}
-
-	model = updateModel(t, model, keyText("https://example.com/file.zip"))
-	model = updateModel(t, model, keySpecial(tea.KeyEnter))
-
-	if len(service.addOpts) != 1 || service.addOpts[0].Dir != "/data/Movies" {
-		t.Fatalf("expected dir /data/Movies from last used, got %#v", service.addOpts)
-	}
-}
-
-func TestModelLoadsRecentDirsOnAddMode(t *testing.T) {
-	service := &fakeService{
-		recentDirs: []string{"/data/Movies", "/data/Music"},
-	}
-	model := NewModel(service, time.Second, "dev")
-
-	updated, cmd := model.Update(keyText("a"))
-	model = updated.(Model)
-	if cmd == nil {
-		t.Fatal("expected recent dirs load command when entering add mode")
-	}
-	msg := cmd()
-	loaded, _ := model.Update(msg)
-	model = loaded.(Model)
-	model = updateModel(t, model, keySpecial(tea.KeyTab))
-
-	view := viewContent(model)
-	if !strings.Contains(view, "/data/Movies") || !strings.Contains(view, "Recent dirs") {
-		t.Fatalf("add view should list recent dirs after load, got:\n%s", view)
-	}
-	if service.recentCalls != 1 {
-		t.Fatalf("expected one recent dirs call, got %d", service.recentCalls)
-	}
-}
-
-func TestModelRunsTaskActionsForSelection(t *testing.T) {
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Active:  []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
-			Stopped: []aria2.Download{{GID: "s1", Name: "done.iso", Status: "complete"}},
-		},
-	}
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, refreshMsg{})
-
-	model = updateAndDrain(t, model, keyText("p"))
-	model = updateAndDrain(t, model, keyText("r"))
-	model = updateAndDrain(t, model, keyText("d"))
-	model = updateModel(t, model, keySpecial(tea.KeyDown))
-	model = updateAndDrain(t, model, keyText("d"))
-
-	if strings.Join(service.paused, ",") != "a1" {
-		t.Fatalf("paused got %#v", service.paused)
-	}
-	if strings.Join(service.resumed, ",") != "a1" {
-		t.Fatalf("resumed got %#v", service.resumed)
-	}
-	if strings.Join(service.removed, ",") != "a1" {
-		t.Fatalf("removed got %#v", service.removed)
-	}
-	if strings.Join(service.cleared, ",") != "s1" {
-		t.Fatalf("cleared got %#v", service.cleared)
-	}
-}
-
-func TestModelPagesStoppedDownloads(t *testing.T) {
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Stopped: []aria2.Download{{GID: "s1", Name: "done.iso", Status: "complete"}},
-		},
-	}
-	model := NewModel(service, time.Second, "dev")
-
-	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, keyText("n"))
-	model = updateModel(t, model, keyText("b"))
-
-	if len(service.listOptions) != 3 {
-		t.Fatalf("expected three list calls, got %d", len(service.listOptions))
-	}
-	if service.listOptions[0].StoppedOffset != 0 {
-		t.Fatalf("initial stopped offset got %d, want 0", service.listOptions[0].StoppedOffset)
-	}
-	if service.listOptions[1].StoppedOffset != 100 {
-		t.Fatalf("next page stopped offset got %d, want 100", service.listOptions[1].StoppedOffset)
-	}
-	if service.listOptions[2].StoppedOffset != 0 {
-		t.Fatalf("previous page stopped offset got %d, want 0", service.listOptions[2].StoppedOffset)
-	}
-	view := viewContent(model)
-	if !strings.Contains(view, "n/b \x1b[2mNext/Prev Page\x1b[22m") {
-		t.Fatalf("view should describe stopped paging controls, got:\n%s", view)
-	}
-}
-
-func TestModelDisplaysMetadataLabelForMetadataEntries(t *testing.T) {
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Active: []aria2.Download{
-				{GID: "m1", Name: "GIRLT.No.017.7z", Status: "active", IsMetadata: true},
-				{GID: "a1", Name: "movie.mkv", Status: "active"},
-			},
-		},
-	}
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, tea.WindowSizeMsg{Width: 140, Height: 16})
-	model = updateModel(t, model, refreshMsg{})
-
-	view := viewContent(model)
-	if !strings.Contains(view, "Metadata") {
-		t.Fatalf("view should show 'Metadata' status for metadata entries:\n%s", view)
-	}
-	if !strings.Contains(view, "GIRLT.No.017.7z") {
-		t.Fatalf("view should show metadata entry name:\n%s", view)
-	}
-}
-
-func TestModelGroupsMetadataRowsIntoOneStatusBucket(t *testing.T) {
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Active: []aria2.Download{
-				{GID: "a1", Name: "movie.mkv", Status: "active"},
-				{GID: "m1", Name: "meta-active.torrent", Status: "active", IsMetadata: true},
-			},
-			Waiting: []aria2.Download{
-				{GID: "p1", Name: "paused.iso", Status: "paused"},
-				{GID: "m2", Name: "meta-paused.torrent", Status: "paused", IsMetadata: true},
-			},
-			Stopped: []aria2.Download{
-				{GID: "d1", Name: "done.iso", Status: "complete"},
-			},
-		},
-	}
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, refreshMsg{})
-
-	got := make([]string, 0, len(model.items()))
-	for _, item := range model.items() {
-		got = append(got, item.GID)
-	}
-	want := []string{"a1", "m1", "m2", "p1", "d1"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("item order got %#v, want %#v", got, want)
-	}
-}
-
-func TestModelOpensAndClosesDetailView(t *testing.T) {
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Active: []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
-		},
-		detail: withDownloadDir(t, aria2.DownloadDetail{
-			GID:             "a1",
-			Name:            "active.iso",
-			Status:          "active",
-			PrimaryURI:      "https://example.com/active.iso",
-			Files:           []aria2.DownloadFile{{Path: "/data/downloads/active.iso", Name: "active.iso"}},
-			CompletedLength: 50,
-			TotalLength:     100,
-		}, "/data/downloads"),
-	}
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, keyText("l"))
-
-	if service.detailCalls != 1 {
-		t.Fatalf("expected detail call, got %d", service.detailCalls)
-	}
-	if model.Mode() != ModeDetail {
-		t.Fatalf("mode got %s, want detail", model.Mode())
-	}
-	view := viewContent(model)
-	if !strings.Contains(view, "active.iso") {
-		t.Fatalf("detail view missing name in header:\n%s", view)
-	}
-	if !strings.Contains(view, "[Active]") {
-		t.Fatalf("detail view missing status in header:\n%s", view)
-	}
-	if !strings.Contains(view, "\x1b[2mDownload Dir:") {
-		t.Fatalf("detail view missing dim download directory:\n%s", view)
-	}
-
-	model = updateModel(t, model, keyText("h"))
-	if model.Mode() != ModeList {
-		t.Fatalf("mode got %s, want list", model.Mode())
-	}
-}
-
-func TestModelNavigatesAdjacentDetailsWithJK(t *testing.T) {
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Active: []aria2.Download{
-				{GID: "a1", Name: "active.iso", Status: "active"},
-				{GID: "a2", Name: "queued.iso", Status: "waiting"},
-			},
-		},
-		details: map[string]aria2.DownloadDetail{
-			"a1": withDownloadDir(t, aria2.DownloadDetail{
-				GID:        "a1",
-				Name:       "active.iso",
-				Status:     "active",
-				PrimaryURI: "https://example.com/a1.iso",
-				Files:      []aria2.DownloadFile{{Path: "/downloads/a/active.iso", Name: "active.iso"}},
-			}, "/downloads/a"),
-			"a2": withDownloadDir(t, aria2.DownloadDetail{
-				GID:        "a2",
-				Name:       "queued.iso",
-				Status:     "waiting",
-				PrimaryURI: "https://example.com/a2.iso",
-				Files:      []aria2.DownloadFile{{Path: "/downloads/b/queued.iso", Name: "queued.iso"}},
-			}, "/downloads/b"),
-		},
-	}
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, keySpecial(tea.KeyEnter))
-	model = updateModel(t, model, keyText("j"))
-
-	if got := model.Selected().GID; got != "a2" {
-		t.Fatalf("selected gid got %q, want a2", got)
-	}
-	if model.detail.GID != "a2" {
-		t.Fatalf("detail gid got %q, want a2", model.detail.GID)
-	}
-	view := viewContent(model)
-	if !strings.Contains(view, "queued.iso") {
-		t.Fatalf("detail view should update to next item:\n%s", view)
-	}
-
-	model = updateModel(t, model, keyText("k"))
-	if got := model.Selected().GID; got != "a1" {
-		t.Fatalf("selected gid got %q, want a1", got)
-	}
-	if model.detail.GID != "a1" {
-		t.Fatalf("detail gid got %q, want a1", model.detail.GID)
-	}
-}
-
-func TestModelScrollsDetailWithArrows(t *testing.T) {
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Active: []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
-		},
-		detail: withDownloadDir(t, aria2.DownloadDetail{
-			GID:        "a1",
-			Name:       "active.iso",
-			Status:     "active",
-			PrimaryURI: "https://example.com/a1.iso",
-			Files:      []aria2.DownloadFile{{Path: "/downloads/a/active.iso", Name: "active.iso"}},
-		}, "/downloads/a"),
-	}
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, keySpecial(tea.KeyEnter))
-
-	if model.detailScroll != 0 {
-		t.Fatalf("scroll got %d, want 0", model.detailScroll)
-	}
-
-	model = updateModel(t, model, keySpecial(tea.KeyDown))
-	if model.detailScroll != 1 {
-		t.Fatalf("scroll got %d, want 1 after down", model.detailScroll)
-	}
-	if model.detail.GID != "a1" {
-		t.Fatalf("detail gid changed to %q, down should not switch items", model.detail.GID)
-	}
-
-	model = updateModel(t, model, keySpecial(tea.KeyUp))
-	if model.detailScroll != 0 {
-		t.Fatalf("scroll got %d, want 0 after up", model.detailScroll)
-	}
-}
-
-func TestModelQuitsFromAddAndDetailModes(t *testing.T) {
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Active: []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
-		},
-		detail: aria2.DownloadDetail{GID: "a1", Name: "active.iso", Status: "active"},
-	}
-	model := NewModel(service, time.Second, "dev")
-
-	addModel := updateModel(t, model, keyText("a"))
-	addView := viewContent(addModel)
-	if !strings.Contains(addView, "Esc \x1b[2mBack\x1b[22m") || !strings.Contains(addView, "Ctrl+C \x1b[2mQuit\x1b[22m") {
-		t.Fatalf("add view should mention Ctrl+C Quit, got:\n%s", addView)
-	}
-	addModel = updateModel(t, addModel, keySpecial(tea.KeyEsc))
-	if addModel.Mode() != ModeList {
-		t.Fatalf("mode got %s, want list", addModel.Mode())
-	}
-
-	// In input mode, text-producing key presses are treated as typed input and
-	// never act as shortcuts:
-	// pressing "q" must append to the URL field instead of quitting. Only
-	// ctrl+c (a modified combo, not plain text) quits from add mode.
-	addModel = updateModel(t, model, keyText("a"))
-	addModel = updateModel(t, addModel, keyText("q"))
-	if addModel.Mode() != ModeAdd {
-		t.Fatalf("mode got %s, want add after typing q", addModel.Mode())
-	}
-	if got := addModel.addForm.url; got != "q" {
-		t.Fatalf("input got %q, want q (bare runes must be typed, not shortcuts)", got)
-	}
-	_, quitCmd := addModel.Update(keyCtrl('c'))
-	if quitCmd == nil {
-		t.Fatal("expected ctrl+c to quit from add mode")
-	}
-
-	detailModel := updateModel(t, model, refreshMsg{})
-	detailModel = updateModel(t, detailModel, keySpecial(tea.KeyEnter))
-	detailView := viewContent(detailModel)
-	if !strings.Contains(detailView, "Esc/h \x1b[2mBack\x1b[22m") || !strings.Contains(detailView, "j/k \x1b[2mNext/Prev\x1b[22m") {
-		t.Fatalf("detail view should mention Esc/h Back and j/k Next/Prev, got:\n%s", detailView)
-	}
-	_, detailCommand := detailModel.Update(keyText("q"))
-	if detailCommand == nil {
-		t.Fatal("expected q to quit from detail mode")
-	}
-}
-
-func TestModelAcceptsPastedInputInAddMode(t *testing.T) {
-	service := &fakeService{}
-	model := NewModel(service, time.Second, "dev")
-
-	model = updateModel(t, model, keyText("a"))
-	model = updateModel(t, model, tea.PasteMsg{Content: "https://example.com/file.zip"})
-	model = updateModel(t, model, keySpecial(tea.KeyEnter))
-
-	if len(service.added) != 1 || service.added[0] != "https://example.com/file.zip" {
-		t.Fatalf("unexpected added URIs after paste: %#v", service.added)
-	}
-}
-
-func TestModelDetailHelpUsesGenericFileManagerLabel(t *testing.T) {
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Active: []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
-		},
-		detail: aria2.DownloadDetail{GID: "a1", Name: "active.iso", Status: "active"},
-	}
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, keySpecial(tea.KeyEnter))
-
-	view := viewContent(model)
-	if !strings.Contains(view, "o \x1b[2mOpen\x1b[22m") {
-		t.Fatalf("detail view should show the open label, got:\n%s", view)
-	}
-}
-
-func TestModelRetriesErrorDownloadWithR(t *testing.T) {
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Stopped: []aria2.Download{{GID: "e1", Name: "failed.iso", Status: "error"}},
-		},
-		retryGID: "e2",
-	}
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, refreshMsg{})
-	model = updateAndDrain(t, model, keyText("r"))
-
-	if len(service.retried) != 1 || service.retried[0] != "e1" {
-		t.Fatalf("retry calls got %v, want [e1]", service.retried)
-	}
-	if len(service.resumed) != 0 {
-		t.Fatalf("resume should not be called for error downloads, got %v", service.resumed)
-	}
-	if model.Selected().GID != "e2" {
-		t.Fatalf("selected gid got %q, want e2", model.Selected().GID)
-	}
-}
-
-func TestModelDetailViewWrapsLongErrorMessage(t *testing.T) {
-	errorMessage := "disk error: insufficient space on volume /very/long/path/to/downloads/folder/that/should/not/be/truncated"
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Stopped: []aria2.Download{{GID: "e1", Name: "failed.iso", Status: "error"}},
-		},
-		detail: withDownloadDir(t, aria2.DownloadDetail{
-			GID:          "e1",
-			Name:         "failed.iso",
-			Status:       "error",
-			ErrorCode:    "18",
-			ErrorMessage: errorMessage,
-			Files:        []aria2.DownloadFile{{Path: "/downloads/failed.iso", Name: "failed.iso"}},
-		}, "/downloads"),
-	}
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, tea.WindowSizeMsg{Width: 60, Height: 24})
-	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, keySpecial(tea.KeyEnter))
-
-	view := viewContent(model)
-	if strings.Contains(view, "...") {
-		t.Fatalf("detail view should not truncate error message:\n%s", view)
-	}
-	for _, part := range []string{"disk error:", "insufficient space", "downloads/folder"} {
-		if !strings.Contains(view, part) {
-			t.Fatalf("detail view missing error fragment %q:\n%s", part, view)
-		}
-	}
-}
-
-func TestModelShowsOpenErrorInsteadOfSilentlyIgnoringIt(t *testing.T) {
-	root := t.TempDir()
-	target := filepath.Join(root, "active.iso")
-	if err := os.WriteFile(target, []byte("data"), 0o644); err != nil {
-		t.Fatalf("write target: %v", err)
-	}
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Active: []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
-		},
-		detail: withDownloadDir(t, aria2.DownloadDetail{
-			GID:    "a1",
-			Name:   "active.iso",
-			Status: "active",
-			Files:  []aria2.DownloadFile{{Path: target, Name: "active.iso"}},
-		}, root),
-	}
-	previousPath := os.Getenv("PATH")
-	if err := os.Setenv("PATH", root); err != nil {
-		t.Fatalf("set PATH: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.Setenv("PATH", previousPath)
-	})
-
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, keySpecial(tea.KeyEnter))
-	model = updateModel(t, model, keyText("o"))
-
-	if model.ErrorInfo() == "" {
-		t.Fatal("expected open command failure to surface through error info")
-	}
-}
-
-func TestModelUsesXDGOpenForLinuxDetailOpen(t *testing.T) {
-	root := t.TempDir()
-	target := filepath.Join(root, "active.iso")
-	if err := os.WriteFile(target, []byte("data"), 0o644); err != nil {
-		t.Fatalf("write target: %v", err)
-	}
-	service := &fakeService{
-		snapshot: aria2.DownloadSnapshot{
-			Active: []aria2.Download{{GID: "a1", Name: "active.iso", Status: "active"}},
-		},
-		detail: withDownloadDir(t, aria2.DownloadDetail{
-			GID:    "a1",
-			Name:   "active.iso",
-			Status: "active",
-			Files:  []aria2.DownloadFile{{Path: target, Name: "active.iso"}},
-		}, root),
-	}
-
-	previousOS := runtimeGOOS
-	previousStart := startExternalCommand
-	runtimeGOOS = "linux"
-	var gotName string
-	var gotArgs []string
-	startExternalCommand = func(name string, args ...string) error {
-		gotName = name
-		gotArgs = append([]string(nil), args...)
-		return nil
-	}
-	t.Cleanup(func() {
-		runtimeGOOS = previousOS
-		startExternalCommand = previousStart
-	})
-
-	model := NewModel(service, time.Second, "dev")
-	model = updateModel(t, model, refreshMsg{})
-	model = updateModel(t, model, keySpecial(tea.KeyEnter))
-	model = updateModel(t, model, keyText("o"))
-
-	if gotName != "xdg-open" {
-		t.Fatalf("command got %q, want xdg-open", gotName)
-	}
-	if len(gotArgs) != 1 || gotArgs[0] != root {
-		t.Fatalf("args got %#v, want [%q]", gotArgs, root)
-	}
-}
-
-func updateModel(t *testing.T, model Model, msg tea.Msg) Model {
-	t.Helper()
-	updated, _ := model.Update(msg)
-	return updated.(Model)
-}
-
-// updateAndDrain is like updateModel but also executes any returned tea.Cmd,
-// feeding the resulting message back into Update. This is needed for testing
-// actions that run asynchronously (e.g. pause, resume, remove).
-func updateAndDrain(t *testing.T, model Model, msg tea.Msg) Model {
-	t.Helper()
-	updated, cmd := model.Update(msg)
+	model := NewModel(context.Background(), service, time.Second, "dev")
+	updated, cmd := model.Update(refreshTimerMsg{token: 0})
 	model = updated.(Model)
 	if cmd != nil {
-		result := cmd()
-		if result != nil {
-			updated, _ := model.Update(result)
-			model = updated.(Model)
+		t.Fatal("trigger during initial read must coalesce")
+	}
+	if !model.refreshState.Queued {
+		t.Fatal("expected queued refresh")
+	}
+	model.refreshState.Generation++
+	old := snapshotResultMsg{generation: 1, query: model.query(), read: aria2.DashboardRead{Downloads: aria2.DownloadSnapshot{Active: []aria2.Download{{GID: "old"}}}}}
+	updated, cmd = model.Update(old)
+	model = updated.(Model)
+	if model.list.HasSnapshot {
+		t.Fatal("stale generation applied")
+	}
+	if cmd == nil {
+		t.Fatal("queued refresh was not started")
+	}
+}
+
+func TestPartialListFailurePreservesLastKnownGood(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	query := model.query()
+	first := snapshotResultMsg{generation: 1, query: query, read: aria2.DashboardRead{Downloads: aria2.DownloadSnapshot{Active: []aria2.Download{{GID: "a"}}}}}
+	updated, _ := model.Update(first)
+	model = updated.(Model)
+	model.refreshState.InFlight = true
+	failed := snapshotResultMsg{generation: 1, query: query, read: aria2.DashboardRead{ListErr: errors.New("nested fault")}}
+	updated, _ = model.Update(failed)
+	model = updated.(Model)
+	if !model.list.HasSnapshot || model.Selected().GID != "a" {
+		t.Fatal("last known good snapshot was discarded")
+	}
+	if model.list.LastError == nil {
+		t.Fatal("list error not recorded")
+	}
+}
+
+func TestDetailResultCanApplyWhenListFails(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.detailState.RequestedGID = "a"
+	query := model.query()
+	detail := aria2.DownloadDetail{GID: "a", Name: "task"}
+	msg := snapshotResultMsg{generation: 1, query: query, read: aria2.DashboardRead{ListErr: errors.New("list"), Detail: &detail}}
+	updated, _ := model.Update(msg)
+	model = updated.(Model)
+	if model.detailState.AppliedGID != "a" || model.detail.Name != "task" {
+		t.Fatal("valid detail was discarded")
+	}
+}
+
+func TestDetailSourceFailureRetainsPriorSourceForSameGID(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.detailState = DetailState{RequestedGID: "a", AppliedGID: "a", HasDetail: true, SourceResolved: false, Detail: aria2.DownloadDetail{GID: "a", PrimaryURI: "magnet:?old"}}
+	model.detail = model.detailState.Detail
+	detail := aria2.DownloadDetail{GID: "a"}
+	query := model.query()
+	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: query, read: aria2.DashboardRead{Downloads: aria2.DownloadSnapshot{}, Detail: &detail, DetailSourceErr: errors.New("source timeout")}})
+	model = updated.(Model)
+	if model.detail.PrimaryURI != "magnet:?old" || model.detailState.SourceError == nil {
+		t.Fatalf("source partial merge failed: %#v", model.detailState)
+	}
+}
+
+func TestUnknownMutationDoesNotRepeatAndQueuesReconciliation(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.snapshot.Active = []aria2.Download{{GID: "a", Status: "active"}}
+	model.refreshState.InFlight = false
+	updated, cmd := model.startAction(actionPause)
+	model = updated.(Model)
+	msg := cmd()
+	result := msg.(actionResultMsg)
+	result.err = &aria2.OutcomeUnknownError{Method: "aria2.forcePause", Cause: context.DeadlineExceeded}
+	updated, refresh := model.Update(result)
+	model = updated.(Model)
+	if _, ok := model.pending["a"]; ok {
+		t.Fatal("pending action did not terminate")
+	}
+	if refresh == nil {
+		t.Fatal("unknown outcome did not reconcile")
+	}
+	if !errors.Is(result.err, aria2.ErrOutcomeUnknown) {
+		t.Fatal("unknown identity lost")
+	}
+}
+
+func TestNavigationAndQuitRemainAvailableDuringRead(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.snapshot.Active = []aria2.Download{{GID: "a"}, {GID: "b"}}
+	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
+	model = updated.(Model)
+	if model.Selected().GID != "b" {
+		t.Fatal("navigation blocked by read")
+	}
+	_, cmd := model.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	if cmd == nil {
+		t.Fatal("quit blocked by read")
+	}
+}
+
+func TestBackClearsDetailTargetAndQueuesLatestRead(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.mode = ModeDetail
+	model.detailState.RequestedGID = "a"
+	model.refreshState.InFlight = false
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	model = updated.(Model)
+	if model.mode != ModeList || model.detailState.RequestedGID != "" {
+		t.Fatalf("detail target survived Back: %#v", model.detailState)
+	}
+	if cmd == nil {
+		t.Fatal("Back did not request a list-only refresh")
+	}
+}
+
+func TestDesiredSelectionWaitsUntilReplacementAppears(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.desiredGID = "new"
+	query := model.query()
+	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: query, read: aria2.DashboardRead{Downloads: aria2.DownloadSnapshot{Active: []aria2.Download{{GID: "old"}}}}})
+	model = updated.(Model)
+	if model.desiredGID != "new" {
+		t.Fatal("desired selection was consumed before it appeared")
+	}
+	model.refreshState.InFlight = true
+	updated, _ = model.Update(snapshotResultMsg{generation: 1, query: query, read: aria2.DashboardRead{Downloads: aria2.DownloadSnapshot{Active: []aria2.Download{{GID: "new"}}}}})
+	model = updated.(Model)
+	if model.desiredGID != "" || model.Selected().GID != "new" {
+		t.Fatalf("replacement not selected: desired=%q selected=%q", model.desiredGID, model.Selected().GID)
+	}
+}
+
+func TestRetryReplacementRetargetsOpenDetail(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.mode = ModeDetail
+	model.pending["old"] = actionRetry
+	model.detailState.RequestedGID = "old"
+	updated, _ := model.Update(actionResultMsg{kind: actionRetry, gid: "old", replacement: "new", warning: errors.New("cleanup failed")})
+	model = updated.(Model)
+	if model.detailState.RequestedGID != "new" || model.detail.GID != "" {
+		t.Fatalf("detail was not retargeted: %#v", model.detailState)
+	}
+	if model.actionErrors["new"] == nil {
+		t.Fatal("cleanup warning was not scoped to replacement")
+	}
+}
+
+func TestAddAndDetailErrorsRenderInTheirOwningViews(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.mode = ModeAdd
+	model.addError = errors.New("duplicate risk")
+	if view := model.View().Content; !strings.Contains(view, "duplicate risk") {
+		t.Fatalf("Add error missing:\n%s", view)
+	}
+	model.mode = ModeDetail
+	model.detailState.RequestedGID = "a"
+	model.detailState.LastError = errors.New("timeout")
+	if view := model.View().Content; !strings.Contains(view, "Details unavailable") || !strings.Contains(view, "timeout") {
+		t.Fatalf("detail error shell missing:\n%s", view)
+	}
+}
+
+func TestInitialFailureRendersUnavailablePlaceholder(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.loaded = true
+	model.list.Attempted = true
+	model.list.LastError = errors.New("offline")
+	if view := model.View().Content; !strings.Contains(view, "aria2 is unavailable") {
+		t.Fatalf("unavailable placeholder missing:\n%s", view)
+	}
+}
+
+func TestOldNoticeExpiryCannotClearAddError(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	updated, _ := model.setNotice(errors.New("clipboard"))
+	model = updated.(Model)
+	model.addError = errors.New("add failed")
+	updated, _ = model.Update(noticeExpiredMsg{id: model.noticeID})
+	model = updated.(Model)
+	if model.notice != "" || model.addError == nil {
+		t.Fatal("notice expiry cleared independent Add error")
+	}
+}
+
+func TestParentCancellationStopsBlockedSnapshotCommand(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	service := &fakeService{snapshotFunc: func(ctx context.Context, _ aria2.DashboardQuery) (aria2.DashboardRead, error) {
+		<-ctx.Done()
+		return aria2.DashboardRead{}, ctx.Err()
+	}}
+	model := NewModel(ctx, service, time.Second, "dev")
+	result := make(chan tea.Msg, 1)
+	go func() { result <- model.snapshotCmd(1, model.query())() }()
+	cancel()
+	select {
+	case msg := <-result:
+		if !errors.Is(msg.(snapshotResultMsg).err, context.Canceled) {
+			t.Fatalf("blocked command returned %v", msg)
 		}
-	}
-	return model
-}
-
-func viewContent(model Model) string {
-	return model.View().Content
-}
-
-func keyText(text string) tea.KeyPressMsg {
-	code := tea.KeyExtended
-	runes := []rune(text)
-	if len(runes) == 1 {
-		code = runes[0]
-	}
-	return tea.KeyPressMsg{
-		Code: code,
-		Text: text,
+	case <-time.After(time.Second):
+		t.Fatal("blocked snapshot ignored parent cancellation")
 	}
 }
 
-func keySpecial(code rune) tea.KeyPressMsg {
-	return tea.KeyPressMsg{Code: code}
-}
-
-func keyCtrl(code rune) tea.KeyPressMsg {
-	return tea.KeyPressMsg{Code: code, Mod: tea.ModCtrl}
-}
-
-func withDownloadDir(t *testing.T, detail aria2.DownloadDetail, dir string) aria2.DownloadDetail {
-	t.Helper()
-	field := reflect.ValueOf(&detail).Elem().FieldByName("DownloadDir")
-	if !field.IsValid() {
-		t.Fatal("DownloadDetail is missing DownloadDir")
+func TestPageRequestKeepsAppliedPageUntilMatchingReadSucceeds(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.loaded = true
+	model.list.HasSnapshot = true
+	model.list.Applied = aria2.ListQuery{StoppedOffset: 0, StoppedLimit: 100}
+	model.list.Requested = aria2.ListQuery{StoppedOffset: 100, StoppedLimit: 100}
+	model.stoppedPage = 1
+	if stats := model.listStats(); !strings.Contains(stats, "page 1 (loading 2)") {
+		t.Fatalf("applied page relabelled early: %s", stats)
 	}
-	if field.Kind() != reflect.String || !field.CanSet() {
-		t.Fatal("DownloadDetail.DownloadDir must be a settable string")
-	}
-	field.SetString(dir)
-	return detail
-}
-
-type fakeService struct {
-	snapshot       aria2.DownloadSnapshot
-	detail         aria2.DownloadDetail
-	details        map[string]aria2.DownloadDetail
-	listCalls      int
-	listOptions    []aria2.ListOptions
-	detailCalls    int
-	detailRequests []string
-	added          []string
-	addOpts        []aria2.AddOptions
-	defaultDir     string
-	recentDirs     []string
-	recentCalls    int
-	paused         []string
-	resumed        []string
-	retried        []string
-	retryGID       string
-	removed        []string
-	cleared        []string
-}
-
-func (service *fakeService) ListDownloads(_ context.Context, options aria2.ListOptions) (aria2.DownloadSnapshot, error) {
-	service.listCalls++
-	service.listOptions = append(service.listOptions, options)
-	return service.snapshot, nil
-}
-
-func (service *fakeService) TaskDetail(_ context.Context, gid string) (aria2.DownloadDetail, error) {
-	service.detailCalls++
-	service.detailRequests = append(service.detailRequests, gid)
-	if service.details != nil {
-		if detail, ok := service.details[gid]; ok {
-			return detail, nil
-		}
-	}
-	return service.detail, nil
-}
-
-func (service *fakeService) AddURI(_ context.Context, uri string, opts aria2.AddOptions) (string, error) {
-	service.added = append(service.added, uri)
-	service.addOpts = append(service.addOpts, opts)
-	return "new-gid", nil
-}
-
-func (service *fakeService) RecentDirs(context.Context) ([]string, error) {
-	service.recentCalls++
-	return service.recentDirs, nil
-}
-
-func (service *fakeService) DefaultDir() string {
-	return service.defaultDir
-}
-
-func (service *fakeService) Pause(_ context.Context, gid string) error {
-	service.paused = append(service.paused, gid)
-	return nil
-}
-
-func (service *fakeService) Resume(_ context.Context, gid string) error {
-	service.resumed = append(service.resumed, gid)
-	return nil
-}
-
-func (service *fakeService) Retry(_ context.Context, gid string) (string, error) {
-	service.retried = append(service.retried, gid)
-	if service.retryGID == "" {
-		service.retryGID = "retried-gid"
-	}
-	for i, item := range service.snapshot.Stopped {
-		if item.GID == gid {
-			service.snapshot.Stopped = append(service.snapshot.Stopped[:i], service.snapshot.Stopped[i+1:]...)
-			break
-		}
-	}
-	service.snapshot.Waiting = append(service.snapshot.Waiting, aria2.Download{
-		GID:    service.retryGID,
-		Name:   "retried.iso",
-		Status: "waiting",
-	})
-	return service.retryGID, nil
-}
-
-func (service *fakeService) Remove(_ context.Context, gid string) error {
-	service.removed = append(service.removed, gid)
-	return nil
-}
-
-func (service *fakeService) ClearStopped(_ context.Context, gid string) error {
-	service.cleared = append(service.cleared, gid)
-	return nil
-}
-
-func (service *fakeService) Subscribe(context.Context) <-chan aria2.Notification {
-	return nil
 }

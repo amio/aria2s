@@ -31,28 +31,31 @@ type RPC interface {
 }
 
 type dashboardRPC interface {
-	ListDownloads(context.Context, state.State, aria2.ListOptions) (aria2.DownloadSnapshot, error)
+	DashboardSnapshot(context.Context, state.State, aria2.DashboardQuery) (aria2.DashboardRead, error)
 	TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error)
+	AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error)
 	Pause(context.Context, state.State, string) error
 	Resume(context.Context, state.State, string) error
-	Retry(context.Context, state.State, string) (string, error)
+	RetrySource(context.Context, state.State, string) (aria2.RetrySource, error)
+	AddURIs(context.Context, state.State, []string, aria2.AddOptions) (string, error)
 	Remove(context.Context, state.State, string) error
 	ClearStopped(context.Context, state.State, string) error
 }
 
 type Options struct {
-	Paths           paths.Paths
-	DownloadDir     string
-	LookPath        func(string) (string, error)
-	Abs             func(string) (string, error)
-	IsPortAvailable func(int) bool
-	GenerateSecret  func() (string, error)
-	RenderService   func(state.State) (string, error)
-	Service         service.Backend
-	RPC             RPC
-	RPCReadyTimeout time.Duration
-	RPCPollInterval time.Duration
-	DashboardRunner func(*App) error
+	Paths                    paths.Paths
+	DownloadDir              string
+	LookPath                 func(string) (string, error)
+	Abs                      func(string) (string, error)
+	IsPortAvailable          func(int) bool
+	GenerateSecret           func() (string, error)
+	RenderService            func(state.State) (string, error)
+	Service                  service.Backend
+	RPC                      RPC
+	RPCReadyTimeout          time.Duration
+	RPCPollInterval          time.Duration
+	DashboardReadTimeout     time.Duration
+	DashboardMutationTimeout time.Duration
 }
 
 type App struct {
@@ -86,6 +89,12 @@ func New(options Options) *App {
 	}
 	if options.RPCPollInterval == 0 {
 		options.RPCPollInterval = 100 * time.Millisecond
+	}
+	if options.DashboardReadTimeout == 0 {
+		options.DashboardReadTimeout = 2 * time.Second
+	}
+	if options.DashboardMutationTimeout == 0 {
+		options.DashboardMutationTimeout = 5 * time.Second
 	}
 	return &App{options: options}
 }
@@ -164,22 +173,39 @@ func defaultOptionsForOS(goos, home string, uid int, runner service.CommandRunne
 }
 
 func (app *App) Install(ctx context.Context, start bool) error {
-	aria2c, err := app.options.LookPath("aria2c")
-	if err != nil {
-		return fmt.Errorf("aria2c not found in PATH: %w", err)
-	}
-	aria2c, err = app.options.Abs(aria2c)
+	desired, err := app.desiredManagedState("")
 	if err != nil {
 		return err
 	}
+	current, err := app.reconcileManagedRuntime(ctx, desired)
+	if err != nil || !start {
+		return err
+	}
+	if err := app.startSupervisor(ctx); err != nil {
+		return err
+	}
+	return app.waitForRPC(ctx, current)
+}
+
+func (app *App) desiredManagedState(storedExecutable string) (state.State, error) {
+	aria2c := storedExecutable
+	var err error
+	if !isExecutable(aria2c) {
+		aria2c, err = app.options.LookPath("aria2c")
+		if err != nil {
+			return state.State{}, fmt.Errorf("aria2c not found in PATH: %w", err)
+		}
+		aria2c, err = app.options.Abs(aria2c)
+		if err != nil {
+			return state.State{}, err
+		}
+	}
 	current, err := state.Load(app.options.Paths.StateFile)
-	stateExists := true
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			current = state.State{}
-			stateExists = false
 		} else {
-			return fmt.Errorf("load state: %w", err)
+			return state.State{}, fmt.Errorf("load state: %w", err)
 		}
 	}
 	desired := current
@@ -191,26 +217,39 @@ func (app *App) Install(ctx context.Context, start bool) error {
 	if desired.RPCPort == 0 {
 		desired.RPCPort, err = app.choosePort()
 		if err != nil {
-			return err
+			return state.State{}, err
 		}
 	}
 	if desired.RPCSecret == "" {
 		desired.RPCSecret, err = app.options.GenerateSecret()
 		if err != nil {
-			return err
+			return state.State{}, err
+		}
+	}
+	return desired, nil
+}
+
+func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State) (state.State, error) {
+	current, err := state.Load(app.options.Paths.StateFile)
+	stateExists := true
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			current, stateExists = state.State{}, false
+		} else {
+			return state.State{}, fmt.Errorf("load state: %w", err)
 		}
 	}
 	stateChanged := !stateExists || !sameState(current, desired)
 	current = desired
 	configNeedsCreate, err := fileMissing(app.options.Paths.ConfigFile)
 	if err != nil {
-		return err
+		return state.State{}, err
 	}
 	sessionNeedsRepair := needs0600File(current.SessionPath)
 	logDirNeedsCreate := !dirExists(filepath.Dir(current.LogPath))
 	serviceFile, err := app.options.RenderService(current)
 	if err != nil {
-		return err
+		return state.State{}, err
 	}
 	serviceLoaded := false
 	serviceRunning := false
@@ -221,115 +260,125 @@ func (app *App) Install(ctx context.Context, start bool) error {
 	serviceWasRunning := serviceRunning
 	serviceChanged, err := fileContentChanged(app.options.Paths.ServiceFile, serviceFile)
 	if err != nil {
-		return err
+		return state.State{}, err
 	}
 	if !stateChanged && !configNeedsCreate && !sessionNeedsRepair && !logDirNeedsCreate && !serviceChanged && serviceLoaded {
-		if !start {
-			return nil
-		}
-		if serviceRunning {
-			return app.waitForRPC(ctx, current)
-		}
+		return current, nil
 	}
 	if stateChanged {
 		if err := state.Save(app.options.Paths.StateFile, current); err != nil {
-			return err
+			return state.State{}, err
 		}
 	}
 	if configNeedsCreate {
 		if err := aria2.WriteConfig(app.options.Paths.ConfigFile, aria2.DefaultConfig(app.defaultDownloadDir())); err != nil {
-			return err
+			return state.State{}, err
 		}
 	}
 	if sessionNeedsRepair {
 		if err := touch0600(current.SessionPath); err != nil {
-			return err
+			return state.State{}, err
 		}
 	}
 	if logDirNeedsCreate {
 		if err := os.MkdirAll(filepath.Dir(current.LogPath), 0o755); err != nil {
-			return err
+			return state.State{}, err
 		}
 	}
 	if app.options.Service != nil && serviceLoaded && serviceChanged {
 		if serviceRunning {
 			if err := app.options.Service.Stop(ctx); err != nil {
-				return err
+				return state.State{}, err
 			}
 			serviceRunning = false
 		}
 		if err := app.options.Service.Uninstall(ctx); err != nil {
-			return err
+			return state.State{}, err
 		}
 		serviceLoaded = false
 	}
 	if serviceChanged {
 		if err := os.MkdirAll(filepath.Dir(app.options.Paths.ServiceFile), 0o755); err != nil {
-			return err
+			return state.State{}, err
 		}
 		if err := os.WriteFile(app.options.Paths.ServiceFile, []byte(serviceFile), 0o644); err != nil {
-			return err
+			return state.State{}, err
 		}
 	}
 	if app.options.Service != nil {
 		if !serviceLoaded {
 			if err := app.options.Service.Install(ctx); err != nil {
-				return err
+				return state.State{}, err
 			}
 		}
-		if start {
+		if serviceWasRunning && serviceChanged {
 			if err := app.options.Service.Start(ctx); err != nil {
-				return err
+				return state.State{}, err
 			}
-		} else if serviceWasRunning && serviceChanged {
-			if err := app.options.Service.Start(ctx); err != nil {
-				return err
-			}
-		}
-		if start {
-			return app.waitForRPC(ctx, current)
 		}
 	}
-	return nil
+	return current, nil
 }
 
-func (app *App) RunDashboard() error {
-	if app.options.DashboardRunner == nil {
-		return errors.New("dashboard runner not configured")
-	}
-	return app.options.DashboardRunner(app)
-}
-
-func (app *App) SetDashboardRunner(runner func(*App) error) {
-	app.options.DashboardRunner = runner
-}
-
-func (app *App) EnsureDashboardReady(ctx context.Context) error {
+func (app *App) inspectDashboard(ctx context.Context) (state.State, bool, error) {
 	current, err := state.Load(app.options.Paths.StateFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return app.Install(ctx, true)
+			return state.State{}, true, nil
 		}
-		return fmt.Errorf("load state: %w", err)
+		return state.State{}, false, fmt.Errorf("load state: %w", err)
 	}
 	if !isExecutable(current.Aria2cPath) {
-		return app.Install(ctx, true)
+		return current, true, nil
 	}
 	serviceFile, err := app.options.RenderService(current)
 	if err != nil {
-		return err
+		return state.State{}, false, err
 	}
 	serviceChanged, err := fileContentChanged(app.options.Paths.ServiceFile, serviceFile)
 	if err != nil {
-		return err
+		return state.State{}, false, err
 	}
 	if serviceChanged || needs0600File(current.SessionPath) || !dirExists(filepath.Dir(current.LogPath)) {
-		return app.Install(ctx, true)
+		return current, true, nil
 	}
 	if app.options.Service != nil && !app.options.Service.IsLoaded(ctx) {
-		return app.Install(ctx, true)
+		return current, true, nil
 	}
-	return app.Start(ctx)
+	return current, false, nil
+}
+
+/** PrepareDashboard repairs managed runtime state and starts the supervisor without waiting for RPC. */
+func (app *App) PrepareDashboard(ctx context.Context) (*DashboardSession, error) {
+	current, repair, err := app.inspectDashboard(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if repair {
+		desired, err := app.desiredManagedState(current.Aria2cPath)
+		if err != nil {
+			return nil, err
+		}
+		current, err = app.reconcileManagedRuntime(ctx, desired)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := app.startSupervisor(ctx); err != nil {
+		return nil, err
+	}
+	rpc, ok := app.options.RPC.(dashboardRPC)
+	if !ok {
+		return nil, errors.New("configured RPC client does not support dashboard task management")
+	}
+	return &DashboardSession{app: app, identity: current, rpc: rpc}, nil
+}
+
+func (app *App) startSupervisor(ctx context.Context) error {
+	if app.options.Service != nil && !app.options.Service.IsRunning(ctx) {
+		return app.options.Service.Start(ctx)
+	}
+	return nil
 }
 
 func (app *App) Uninstall(ctx context.Context) error {
@@ -349,10 +398,7 @@ func (app *App) Start(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if app.options.Service.IsRunning(ctx) {
-		return app.waitForRPC(ctx, current)
-	}
-	if err := app.options.Service.Start(ctx); err != nil {
+	if err := app.startSupervisor(ctx); err != nil {
 		return err
 	}
 	return app.waitForRPC(ctx, current)
@@ -445,10 +491,6 @@ func (app *App) Add(ctx context.Context, uri string, opts aria2.AddOptions) (str
 	return gid, nil
 }
 
-func (app *App) AddURI(ctx context.Context, uri string, opts aria2.AddOptions) (string, error) {
-	return app.Add(ctx, uri, opts)
-}
-
 func (app *App) DefaultDir() string {
 	return app.defaultDownloadDir()
 }
@@ -494,89 +536,8 @@ func (app *App) recordDir(dir string) error {
 	return state.Save(app.options.Paths.StateFile, current)
 }
 
-func (app *App) ListDownloads(ctx context.Context, options aria2.ListOptions) (aria2.DownloadSnapshot, error) {
-	current, rpc, err := app.dashboardRPC()
-	if err != nil {
-		return aria2.DownloadSnapshot{}, err
-	}
-	return rpc.ListDownloads(ctx, current, options)
-}
-
-func (app *App) TaskDetail(ctx context.Context, gid string) (aria2.DownloadDetail, error) {
-	current, rpc, err := app.dashboardRPC()
-	if err != nil {
-		return aria2.DownloadDetail{}, err
-	}
-	return rpc.TaskDetail(ctx, current, gid)
-}
-
-func (app *App) Pause(ctx context.Context, gid string) error {
-	current, rpc, err := app.dashboardRPC()
-	if err != nil {
-		return err
-	}
-	return rpc.Pause(ctx, current, gid)
-}
-
-func (app *App) Resume(ctx context.Context, gid string) error {
-	current, rpc, err := app.dashboardRPC()
-	if err != nil {
-		return err
-	}
-	return rpc.Resume(ctx, current, gid)
-}
-
-func (app *App) Retry(ctx context.Context, gid string) (string, error) {
-	current, rpc, err := app.dashboardRPC()
-	if err != nil {
-		return "", err
-	}
-	return rpc.Retry(ctx, current, gid)
-}
-
-func (app *App) Remove(ctx context.Context, gid string) error {
-	current, rpc, err := app.dashboardRPC()
-	if err != nil {
-		return err
-	}
-	return rpc.Remove(ctx, current, gid)
-}
-
-func (app *App) ClearStopped(ctx context.Context, gid string) error {
-	current, rpc, err := app.dashboardRPC()
-	if err != nil {
-		return err
-	}
-	return rpc.ClearStopped(ctx, current, gid)
-}
-
-func (app *App) Subscribe(ctx context.Context) <-chan aria2.Notification {
-	current, err := state.Load(app.options.Paths.StateFile)
-	if err != nil {
-		return nil
-	}
-	wsClient, err := aria2.NewWSClient(endpoint(current.RPCPort))
-	if err != nil {
-		return nil
-	}
-	wsClient.Connect(ctx)
-	return wsClient.Events()
-}
-
 func (app *App) Paths() paths.Paths {
 	return app.options.Paths
-}
-
-func (app *App) dashboardRPC() (state.State, dashboardRPC, error) {
-	current, err := state.Load(app.options.Paths.StateFile)
-	if err != nil {
-		return state.State{}, nil, err
-	}
-	rpc, ok := app.options.RPC.(dashboardRPC)
-	if !ok {
-		return state.State{}, nil, errors.New("configured RPC client does not support dashboard task management")
-	}
-	return current, rpc, nil
 }
 
 func (app *App) preflightLifecycle() (state.State, error) {
@@ -705,8 +666,8 @@ func (r *LocalRPC) Shutdown(ctx context.Context, current state.State) error {
 	return aria2.WrapTransportError(r.rpcClient(current).Shutdown(ctx))
 }
 
-func (r *LocalRPC) ListDownloads(ctx context.Context, current state.State, options aria2.ListOptions) (aria2.DownloadSnapshot, error) {
-	return r.rpcClient(current).ListDownloads(ctx, options)
+func (r *LocalRPC) DashboardSnapshot(ctx context.Context, current state.State, query aria2.DashboardQuery) (aria2.DashboardRead, error) {
+	return r.rpcClient(current).DashboardSnapshot(ctx, query)
 }
 
 func (r *LocalRPC) TaskDetail(ctx context.Context, current state.State, gid string) (aria2.DownloadDetail, error) {
@@ -721,8 +682,12 @@ func (r *LocalRPC) Resume(ctx context.Context, current state.State, gid string) 
 	return r.rpcClient(current).Resume(ctx, gid)
 }
 
-func (r *LocalRPC) Retry(ctx context.Context, current state.State, gid string) (string, error) {
-	return r.rpcClient(current).Retry(ctx, gid)
+func (r *LocalRPC) RetrySource(ctx context.Context, current state.State, gid string) (aria2.RetrySource, error) {
+	return r.rpcClient(current).RetrySource(ctx, gid)
+}
+
+func (r *LocalRPC) AddURIs(ctx context.Context, current state.State, uris []string, opts aria2.AddOptions) (string, error) {
+	return r.rpcClient(current).AddURIs(ctx, uris, opts)
 }
 
 func (r *LocalRPC) Remove(ctx context.Context, current state.State, gid string) error {

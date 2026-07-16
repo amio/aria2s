@@ -26,10 +26,28 @@ func Save(path string, current State) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	temp, err := os.CreateTemp(filepath.Dir(path), ".state-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o600)
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		temp.Close()
+		return err
+	}
+	if _, err := temp.Write(data); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
 }
 
 func Load(path string) (State, error) {

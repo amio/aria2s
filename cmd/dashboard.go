@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -10,21 +11,26 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func defaultDashboardRunner(application *app.App) error {
-	program := tea.NewProgram(tui.NewModel(application, time.Second, Version))
+type dashboardRunner func(context.Context, *app.DashboardSession) error
+
+func defaultDashboardRunner(ctx context.Context, session *app.DashboardSession) error {
+	sessionCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	program := tea.NewProgram(tui.NewModel(sessionCtx, session, time.Second, Version), tea.WithContext(sessionCtx))
 	_, err := program.Run()
 	return err
 }
 
-func newDashboardCommand(application *app.App) *cobra.Command {
+func newDashboardCommand(application *app.App, runner dashboardRunner) *cobra.Command {
 	return &cobra.Command{
 		Use:   "dashboard",
 		Short: "Open the interactive download dashboard",
 		RunE: func(command *cobra.Command, _ []string) error {
-			if err := application.EnsureDashboardReady(command.Context()); err != nil {
+			session, err := application.PrepareDashboard(command.Context())
+			if err != nil {
 				return err
 			}
-			return application.RunDashboard()
+			return runner(command.Context(), session)
 		},
 	}
 }

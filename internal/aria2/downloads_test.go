@@ -162,7 +162,7 @@ func TestTaskDetailParsesSelectedTaskPayload(t *testing.T) {
 	assertRequestIncludesField(t, request, "dir")
 }
 
-func TestRetryRemovesFailedDownloadAndReaddsURIs(t *testing.T) {
+func TestRetryPrimitivesReadSourceAndAddBeforeCleanup(t *testing.T) {
 	var requests []rpcCall
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := decodeRPCCall(t, r)
@@ -183,9 +183,16 @@ func TestRetryRemovesFailedDownloadAndReaddsURIs(t *testing.T) {
 	defer server.Close()
 	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
 
-	newGID, err := client.Retry(context.Background(), "e1")
+	source, err := client.RetrySource(context.Background(), "e1")
 	if err != nil {
-		t.Fatalf("retry: %v", err)
+		t.Fatalf("retry source: %v", err)
+	}
+	newGID, err := client.AddURIs(context.Background(), source.URIs, aria2.AddOptions{Dir: source.Dir})
+	if err != nil {
+		t.Fatalf("add replacement: %v", err)
+	}
+	if err := client.RemoveDownloadResult(context.Background(), "e1"); err != nil {
+		t.Fatalf("cleanup: %v", err)
 	}
 	if newGID != "e2" {
 		t.Fatalf("new gid got %q, want e2", newGID)
@@ -195,23 +202,22 @@ func TestRetryRemovesFailedDownloadAndReaddsURIs(t *testing.T) {
 	}
 	assertRPCRequest(t, requests[0], "aria2.tellStatus", "token:secret-token", "e1")
 	assertRPCRequest(t, requests[1], "aria2.getUris", "token:secret-token", "e1")
-	assertRPCRequest(t, requests[2], "aria2.removeDownloadResult", "token:secret-token", "e1")
-	assertRPCRequest(t, requests[3], "aria2.addUri", "token:secret-token")
-	if len(requests[3].Params) < 3 {
-		t.Fatalf("addUri params got %#v, want uri list and options", requests[3].Params)
+	assertRPCRequest(t, requests[2], "aria2.addUri", "token:secret-token")
+	assertRPCRequest(t, requests[3], "aria2.removeDownloadResult", "token:secret-token", "e1")
+	if len(requests[2].Params) < 3 {
+		t.Fatalf("addUri params got %#v, want uri list and options", requests[2].Params)
 	}
-	uris, ok := requests[3].Params[1].([]any)
+	uris, ok := requests[2].Params[1].([]any)
 	if !ok || len(uris) != 1 || uris[0] != "https://example.com/failed.iso" {
-		t.Fatalf("addUri uris got %#v", requests[3].Params[1])
+		t.Fatalf("addUri uris got %#v", requests[2].Params[1])
 	}
-	opts, ok := requests[3].Params[2].(map[string]any)
+	opts, ok := requests[2].Params[2].(map[string]any)
 	if !ok || opts["dir"] != "/data/downloads" {
-		t.Fatalf("addUri options got %#v", requests[3].Params[2])
+		t.Fatalf("addUri options got %#v", requests[2].Params[2])
 	}
 }
 
-func TestRetryBuildsMagnetFromInfoHashWhenURIsMissing(t *testing.T) {
-	var addParams []any
+func TestRetrySourceBuildsMagnetFromInfoHashWhenURIsMissing(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := decodeRPCCall(t, r)
 		switch call.Method {
@@ -219,11 +225,6 @@ func TestRetryBuildsMagnetFromInfoHashWhenURIsMissing(t *testing.T) {
 			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":{"gid":"e1","status":"error","dir":"/data/downloads","files":[{"path":"/tmp/torrent","length":"0","completedLength":"0","uris":[]}],"bittorrent":{"info":{"name":"Movie"}},"infoHash":"ABCDEF0123456789ABCDEF0123456789ABCDEF","completedLength":"0","totalLength":"0","downloadSpeed":"0","uploadSpeed":"0","connections":"0","errorCode":"1","errorMessage":"timeout"}}`)
 		case "aria2.getUris":
 			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[]}`)
-		case "aria2.removeDownloadResult":
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":"OK"}`)
-		case "aria2.addUri":
-			addParams = call.Params
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":"e2"}`)
 		default:
 			t.Fatalf("unexpected method %s", call.Method)
 		}
@@ -231,15 +232,15 @@ func TestRetryBuildsMagnetFromInfoHashWhenURIsMissing(t *testing.T) {
 	defer server.Close()
 	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
 
-	if _, err := client.Retry(context.Background(), "e1"); err != nil {
-		t.Fatalf("retry: %v", err)
+	source, err := client.RetrySource(context.Background(), "e1")
+	if err != nil {
+		t.Fatalf("retry source: %v", err)
 	}
-	uris, ok := addParams[1].([]any)
-	if !ok || len(uris) != 1 {
-		t.Fatalf("addUri params got %#v, want one URI", addParams)
+	if len(source.URIs) != 1 {
+		t.Fatalf("retry source got %#v, want one URI", source)
 	}
-	if uris[0] != "magnet:?xt=urn:btih:abcdef0123456789abcdef0123456789abcdef" {
-		t.Fatalf("magnet uri got %q", uris[0])
+	if source.URIs[0] != "magnet:?xt=urn:btih:abcdef0123456789abcdef0123456789abcdef" {
+		t.Fatalf("magnet uri got %q", source.URIs[0])
 	}
 }
 

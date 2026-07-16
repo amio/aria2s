@@ -40,12 +40,12 @@ func TestRootWithoutArgsOpensDashboard(t *testing.T) {
 	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc)
 
 	calls := 0
-	application.SetDashboardRunner(func(*app.App) error {
+	runner := func(context.Context, *app.DashboardSession) error {
 		calls++
 		return nil
-	})
+	}
 
-	root := NewRoot(application)
+	root := newRoot(application, runner)
 	root.SetArgs(nil)
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute root: %v", err)
@@ -56,8 +56,8 @@ func TestRootWithoutArgsOpensDashboard(t *testing.T) {
 	if len(serviceBackend.calls) != 0 {
 		t.Fatalf("expected ready dashboard launch to skip service calls, got %v", serviceBackend.calls)
 	}
-	if rpc.versionCalls != 1 {
-		t.Fatalf("expected one readiness probe, got %d", rpc.versionCalls)
+	if rpc.versionCalls != 0 {
+		t.Fatalf("dashboard preparation must not probe RPC, got %d", rpc.versionCalls)
 	}
 }
 
@@ -105,12 +105,12 @@ func TestRootWithoutArgsUsesStoredInstallWhenLookPathFails(t *testing.T) {
 	})
 
 	calls := 0
-	application.SetDashboardRunner(func(*app.App) error {
+	runner := func(context.Context, *app.DashboardSession) error {
 		calls++
 		return nil
-	})
+	}
 
-	root := NewRoot(application)
+	root := newRoot(application, runner)
 	root.SetArgs(nil)
 	if err := root.Execute(); err != nil {
 		t.Fatalf("execute root: %v", err)
@@ -118,8 +118,8 @@ func TestRootWithoutArgsUsesStoredInstallWhenLookPathFails(t *testing.T) {
 	if calls != 1 {
 		t.Fatalf("expected root command to open dashboard once, got %d", calls)
 	}
-	if rpc.versionCalls != 1 {
-		t.Fatalf("expected one readiness probe, got %d", rpc.versionCalls)
+	if rpc.versionCalls != 0 {
+		t.Fatalf("dashboard preparation must not probe RPC, got %d", rpc.versionCalls)
 	}
 }
 
@@ -248,3 +248,20 @@ func (rpc *trackingRPC) SaveSession(context.Context, state.State) error {
 func (rpc *trackingRPC) Shutdown(context.Context, state.State) error {
 	return nil
 }
+
+func (*trackingRPC) DashboardSnapshot(context.Context, state.State, aria2.DashboardQuery) (aria2.DashboardRead, error) {
+	return aria2.DashboardRead{}, nil
+}
+func (*trackingRPC) TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error) {
+	return aria2.DownloadDetail{}, nil
+}
+func (*trackingRPC) Pause(context.Context, state.State, string) error  { return nil }
+func (*trackingRPC) Resume(context.Context, state.State, string) error { return nil }
+func (*trackingRPC) RetrySource(context.Context, state.State, string) (aria2.RetrySource, error) {
+	return aria2.RetrySource{}, nil
+}
+func (*trackingRPC) AddURIs(context.Context, state.State, []string, aria2.AddOptions) (string, error) {
+	return "", nil
+}
+func (*trackingRPC) Remove(context.Context, state.State, string) error       { return nil }
+func (*trackingRPC) ClearStopped(context.Context, state.State, string) error { return nil }

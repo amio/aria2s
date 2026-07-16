@@ -9,7 +9,11 @@ import (
 )
 
 func NewRoot(application *app.App) *cobra.Command {
-	dashboardCommand := newDashboardCommand(application)
+	return newRoot(application, defaultDashboardRunner)
+}
+
+func newRoot(application *app.App, runner dashboardRunner) *cobra.Command {
+	dashboardCommand := newDashboardCommand(application, runner)
 	root := &cobra.Command{
 		Use:                   "aria2s",
 		Short:                 "Your aria2c, always on — sets it up as a background service, manage downloads with a terminal dashboard",
@@ -77,7 +81,6 @@ func Execute() error {
 	if err != nil {
 		return err
 	}
-	application.SetDashboardRunner(defaultDashboardRunner)
 	return NewRoot(application).Execute()
 }
 
@@ -143,7 +146,7 @@ func customRootHelp(cmd *cobra.Command, _ []string) {
 
 	const groupIndent = "  "
 	const cmdIndent = groupIndent + "  " // two levels of indentation
-	padTo := maxLen + 8                   // spacing from end of name to description
+	padTo := maxLen + 8                  // spacing from end of name to description
 
 	if len(entries) > 0 {
 		fmt.Fprintln(w, "\nCommands:")

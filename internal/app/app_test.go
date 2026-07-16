@@ -147,7 +147,7 @@ func TestStartFailsWhenStoredAria2cIsMissing(t *testing.T) {
 	}
 }
 
-func TestEnsureDashboardReadyIgnoresMissingUserConfig(t *testing.T) {
+func TestPrepareDashboardIgnoresMissingUserConfigAndRPC(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
@@ -179,14 +179,46 @@ func TestEnsureDashboardReadyIgnoresMissingUserConfig(t *testing.T) {
 		RPCPollInterval: time.Nanosecond,
 	})
 
-	if err := application.EnsureDashboardReady(context.Background()); err != nil {
-		t.Fatalf("ensure dashboard ready: %v", err)
+	if _, err := application.PrepareDashboard(context.Background()); err != nil {
+		t.Fatalf("prepare dashboard: %v", err)
 	}
 	if len(serviceBackend.calls) != 0 {
 		t.Fatalf("expected no service calls, got %v", serviceBackend.calls)
 	}
-	if rpc.versionCalls != 1 {
-		t.Fatalf("expected one readiness probe, got %d", rpc.versionCalls)
+	if rpc.versionCalls != 0 {
+		t.Fatalf("dashboard preparation must not probe RPC, got %d", rpc.versionCalls)
+	}
+}
+
+func TestPrepareDashboardRepairsAndStartsWithoutWaitingForRPC(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	if err := touch0600ForTest(servicePaths.SessionFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.LogFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, []byte("stale service"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	serviceBackend := &recordingService{loaded: true, running: false}
+	rpc := &flakyRPC{failuresRemaining: 100}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{})
+
+	if _, err := application.PrepareDashboard(context.Background()); err != nil {
+		t.Fatalf("prepare dashboard: %v", err)
+	}
+	if rpc.versionCalls != 0 {
+		t.Fatalf("repair path waited for RPC %d times", rpc.versionCalls)
+	}
+	if !serviceBackend.running {
+		t.Fatal("repair path did not start supervisor")
 	}
 }
 
@@ -930,6 +962,23 @@ func (rpc *flakyRPC) SaveSession(context.Context, state.State) error {
 func (rpc *flakyRPC) Shutdown(context.Context, state.State) error {
 	return nil
 }
+
+func (*flakyRPC) DashboardSnapshot(context.Context, state.State, aria2.DashboardQuery) (aria2.DashboardRead, error) {
+	return aria2.DashboardRead{}, nil
+}
+func (*flakyRPC) TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error) {
+	return aria2.DownloadDetail{}, nil
+}
+func (*flakyRPC) Pause(context.Context, state.State, string) error  { return nil }
+func (*flakyRPC) Resume(context.Context, state.State, string) error { return nil }
+func (*flakyRPC) RetrySource(context.Context, state.State, string) (aria2.RetrySource, error) {
+	return aria2.RetrySource{}, nil
+}
+func (*flakyRPC) AddURIs(context.Context, state.State, []string, aria2.AddOptions) (string, error) {
+	return "", nil
+}
+func (*flakyRPC) Remove(context.Context, state.State, string) error       { return nil }
+func (*flakyRPC) ClearStopped(context.Context, state.State, string) error { return nil }
 
 type dirRecordingRPC struct {
 	lastDir string

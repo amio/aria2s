@@ -6,7 +6,6 @@ require (
 	charm.land/bubbles/v2 v2.1.1
 	charm.land/bubbletea/v2 v2.0.8
 	github.com/charmbracelet/x/ansi v0.11.7
-	github.com/coder/websocket v1.8.15
 	github.com/spf13/cobra v1.10.2
 )
 

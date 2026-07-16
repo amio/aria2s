@@ -16,6 +16,25 @@ type ListOptions struct {
 	StoppedLimit  int
 }
 
+/** ListQuery identifies the bounded list window in a dashboard snapshot. */
+type ListQuery = ListOptions
+
+/** DashboardQuery describes one immutable batched dashboard read. */
+type DashboardQuery struct {
+	List                ListQuery
+	DetailGID           string
+	ResolveDetailSource bool
+}
+
+/** DashboardRead contains independently valid list and detail portions. */
+type DashboardRead struct {
+	Downloads       DownloadSnapshot
+	ListErr         error
+	Detail          *DownloadDetail
+	DetailErr       error
+	DetailSourceErr error
+}
+
 /** DownloadSnapshot groups the live and recent stopped task windows shown by the dashboard. */
 type DownloadSnapshot struct {
 	Active  []Download
@@ -99,7 +118,7 @@ func (client *RPCClient) TaskDetail(ctx context.Context, gid string) (DownloadDe
 	if err := client.call(ctx, "aria2.tellStatus", []any{gid, detailFields()}, &raw); err != nil {
 		return DownloadDetail{}, err
 	}
-	download := raw.toDownload()
+	detail := raw.toDetail()
 	primaryURI := raw.primaryURI()
 	if primaryURI == "" {
 		if uris, err := client.GetURIs(ctx, gid); err == nil && len(uris) > 0 {
@@ -109,38 +128,7 @@ func (client *RPCClient) TaskDetail(ctx context.Context, gid string) (DownloadDe
 	if primaryURI == "" && raw.InfoHash != "" {
 		primaryURI = magnetURI(raw.InfoHash)
 	}
-	detail := DownloadDetail{
-		GID:                    download.GID,
-		Status:                 download.Status,
-		Name:                   download.Name,
-		IsMetadata:             download.IsMetadata,
-		CompletedLength:        download.CompletedLength,
-		TotalLength:            download.TotalLength,
-		DownloadSpeed:          download.DownloadSpeed,
-		UploadSpeed:            download.UploadSpeed,
-		UploadLength:           parseInt(raw.UploadLength),
-		VerifiedLength:         parseInt(raw.VerifiedLength),
-		VerifyIntegrityPending: raw.VerifyIntegrityPending == "true",
-		InfoHash:               raw.InfoHash,
-		NumSeeders:             parseInt(raw.NumSeeders),
-		Seeder:                 raw.Seeder == "true",
-		PieceLength:            parseInt(raw.PieceLength),
-		NumPieces:              parseInt(raw.NumPieces),
-		PrimaryURI:             primaryURI,
-		DownloadDir:            raw.Dir,
-		Connections:            parseInt(raw.Connections),
-		ErrorCode:              raw.ErrorCode,
-		ErrorMessage:           raw.ErrorMessage,
-	}
-	for _, file := range raw.Files {
-		detail.Files = append(detail.Files, DownloadFile{
-			Path:            file.Path,
-			Name:            fileName(file.Path),
-			Length:          parseInt(file.Length),
-			CompletedLength: parseInt(file.CompletedLength),
-			Selected:        file.Selected != "false",
-		})
-	}
+	detail.PrimaryURI = primaryURI
 	return detail, nil
 }
 
@@ -154,44 +142,22 @@ func (client *RPCClient) GetURIs(ctx context.Context, gid string) ([]rawURI, err
 
 func (client *RPCClient) Pause(ctx context.Context, gid string) error {
 	var ignored string
-	return client.call(ctx, "aria2.forcePause", []any{gid}, &ignored)
+	return client.mutation(ctx, "aria2.forcePause", []any{gid}, &ignored)
 }
 
 func (client *RPCClient) Resume(ctx context.Context, gid string) error {
 	var ignored string
-	return client.call(ctx, "aria2.unpause", []any{gid}, &ignored)
+	return client.mutation(ctx, "aria2.unpause", []any{gid}, &ignored)
 }
 
 func (client *RPCClient) Remove(ctx context.Context, gid string) error {
 	var ignored string
-	return client.call(ctx, "aria2.remove", []any{gid}, &ignored)
+	return client.mutation(ctx, "aria2.remove", []any{gid}, &ignored)
 }
 
 func (client *RPCClient) RemoveDownloadResult(ctx context.Context, gid string) error {
 	var ignored string
-	return client.call(ctx, "aria2.removeDownloadResult", []any{gid}, &ignored)
-}
-
-// Retry re-queues a failed download by removing the old result and adding it
-// again with the same URIs and download directory. aria2 has no dedicated
-// retry RPC; unpause only works for paused downloads.
-func (client *RPCClient) Retry(ctx context.Context, gid string) (string, error) {
-	detail, err := client.TaskDetail(ctx, gid)
-	if err != nil {
-		return "", err
-	}
-	if detail.Status != "error" {
-		return "", fmt.Errorf("download status is %q, not error", detail.Status)
-	}
-	uris, err := client.retryURIs(ctx, gid, detail)
-	if err != nil {
-		return "", err
-	}
-	opts := AddOptions{Dir: detail.DownloadDir}
-	if err := client.RemoveDownloadResult(ctx, gid); err != nil {
-		return "", fmt.Errorf("remove failed download: %w", err)
-	}
-	return client.addURIs(ctx, uris, opts)
+	return client.mutation(ctx, "aria2.removeDownloadResult", []any{gid}, &ignored)
 }
 
 func (client *RPCClient) retryURIs(ctx context.Context, gid string, detail DownloadDetail) ([]string, error) {
@@ -230,10 +196,36 @@ func (client *RPCClient) addURIs(ctx context.Context, uris []string, opts AddOpt
 		params = append(params, map[string]string{"dir": opts.Dir})
 	}
 	var newGID string
-	if err := client.call(ctx, "aria2.addUri", params, &newGID); err != nil {
+	if err := client.mutation(ctx, "aria2.addUri", params, &newGID); err != nil {
 		return "", err
 	}
 	return newGID, nil
+}
+
+/** RetrySource is the immutable input required to safely recreate a failed task. */
+type RetrySource struct {
+	Status string
+	Dir    string
+	URIs   []string
+}
+
+func (client *RPCClient) RetrySource(ctx context.Context, gid string) (RetrySource, error) {
+	detail, err := client.TaskDetail(ctx, gid)
+	if err != nil {
+		return RetrySource{}, err
+	}
+	if detail.Status != "error" {
+		return RetrySource{}, fmt.Errorf("download status is %q, not error", detail.Status)
+	}
+	uris, err := client.retryURIs(ctx, gid, detail)
+	if err != nil {
+		return RetrySource{}, err
+	}
+	return RetrySource{Status: detail.Status, Dir: detail.DownloadDir, URIs: uris}, nil
+}
+
+func (client *RPCClient) AddURIs(ctx context.Context, uris []string, opts AddOptions) (string, error) {
+	return client.addURIs(ctx, uris, opts)
 }
 
 func (client *RPCClient) SaveSession(ctx context.Context) error {
@@ -296,6 +288,18 @@ func (raw rawDownload) toDownload() Download {
 		DownloadSpeed:   parseInt(raw.DownloadSpeed),
 		UploadSpeed:     parseInt(raw.UploadSpeed),
 	}
+}
+
+func (raw rawDownload) toDetail() DownloadDetail {
+	download := raw.toDownload()
+	detail := DownloadDetail{GID: download.GID, Status: download.Status, Name: download.Name, IsMetadata: download.IsMetadata, CompletedLength: download.CompletedLength, TotalLength: download.TotalLength, DownloadSpeed: download.DownloadSpeed, UploadSpeed: download.UploadSpeed, UploadLength: parseInt(raw.UploadLength), VerifiedLength: parseInt(raw.VerifiedLength), VerifyIntegrityPending: raw.VerifyIntegrityPending == "true", InfoHash: raw.InfoHash, NumSeeders: parseInt(raw.NumSeeders), Seeder: raw.Seeder == "true", PieceLength: parseInt(raw.PieceLength), NumPieces: parseInt(raw.NumPieces), PrimaryURI: raw.primaryURI(), DownloadDir: raw.Dir, Connections: parseInt(raw.Connections), ErrorCode: raw.ErrorCode, ErrorMessage: raw.ErrorMessage}
+	if detail.PrimaryURI == "" && raw.InfoHash != "" {
+		detail.PrimaryURI = magnetURI(raw.InfoHash)
+	}
+	for _, file := range raw.Files {
+		detail.Files = append(detail.Files, DownloadFile{Path: file.Path, Name: fileName(file.Path), Length: parseInt(file.Length), CompletedLength: parseInt(file.CompletedLength), Selected: file.Selected != "false"})
+	}
+	return detail
 }
 
 func (raw rawDownload) isMetadata() bool {

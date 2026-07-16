@@ -67,8 +67,23 @@ func (model Model) listView() string {
 	width, height := model.viewport()
 	cWidth := frameContentWidth(width)
 	leftSide := dimText("aria2s (" + model.version + ")")
-	if info := model.ErrorInfo(); info != "" {
-		leftSide += "  " + colorizeForeground("ERROR: "+info, errorTextColor, false)
+	if model.list.LastError != nil {
+		if model.list.HasSnapshot {
+			leftSide += "  " + colorizeForeground("STALE — last success "+model.list.LastSuccessAt.Format("15:04:05")+"; reconnecting", errorTextColor, false)
+		} else if model.list.Attempted {
+			leftSide += "  " + colorizeForeground("UNAVAILABLE — retrying; run aria2s doctor or check logs", errorTextColor, false)
+		}
+	} else if model.refreshState.InFlight && model.list.HasSnapshot {
+		leftSide += "  " + dimText("Refreshing...")
+	}
+	if model.notice != "" {
+		leftSide += "  " + colorizeForeground("ERROR: "+model.notice, errorTextColor, false)
+	}
+	if err := model.actionErrors[model.Selected().GID]; err != nil {
+		leftSide += "  " + colorizeForeground("ACTION: "+err.Error(), errorTextColor, false)
+	}
+	if model.addError != nil {
+		leftSide += "  " + colorizeForeground("ADD: "+model.addError.Error(), errorTextColor, false)
 	}
 	topContent := joinSides(leftSide, []string{model.listStats()}, cWidth)
 	bottomContent := joinSides("", model.listHelp(), cWidth)
@@ -107,7 +122,15 @@ func (model Model) framedHeader(width int) []string {
 func (model Model) addView() string {
 	width, height := model.viewport()
 	cWidth := frameContentWidth(width)
-	topContent := joinSides("Add Download", []string{}, cWidth)
+	status := ""
+	if model.addPending {
+		status = "Adding..."
+	} else if model.addError != nil {
+		status = colorizeForeground("ERROR: "+model.addError.Error(), errorTextColor, false)
+	} else if model.notice != "" {
+		status = colorizeForeground("ERROR: "+model.notice, errorTextColor, false)
+	}
+	topContent := joinSides("Add Download", []string{status}, cWidth)
 	bottomContent := joinSides("Submit a new task to local aria2 JSON-RPC.", model.addHelp(), cWidth)
 
 	barLines := len(model.barFrame("")) * 2
@@ -121,6 +144,24 @@ func (model Model) detailView() string {
 	width, height := model.viewport()
 	detail := model.detail
 	contentWidth := contentInner(width)
+	if model.detailState.AppliedGID != model.detailState.RequestedGID || !model.detailState.HasDetail {
+		message := "Loading details..."
+		if model.detailState.LastError != nil {
+			message = "Details unavailable: " + model.detailState.LastError.Error()
+		}
+		name := model.Selected().Name
+		topContent := joinSides(name, []string{message}, frameContentWidth(width))
+		feedback := "Detail view"
+		if err := model.actionErrors[model.detailState.RequestedGID]; err != nil {
+			feedback += "  ACTION: " + err.Error()
+		}
+		if model.notice != "" {
+			feedback += "  ERROR: " + model.notice
+		}
+		bottomContent := joinSides(feedback, model.detailHelp(), frameContentWidth(width))
+		bodyHeight := max(height-len(model.barFrame(""))*2, minBodyHeight)
+		return model.framedView(topContent, model.centeredMessageBody(width, bodyHeight, message), bottomContent)
+	}
 
 	// Top bar: name on left, [status] + progress on right.
 	rightParts := []string{
@@ -145,7 +186,20 @@ func (model Model) detailView() string {
 		name = ansi.Truncate(name, maxNameWidth, "...")
 	}
 	topContent := joinSides(name, rightParts, fcw)
-	bottomContent := joinSides(model.detailStats(), model.detailHelp(), fcw)
+	feedback := model.detailStats()
+	if model.detailState.LastError != nil {
+		feedback += "  " + colorizeForeground("STALE: "+model.detailState.LastError.Error(), errorTextColor, false)
+	}
+	if model.detailState.SourceError != nil {
+		feedback += "  " + colorizeForeground("SOURCE: "+model.detailState.SourceError.Error(), errorTextColor, false)
+	}
+	if err := model.actionErrors[model.detailState.RequestedGID]; err != nil {
+		feedback += "  " + colorizeForeground("ACTION: "+err.Error(), errorTextColor, false)
+	}
+	if model.notice != "" {
+		feedback += "  " + colorizeForeground("ERROR: "+model.notice, errorTextColor, false)
+	}
+	bottomContent := joinSides(feedback, model.detailHelp(), fcw)
 
 	barLines := len(model.barFrame("")) * 2
 	bodyHeight := max(height-barLines, minBodyHeight)
@@ -272,8 +326,11 @@ func (model Model) listBody(width int, height int) []string {
 		return body[:height]
 	}
 	if len(items) == 0 {
-		if !model.loaded && model.err == nil {
+		if !model.loaded {
 			return model.loadingBody(width, height)
+		}
+		if model.list.Attempted && !model.list.HasSnapshot && model.list.LastError != nil {
+			return model.centeredMessageBody(width, height, "aria2 is unavailable; retrying automatically. Run aria2s doctor or check logs.")
 		}
 		return model.emptyBody(width, height)
 	}
@@ -380,7 +437,11 @@ func (model Model) downloadRow(width int, download aria2.Download, selected bool
 			}
 		}
 	}
-	add(downloadStatusLabel(download), l.statusWidth, false)
+	status := downloadStatusLabel(download)
+	if kind, ok := model.pending[download.GID]; ok {
+		status = pendingStatus(kind)
+	}
+	add(status, l.statusWidth, false)
 	add(download.Name, l.nameWidth, false)
 	add(formatBytes(download.TotalLength), l.sizeWidth, true)
 	add(formatBytes(download.CompletedLength), l.downloadedWidth, true)
@@ -404,7 +465,7 @@ func (model Model) listStats() string {
 		downTotal += item.DownloadSpeed
 		upTotal += item.UploadSpeed
 	}
-	return fmt.Sprintf(
+	stats := fmt.Sprintf(
 		"Total %d (A%d W%d S%d) Down %s  Up %s",
 		len(items),
 		len(model.snapshot.Active),
@@ -413,6 +474,14 @@ func (model Model) listStats() string {
 		formatSpeed(downTotal),
 		formatSpeed(upTotal),
 	)
+	appliedPage := 1
+	if model.stoppedLimit > 0 {
+		appliedPage = model.list.Applied.StoppedOffset/model.stoppedLimit + 1
+	}
+	if model.list.Requested.StoppedOffset != model.list.Applied.StoppedOffset {
+		return fmt.Sprintf("History page %d (loading %d)  %s", appliedPage, model.stoppedPage+1, stats)
+	}
+	return fmt.Sprintf("History page %d  %s", appliedPage, stats)
 }
 
 func (model Model) detailStats() string {
