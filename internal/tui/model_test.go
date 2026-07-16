@@ -257,6 +257,107 @@ func TestOldNoticeExpiryCannotClearAddError(t *testing.T) {
 	}
 }
 
+func TestListResumeKeyDispatchesByStatus(t *testing.T) {
+	cases := []struct {
+		name   string
+		status string
+		want   string
+	}{
+		{name: "paused resumes", status: "paused", want: "resume:g1"},
+		{name: "error retries", status: "error", want: "retry:g1"},
+		{name: "complete is no-op", status: "complete", want: ""},
+		{name: "active is no-op", status: "active", want: ""},
+		{name: "waiting is no-op", status: "waiting", want: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			service := &fakeService{}
+			model := NewModel(context.Background(), service, time.Second, "dev")
+			model.snapshot.Stopped = []aria2.Download{{GID: "g1", Status: tc.status}}
+			if tc.status == "active" {
+				model.snapshot.Stopped = nil
+				model.snapshot.Active = []aria2.Download{{GID: "g1", Status: tc.status}}
+			}
+			if tc.status == "waiting" {
+				model.snapshot.Stopped = nil
+				model.snapshot.Waiting = []aria2.Download{{GID: "g1", Status: tc.status}}
+			}
+			updated, cmd := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+			model = updated.(Model)
+			if tc.want == "" {
+				if len(service.actions) != 0 {
+					t.Fatalf("unexpected actions: %v", service.actions)
+				}
+				if model.notice == "" {
+					t.Fatal("expected top-bar notice for inapplicable r")
+				}
+				if cmd == nil {
+					t.Fatal("expected notice expiry command")
+				}
+				return
+			}
+			if model.notice != "" {
+				t.Fatalf("notice set on successful action: %q", model.notice)
+			}
+			if cmd == nil {
+				t.Fatal("expected action command")
+			}
+			msg := cmd()
+			if _, ok := msg.(actionResultMsg); !ok {
+				t.Fatalf("unexpected msg: %T", msg)
+			}
+			if len(service.actions) != 1 || service.actions[0] != tc.want {
+				t.Fatalf("actions got %v, want [%s]", service.actions, tc.want)
+			}
+			if _, ok := model.pending["g1"]; !ok {
+				t.Fatal("pending action not recorded")
+			}
+		})
+	}
+}
+
+func TestListPauseKeyOnlyTargetsLiveRows(t *testing.T) {
+	service := &fakeService{}
+	model := NewModel(context.Background(), service, time.Second, "dev")
+	model.snapshot.Stopped = []aria2.Download{{GID: "done", Status: "complete"}}
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	model = updated.(Model)
+	if len(service.actions) != 0 {
+		t.Fatalf("pause on complete must not dispatch: %v", service.actions)
+	}
+	if model.notice == "" || cmd == nil {
+		t.Fatal("pause on complete should flash a notice")
+	}
+	if !strings.Contains(model.notice, "complete") {
+		t.Fatalf("notice got %q", model.notice)
+	}
+
+	model.notice = ""
+	model.snapshot.Stopped = nil
+	model.snapshot.Active = []aria2.Download{{GID: "live", Status: "active"}}
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("pause on active should dispatch")
+	}
+	_ = cmd()
+	if len(service.actions) != 1 || service.actions[0] != "pause:live" {
+		t.Fatalf("actions got %v", service.actions)
+	}
+}
+
+func TestInapplicableResumeNoticeRendersInListTopBar(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.loaded = true
+	model.snapshot.Stopped = []aria2.Download{{GID: "done", Status: "complete", Name: "done.iso"}}
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
+	model = updated.(Model)
+	view := model.View().Content
+	if !strings.Contains(view, "NOTE:") || !strings.Contains(view, "already complete") {
+		t.Fatalf("list top bar missing inapplicable notice:\n%s", view)
+	}
+}
+
 func TestParentCancellationStopsBlockedSnapshotCommand(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	service := &fakeService{snapshotFunc: func(ctx context.Context, _ aria2.DashboardQuery) (aria2.DashboardRead, error) {

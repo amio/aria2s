@@ -395,12 +395,22 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		model.addForm = NewAddForm(model.service.DefaultDir())
 		return model, loadRecentDirs(model.ctx, model.service)
 	case key.Matches(msg, dashboardKeys.List.Pause):
-		return model.startAction(actionPause)
-	case key.Matches(msg, dashboardKeys.List.Resume):
-		if model.Selected().Status == "error" {
-			return model.startAction(actionRetry)
+		// forcePause only applies to live queue rows; stopped/complete GIDs reject it.
+		switch model.Selected().Status {
+		case "active", "waiting":
+			return model.startAction(actionPause)
 		}
-		return model.startAction(actionResume)
+		return model.flashInapplicable("pause", model.Selected().Status)
+	case key.Matches(msg, dashboardKeys.List.Resume):
+		// r is dual-purpose: unpause paused rows, re-queue failed ones. complete/removed
+		// are not unpausable, and RetrySource intentionally rejects non-error statuses.
+		switch model.Selected().Status {
+		case "error":
+			return model.startAction(actionRetry)
+		case "paused":
+			return model.startAction(actionResume)
+		}
+		return model.flashInapplicable("retry/resume", model.Selected().Status)
 	case key.Matches(msg, dashboardKeys.List.Remove):
 		if isStopped(model.Selected()) {
 			return model.startAction(actionClear)
@@ -491,6 +501,7 @@ func (model Model) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if model.detail.Status == "error" {
 			return model.startAction(actionRetry)
 		}
+		return model.flashInapplicable("retry", model.detail.Status)
 	}
 	return model, nil
 }
@@ -656,6 +667,33 @@ func (model Model) setNotice(err error) (tea.Model, tea.Cmd) {
 	model.notice = err.Error()
 	id := model.noticeID
 	return model, tea.Tick(2*time.Second, func(time.Time) tea.Msg { return noticeExpiredMsg{id: id} })
+}
+
+/** flashInapplicable shows a short top-bar tip when a key is pressed on a wrong-status row. */
+func (model Model) flashInapplicable(action, status string) (tea.Model, tea.Cmd) {
+	if status == "" {
+		return model, nil
+	}
+	return model.setNotice(errors.New(inapplicableActionMessage(action, status)))
+}
+
+func inapplicableActionMessage(action, status string) string {
+	switch status {
+	case "complete":
+		return "already complete — " + action + " does nothing"
+	case "active":
+		return "already active — " + action + " does nothing"
+	case "waiting":
+		return "already waiting — " + action + " does nothing"
+	case "paused":
+		return "paused — " + action + " does nothing"
+	case "error":
+		return "failed task — " + action + " does nothing"
+	case "removed":
+		return "task was removed — " + action + " does nothing"
+	default:
+		return "cannot " + action + " a " + status + " task"
+	}
 }
 func outcomeMessage(err error) error {
 	if errors.Is(err, aria2.ErrOutcomeUnknown) {

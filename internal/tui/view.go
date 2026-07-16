@@ -75,7 +75,8 @@ func (model Model) listView() string {
 		}
 	}
 	if model.notice != "" {
-		leftSide += "  " + colorizeForeground("ERROR: "+model.notice, errorTextColor, false)
+		// Transient tips (inapplicable keys, clipboard issues) share the notice slot.
+		leftSide += "  " + colorizeForeground("NOTE: "+model.notice, errorTextColor, false)
 	}
 	if err := model.actionErrors[model.Selected().GID]; err != nil {
 		leftSide += "  " + colorizeForeground("ACTION: "+err.Error(), errorTextColor, false)
@@ -126,7 +127,7 @@ func (model Model) addView() string {
 	} else if model.addError != nil {
 		status = colorizeForeground("ERROR: "+model.addError.Error(), errorTextColor, false)
 	} else if model.notice != "" {
-		status = colorizeForeground("ERROR: "+model.notice, errorTextColor, false)
+		status = colorizeForeground("NOTE: "+model.notice, errorTextColor, false)
 	}
 	topContent := joinSides("Add Download", []string{status}, cWidth)
 	bottomContent := joinSides("Submit a new task to local aria2 JSON-RPC.", model.addHelp(), cWidth)
@@ -154,7 +155,7 @@ func (model Model) detailView() string {
 			feedback += "  ACTION: " + err.Error()
 		}
 		if model.notice != "" {
-			feedback += "  ERROR: " + model.notice
+			feedback += "  NOTE: " + model.notice
 		}
 		bottomContent := joinSides(feedback, model.detailHelp(), frameContentWidth(width))
 		bodyHeight := max(height-len(model.barFrame(""))*2, minBodyHeight)
@@ -195,7 +196,7 @@ func (model Model) detailView() string {
 		feedback += "  " + colorizeForeground("ACTION: "+err.Error(), errorTextColor, false)
 	}
 	if model.notice != "" {
-		feedback += "  " + colorizeForeground("ERROR: "+model.notice, errorTextColor, false)
+		feedback += "  " + colorizeForeground("NOTE: "+model.notice, errorTextColor, false)
 	}
 	bottomContent := joinSides(feedback, model.detailHelp(), fcw)
 
