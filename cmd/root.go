@@ -17,6 +17,7 @@ func newRoot(application *app.App, runner dashboardRunner) *cobra.Command {
 	root := &cobra.Command{
 		Use:                   "aria2s",
 		Short:                 "Your aria2c, always on — sets it up as a background service, manage downloads with a terminal dashboard",
+		Version:               Version,
 		SilenceUsage:          true,
 		DisableFlagsInUseLine: true,
 		RunE: func(command *cobra.Command, _ []string) error {
@@ -71,6 +72,10 @@ func newRoot(application *app.App, runner dashboardRunner) *cobra.Command {
 	doctorCmd := newDoctorCommand(application)
 	doctorCmd.GroupID = "setup"
 	root.AddCommand(doctorCmd)
+
+	versionCmd := newVersionCommand()
+	versionCmd.GroupID = "setup"
+	root.AddCommand(versionCmd)
 
 	root.SetHelpFunc(customRootHelp)
 	return root

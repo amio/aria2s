@@ -1,9 +1,11 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +15,23 @@ import (
 	"github.com/amio/aria2s/internal/service"
 	"github.com/amio/aria2s/internal/state"
 )
+
+func TestVersionFlagAndCommand(t *testing.T) {
+	application := newTestApp(paths.NewDarwin(t.TempDir()), "", &recordingService{}, &trackingRPC{})
+	for _, args := range [][]string{{"-v"}, {"--version"}, {"version"}} {
+		root := newRoot(application, nil)
+		var out bytes.Buffer
+		root.SetOut(&out)
+		root.SetArgs(args)
+		if err := root.Execute(); err != nil {
+			t.Fatalf("execute %v: %v", args, err)
+		}
+		got := strings.TrimSpace(out.String())
+		if !strings.Contains(got, Version) {
+			t.Fatalf("args %v: expected version %q in output %q", args, Version, got)
+		}
+	}
+}
 
 func TestRootWithoutArgsOpensDashboard(t *testing.T) {
 	rootDir := t.TempDir()
