@@ -73,8 +73,6 @@ func (model Model) listView() string {
 		} else if model.list.Attempted {
 			leftSide += "  " + colorizeForeground("UNAVAILABLE — retrying; run aria2s doctor or check logs", errorTextColor, false)
 		}
-	} else if model.refreshState.InFlight && model.list.HasSnapshot {
-		leftSide += "  " + dimText("Refreshing...")
 	}
 	if model.notice != "" {
 		leftSide += "  " + colorizeForeground("ERROR: "+model.notice, errorTextColor, false)
@@ -465,7 +463,7 @@ func (model Model) listStats() string {
 		downTotal += item.DownloadSpeed
 		upTotal += item.UploadSpeed
 	}
-	stats := fmt.Sprintf(
+	return fmt.Sprintf(
 		"Total %d (A%d W%d S%d) Down %s  Up %s",
 		len(items),
 		len(model.snapshot.Active),
@@ -474,14 +472,6 @@ func (model Model) listStats() string {
 		formatSpeed(downTotal),
 		formatSpeed(upTotal),
 	)
-	appliedPage := 1
-	if model.stoppedLimit > 0 {
-		appliedPage = model.list.Applied.StoppedOffset/model.stoppedLimit + 1
-	}
-	if model.list.Requested.StoppedOffset != model.list.Applied.StoppedOffset {
-		return fmt.Sprintf("History page %d (loading %d)  %s", appliedPage, model.stoppedPage+1, stats)
-	}
-	return fmt.Sprintf("History page %d  %s", appliedPage, stats)
 }
 
 func (model Model) detailStats() string {

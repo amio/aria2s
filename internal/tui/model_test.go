@@ -276,15 +276,3 @@ func TestParentCancellationStopsBlockedSnapshotCommand(t *testing.T) {
 		t.Fatal("blocked snapshot ignored parent cancellation")
 	}
 }
-
-func TestPageRequestKeepsAppliedPageUntilMatchingReadSucceeds(t *testing.T) {
-	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.loaded = true
-	model.list.HasSnapshot = true
-	model.list.Applied = aria2.ListQuery{StoppedOffset: 0, StoppedLimit: 100}
-	model.list.Requested = aria2.ListQuery{StoppedOffset: 100, StoppedLimit: 100}
-	model.stoppedPage = 1
-	if stats := model.listStats(); !strings.Contains(stats, "page 1 (loading 2)") {
-		t.Fatalf("applied page relabelled early: %s", stats)
-	}
-}
