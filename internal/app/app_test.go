@@ -17,6 +17,32 @@ import (
 	"github.com/amio/aria2s/internal/state"
 )
 
+func TestInstallWritesCompletionHookLauncher(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	application := newTestApp(servicePaths, aria2c, &recordingService{}, fixedRPC{version: "1.37.0"}, app.Options{
+		HookExecutable: func() (string, error) { return "/usr/local/bin/aria2s", nil },
+	})
+
+	if err := application.Install(context.Background(), false); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	hookPath := aria2.HookScriptPath(servicePaths.SessionFile)
+	data, err := os.ReadFile(hookPath)
+	if err != nil {
+		t.Fatalf("read hook script: %v", err)
+	}
+	assertContains(t, string(data), "exec '/usr/local/bin/aria2s' complete-hook \"$@\"")
+	info, err := os.Stat(hookPath)
+	if err != nil {
+		t.Fatalf("stat hook script: %v", err)
+	}
+	if info.Mode().Perm()&0o111 == 0 {
+		t.Fatalf("hook script must be executable, got %o", info.Mode().Perm())
+	}
+}
+
 func TestInstallStartPollsRPCUntilReady(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
@@ -1059,8 +1085,10 @@ func TestAddRecordsCustomDirAndExposesRecentDirs(t *testing.T) {
 	if _, err := application.Add(context.Background(), "https://example.com/a.zip", aria2.AddOptions{Dir: "/data/Movies"}); err != nil {
 		t.Fatalf("add: %v", err)
 	}
-	if rpc.lastDir != "/data/Movies" {
-		t.Fatalf("rpc received dir %q, want /data/Movies", rpc.lastDir)
+	// aria2 receives the staging dir so in-progress artifacts never touch the
+	// target folder; the completion hook moves the payload on completion.
+	if rpc.lastDir != "/data/.incomplete/Movies" {
+		t.Fatalf("rpc received dir %q, want /data/.incomplete/Movies", rpc.lastDir)
 	}
 
 	recent, err := application.RecentDirs(context.Background())

@@ -77,6 +77,9 @@ func newRoot(application *app.App, runner dashboardRunner) *cobra.Command {
 	versionCmd.GroupID = "setup"
 	root.AddCommand(versionCmd)
 
+	// Internal plumbing invoked by aria2c, not by users.
+	root.AddCommand(newCompleteHookCommand(application))
+
 	root.SetHelpFunc(customRootHelp)
 	return root
 }

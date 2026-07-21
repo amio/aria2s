@@ -59,6 +59,7 @@ func TestManagedArgsIncludeRPCAndSessionFlags(t *testing.T) {
 	assertSliceContains(t, args, "--input-file=/tmp/session")
 	assertSliceContains(t, args, "--save-session=/tmp/session")
 	assertSliceContains(t, args, "--save-session-interval=60")
+	assertSliceContains(t, args, "--on-download-complete=/tmp/on-complete-hook.sh")
 }
 
 func assertContains(t *testing.T, text, want string) {
