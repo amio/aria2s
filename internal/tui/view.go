@@ -456,18 +456,31 @@ func (model Model) downloadRow(width int, download aria2.Download, selected bool
 
 func (model Model) listStats() string {
 	items := model.items()
-	var downTotal int64
-	var upTotal int64
+	var downTotal, upTotal int64
+	var downloading, seeding, queued, finished int
 	for _, item := range items {
 		downTotal += item.DownloadSpeed
 		upTotal += item.UploadSpeed
+		switch {
+		case item.IsMetadata:
+			// metadata rows are transitional; not counted in D/S/Q/F
+		case item.Status == "active" && item.Seeder:
+			seeding++
+		case item.Status == "active":
+			downloading++
+		case item.Status == "waiting", item.Status == "paused":
+			queued++
+		case item.Status == "complete":
+			finished++
+		}
 	}
 	return fmt.Sprintf(
-		"Total %d (A%d W%d S%d) Down %s  Up %s",
+		"Total %d (D%d S%d Q%d F%d) Down %s  Up %s",
 		len(items),
-		len(model.snapshot.Active),
-		len(model.snapshot.Waiting),
-		len(model.snapshot.Stopped),
+		downloading,
+		seeding,
+		queued,
+		finished,
 		formatSpeed(downTotal),
 		formatSpeed(upTotal),
 	)
@@ -600,11 +613,11 @@ func statusLabel(status string) string {
 	case "active":
 		return "Active"
 	case "waiting":
-		return "Waiting"
+		return "Queued"
 	case "paused":
 		return "Paused"
 	case "complete":
-		return "Done"
+		return "Finished"
 	case "error":
 		return "Error"
 	case "removed":
@@ -638,12 +651,18 @@ func downloadStatusLabel(download aria2.Download) string {
 	if download.IsMetadata {
 		return "Metadata"
 	}
+	if download.Status == "active" && download.Seeder {
+		return "Seeding"
+	}
 	return statusLabel(download.Status)
 }
 
 func downloadStatusTone(download aria2.Download) rgb {
 	if download.IsMetadata {
 		return rgb{165, 180, 228}
+	}
+	if download.Status == "active" && download.Seeder {
+		return rgb{120, 220, 200}
 	}
 	return statusTone(download.Status)
 }
