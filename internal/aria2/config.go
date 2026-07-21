@@ -18,6 +18,14 @@ func DefaultConfig(downloadDir string) string {
 	writeLine(&builder, "split", "8")
 	writeLine(&builder, "max-connection-per-server", "8")
 	writeLine(&builder, "min-split-size", "10M")
+	// Keep restarts cheap: persist magnet metadata so reloaded magnets skip
+	// peer metadata fetch, and trust saved progress so completed/seeding
+	// torrents resume seeding without a full hash re-check (the .aria2
+	// control file is deleted on completion, so aria2 would otherwise
+	// re-verify the whole payload on every restart).
+	writeLine(&builder, "bt-save-metadata", "true")
+	writeLine(&builder, "bt-load-saved-metadata", "true")
+	writeLine(&builder, "bt-seed-unverified", "true")
 	return builder.String()
 }
 
