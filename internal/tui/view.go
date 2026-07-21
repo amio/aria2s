@@ -151,9 +151,6 @@ func (model Model) detailView() string {
 		name := model.Selected().Name
 		topContent := joinSides(name, []string{message}, frameContentWidth(width))
 		feedback := "Detail view"
-		if err := model.actionErrors[model.detailState.RequestedGID]; err != nil {
-			feedback += "  ACTION: " + err.Error()
-		}
 		if model.notice != "" {
 			feedback += "  NOTE: " + model.notice
 		}
@@ -191,9 +188,6 @@ func (model Model) detailView() string {
 	}
 	if model.detailState.SourceError != nil {
 		feedback += "  " + colorizeForeground("SOURCE: "+model.detailState.SourceError.Error(), errorTextColor, false)
-	}
-	if err := model.actionErrors[model.detailState.RequestedGID]; err != nil {
-		feedback += "  " + colorizeForeground("ACTION: "+err.Error(), errorTextColor, false)
 	}
 	if model.notice != "" {
 		feedback += "  " + colorizeForeground("NOTE: "+model.notice, errorTextColor, false)
@@ -239,6 +233,10 @@ func (model Model) detailView() string {
 	if detail.ErrorMessage != "" {
 		lines = append(lines, "")
 		lines = appendDetailErrorLines(lines, "Error "+detail.ErrorCode, detail.ErrorMessage, contentWidth)
+	}
+	if actionErr := model.actionErrors[model.detailState.RequestedGID]; actionErr != nil {
+		lines = append(lines, "")
+		lines = appendDetailErrorLines(lines, "Action", actionErr.Error(), contentWidth)
 	}
 	if len(detail.Files) > 0 {
 		lines = append(lines, "", detailLabelPrefix("Files"), "")

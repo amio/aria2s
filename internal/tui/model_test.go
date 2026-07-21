@@ -11,6 +11,7 @@ import (
 
 	"github.com/amio/aria2s/internal/app"
 	"github.com/amio/aria2s/internal/aria2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type fakeService struct {
@@ -267,6 +268,30 @@ func TestAddAndDetailErrorsRenderInTheirOwningViews(t *testing.T) {
 	model.detailState.LastError = errors.New("timeout")
 	if view := model.View().Content; !strings.Contains(view, "Details unavailable") || !strings.Contains(view, "timeout") {
 		t.Fatalf("detail error shell missing:\n%s", view)
+	}
+}
+
+func TestDetailActionErrorRendersFullTextInBody(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.mode = ModeDetail
+	model.loaded = true
+	model.list.HasSnapshot = true
+	model.snapshot.Active = []aria2.Download{{GID: "a", Status: "active", Name: "task-a"}}
+	model.detailState.RequestedGID = "a"
+	model.detailState.AppliedGID = "a"
+	model.detailState.HasDetail = true
+	model.detail = aria2.DownloadDetail{GID: "a", Name: "task-a", Status: "active"}
+	full := "outcome unknown; the action may have succeeded and will not be repeated: aria2 mutation outcome unknown: context deadline exceeded"
+	model.actionErrors["a"] = errors.New(full)
+	view := ansi.Strip(model.View().Content)
+	if !strings.Contains(view, "Action:") {
+		t.Fatalf("detail body missing Action label:\n%s", view)
+	}
+	// Body wraps the full text across lines; assert head and tail both survive (not truncated to "...").
+	head := "outcome unknown; the action may have succeeded and will not be repeated: aria2 mutation outcome"
+	tail := "unknown: context deadline exceeded"
+	if !strings.Contains(view, head) || !strings.Contains(view, tail) {
+		t.Fatalf("detail body missing wrapped action error text (head=%q tail=%q):\n%s", head, tail, view)
 	}
 }
 
