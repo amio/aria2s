@@ -26,6 +26,14 @@ func DefaultConfig(downloadDir string) string {
 	writeLine(&builder, "bt-save-metadata", "true")
 	writeLine(&builder, "bt-load-saved-metadata", "true")
 	writeLine(&builder, "bt-seed-unverified", "true")
+	// Bootstrap DHT reliably: without explicit entry points a cold-start
+	// routing table may stay empty for a long time, leaving magnet-only
+	// downloads stuck at the metadata phase. These nodes have been stable
+	// for 10+ years. IPv6 DHT opens a second peer-discovery channel at no
+	// cost for users with IPv6, and is harmless for those without.
+	writeLine(&builder, "dht-entry-point", "router.bittorrent.com:6881")
+	writeLine(&builder, "dht-entry-point", "dht.transmissionbt.com:6881")
+	writeLine(&builder, "enable-dht6", "true")
 	return builder.String()
 }
 
