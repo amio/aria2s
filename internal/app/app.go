@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -21,7 +20,6 @@ import (
 	"github.com/amio/aria2s/internal/doctor"
 	"github.com/amio/aria2s/internal/paths"
 	"github.com/amio/aria2s/internal/service"
-	"github.com/amio/aria2s/internal/staging"
 	"github.com/amio/aria2s/internal/state"
 )
 
@@ -45,18 +43,15 @@ type dashboardRPC interface {
 }
 
 type Options struct {
-	Paths           paths.Paths
-	DownloadDir     string
-	LookPath        func(string) (string, error)
-	Abs             func(string) (string, error)
-	IsPortAvailable func(int) bool
-	GenerateSecret  func() (string, error)
-	RenderService   func(state.State) (string, error)
-	Service         service.Backend
-	RPC             RPC
-	// HookExecutable resolves the aria2s binary path baked into the
-	// on-download-complete launcher script. Defaults to os.Executable.
-	HookExecutable           func() (string, error)
+	Paths                    paths.Paths
+	DownloadDir              string
+	LookPath                 func(string) (string, error)
+	Abs                      func(string) (string, error)
+	IsPortAvailable          func(int) bool
+	GenerateSecret           func() (string, error)
+	RenderService            func(state.State) (string, error)
+	Service                  service.Backend
+	RPC                      RPC
 	RPCReadyTimeout          time.Duration
 	RPCPollInterval          time.Duration
 	DashboardReadTimeout     time.Duration
@@ -82,9 +77,6 @@ func New(options Options) *App {
 	}
 	if options.RenderService == nil {
 		options.RenderService = inferRenderService(options.Paths)
-	}
-	if options.HookExecutable == nil {
-		options.HookExecutable = os.Executable
 	}
 	if options.Service == nil {
 		options.Service = inferServiceBackend(options.Paths)
@@ -255,14 +247,6 @@ func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State
 	}
 	sessionNeedsRepair := needs0600File(current.SessionPath)
 	logDirNeedsCreate := !dirExists(filepath.Dir(current.LogPath))
-	hookPath, hookContent, hookErr := app.hookScript(current)
-	hookNeedsRepair := false
-	if hookErr == nil {
-		hookNeedsRepair, err = fileContentChanged(hookPath, hookContent)
-		if err != nil {
-			return state.State{}, err
-		}
-	}
 	serviceFile, err := app.options.RenderService(current)
 	if err != nil {
 		return state.State{}, err
@@ -278,7 +262,7 @@ func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State
 	if err != nil {
 		return state.State{}, err
 	}
-	if !stateChanged && !configNeedsCreate && !sessionNeedsRepair && !logDirNeedsCreate && !hookNeedsRepair && !serviceChanged && serviceLoaded {
+	if !stateChanged && !configNeedsCreate && !sessionNeedsRepair && !logDirNeedsCreate && !serviceChanged && serviceLoaded {
 		return current, nil
 	}
 	if stateChanged {
@@ -298,14 +282,6 @@ func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State
 	}
 	if logDirNeedsCreate {
 		if err := os.MkdirAll(filepath.Dir(current.LogPath), 0o755); err != nil {
-			return state.State{}, err
-		}
-	}
-	if hookNeedsRepair {
-		if err := os.MkdirAll(filepath.Dir(hookPath), 0o755); err != nil {
-			return state.State{}, err
-		}
-		if err := os.WriteFile(hookPath, []byte(hookContent), 0o755); err != nil {
 			return state.State{}, err
 		}
 	}
@@ -363,15 +339,7 @@ func (app *App) inspectDashboard(ctx context.Context) (state.State, bool, error)
 	if err != nil {
 		return state.State{}, false, err
 	}
-	hookDrifted := false
-	if hookPath, hookContent, hookErr := app.hookScript(current); hookErr == nil {
-		drifted, driftErr := fileContentChanged(hookPath, hookContent)
-		if driftErr != nil {
-			return current, false, driftErr
-		}
-		hookDrifted = drifted
-	}
-	if serviceChanged || hookDrifted || needs0600File(current.SessionPath) || !dirExists(filepath.Dir(current.LogPath)) {
+	if serviceChanged || needs0600File(current.SessionPath) || !dirExists(filepath.Dir(current.LogPath)) {
 		return current, true, nil
 	}
 	if app.options.Service != nil && !app.options.Service.IsLoaded(ctx) {
@@ -399,10 +367,6 @@ func (app *App) PrepareDashboard(ctx context.Context) (*DashboardSession, error)
 	if err := app.startSupervisor(ctx); err != nil {
 		return nil, err
 	}
-	// Best-effort fallback for completions the hook missed (e.g. target volume
-	// was unmounted). Detached: RPC may not be up yet, and the TUI must not
-	// block on it; the hook remains the primary mechanism.
-	go app.SweepStagedDownloads(context.Background(), current)
 	rpc, ok := app.options.RPC.(dashboardRPC)
 	if !ok {
 		return nil, errors.New("configured RPC client does not support dashboard task management")
@@ -426,14 +390,6 @@ func (app *App) Uninstall(ctx context.Context) error {
 	if err := os.Remove(app.options.Paths.ServiceFile); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	// The completion hook launcher is managed state too; without the service
-	// nothing invokes it, and a stale copy would mislead a later reinstall.
-	current, err := state.Load(app.options.Paths.StateFile)
-	if err == nil {
-		if err := os.Remove(aria2.HookScriptPath(current.SessionPath)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	}
 	return nil
 }
 
@@ -445,11 +401,7 @@ func (app *App) Start(ctx context.Context) error {
 	if err := app.startSupervisor(ctx); err != nil {
 		return err
 	}
-	if err := app.waitForRPC(ctx, current); err != nil {
-		return err
-	}
-	app.SweepStagedDownloads(ctx, current)
-	return nil
+	return app.waitForRPC(ctx, current)
 }
 
 func (app *App) Stop(ctx context.Context) error {
@@ -529,126 +481,14 @@ func (app *App) Add(ctx context.Context, uri string, opts aria2.AddOptions) (str
 	if err != nil {
 		return "", err
 	}
-	staged, target := app.stagedAddOptions(opts)
-	gid, err := app.options.RPC.AddURI(ctx, current, uri, staged)
+	gid, err := app.options.RPC.AddURI(ctx, current, uri, opts)
 	if err != nil {
 		return "", err
 	}
-	// Only explicit dirs enter the recent-dirs history; the default dir would
-	// just be noise in the add form's suggestions.
 	if opts.Dir != "" {
-		_ = app.recordDir(target)
+		_ = app.recordDir(opts.Dir)
 	}
 	return gid, nil
-}
-
-// stagedAddOptions rewrites the requested download dir to its staging
-// counterpart so in-progress payloads and aria2's sidecar files never appear
-// in the target folder (see internal/staging). It returns the options to
-// submit plus the real target dir for the recent-dirs history. Dirs already
-// following the staging convention (e.g. retry of an unmoved download) are
-// passed through untouched to avoid double-wrapping.
-func (app *App) stagedAddOptions(opts aria2.AddOptions) (aria2.AddOptions, string) {
-	target := opts.Dir
-	if target == "" {
-		target = app.defaultDownloadDir()
-	}
-	if staging.IsStaged(target) {
-		return aria2.AddOptions{Dir: target}, target
-	}
-	return aria2.AddOptions{Dir: staging.Dir(target)}, target
-}
-
-// CompleteStagedDownload runs the on-download-complete hook for one gid:
-// move the finished payload from staging to its target dir and repoint aria2
-// so seeding continues. Invoked by the hidden `complete-hook` command, which
-// aria2c spawns as a one-shot process — no resident aria2s process needed.
-func (app *App) CompleteStagedDownload(ctx context.Context, gid string) error {
-	current, err := state.Load(app.options.Paths.StateFile)
-	if err != nil {
-		return fmt.Errorf("load state: %w", err)
-	}
-	rpc, ok := app.options.RPC.(stagingRPC)
-	if !ok {
-		return errors.New("configured RPC client does not support staging completion")
-	}
-	mover := &staging.Mover{Logf: func(format string, args ...any) {
-		log.Printf("staging: "+format, args...)
-	}}
-	_, err = mover.Complete(ctx, stateRPC{rpc: rpc, current: current}, gid)
-	return err
-}
-
-// SweepStagedDownloads is the fallback for completions the hook missed (e.g.
-// the target volume was unmounted at completion time). Best-effort: failures
-// are logged, never fatal.
-func (app *App) SweepStagedDownloads(ctx context.Context, current state.State) {
-	rpc, ok := app.options.RPC.(stagingRPC)
-	if !ok {
-		return
-	}
-	mover := &staging.Mover{Logf: func(format string, args ...any) {
-		log.Printf("staging sweep: "+format, args...)
-	}}
-	_, _ = mover.Sweep(ctx, stateRPC{rpc: rpc, current: current})
-}
-
-// stagingRPC is the RPC surface required by the staging mover. It lives
-// outside the base RPC interface so test fakes and minimal clients stay small.
-type stagingRPC interface {
-	TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error)
-	Pause(context.Context, state.State, string) error
-	Resume(context.Context, state.State, string) error
-	ChangeOption(context.Context, state.State, string, map[string]string) error
-	SaveSession(context.Context, state.State) error
-	TaskLocations(context.Context, state.State) ([]aria2.TaskLocation, error)
-}
-
-// stateRPC adapts the state-carrying stagingRPC to the per-download surface
-// the staging mover expects.
-type stateRPC struct {
-	rpc     stagingRPC
-	current state.State
-}
-
-func (s stateRPC) TaskDetail(ctx context.Context, gid string) (aria2.DownloadDetail, error) {
-	return s.rpc.TaskDetail(ctx, s.current, gid)
-}
-
-func (s stateRPC) Pause(ctx context.Context, gid string) error {
-	return s.rpc.Pause(ctx, s.current, gid)
-}
-
-func (s stateRPC) Resume(ctx context.Context, gid string) error {
-	return s.rpc.Resume(ctx, s.current, gid)
-}
-
-func (s stateRPC) ChangeOption(ctx context.Context, gid string, options map[string]string) error {
-	return s.rpc.ChangeOption(ctx, s.current, gid, options)
-}
-
-func (s stateRPC) SaveSession(ctx context.Context) error {
-	return s.rpc.SaveSession(ctx, s.current)
-}
-
-func (s stateRPC) TaskLocations(ctx context.Context) ([]aria2.TaskLocation, error) {
-	return s.rpc.TaskLocations(ctx, s.current)
-}
-
-// hookScript renders the launcher aria2c invokes on download completion.
-// The executable path is baked in at service-reassert time and refreshed on
-// every repair pass, so binary upgrades self-heal.
-func (app *App) hookScript(current state.State) (string, string, error) {
-	executable, err := app.options.HookExecutable()
-	if err != nil {
-		return "", "", err
-	}
-	content := "#!/bin/sh\nexec " + shellQuote(executable) + " complete-hook \"$@\"\n"
-	return aria2.HookScriptPath(current.SessionPath), content, nil
-}
-
-func shellQuote(value string) string {
-	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func (app *App) DefaultDir() string {
@@ -856,14 +696,6 @@ func (r *LocalRPC) Remove(ctx context.Context, current state.State, gid string) 
 
 func (r *LocalRPC) ClearStopped(ctx context.Context, current state.State, gid string) error {
 	return r.rpcClient(current).RemoveDownloadResult(ctx, gid)
-}
-
-func (r *LocalRPC) ChangeOption(ctx context.Context, current state.State, gid string, options map[string]string) error {
-	return r.rpcClient(current).ChangeOption(ctx, gid, options)
-}
-
-func (r *LocalRPC) TaskLocations(ctx context.Context, current state.State) ([]aria2.TaskLocation, error) {
-	return r.rpcClient(current).TaskLocations(ctx)
 }
 
 func rpcCacheKey(port int, secret string) string {

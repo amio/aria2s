@@ -67,15 +67,6 @@ func ReadConfig(path string) (map[string]string, error) {
 	return ParseConfig(string(data)), nil
 }
 
-// HookScriptPath is where the service reassert flow writes the completion
-// hook launcher. aria2's --on-download-complete executes a single binary path
-// (no embedded subcommand), so a generated shell shim forwards to
-// `aria2s complete-hook`. The hook runs as a one-shot process spawned by
-// aria2c — no resident aria2s process is required.
-func HookScriptPath(sessionPath string) string {
-	return filepath.Join(filepath.Dir(sessionPath), "on-complete-hook.sh")
-}
-
 func ManagedArgs(current state.State) []string {
 	return []string{
 		"--enable-rpc=true",
@@ -85,7 +76,6 @@ func ManagedArgs(current state.State) []string {
 		"--input-file=" + current.SessionPath,
 		"--save-session=" + current.SessionPath,
 		"--save-session-interval=60",
-		"--on-download-complete=" + HookScriptPath(current.SessionPath),
 	}
 }
 

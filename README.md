@@ -54,10 +54,6 @@ aria2s                     # ensure install/start, open the terminal dashboard
 
 The default config also enables `bt-save-metadata`, `bt-load-saved-metadata`, and `bt-seed-unverified` so BitTorrent downloads survive restarts without re-fetching magnet metadata or re-verifying already-completed payloads. Since `install` never overwrites an existing `aria2.conf`, add these three lines manually if your config predates them.
 
-### Staging directory
-
-Downloads added through aria2s are staged in a sibling `.incomplete` directory of their target (e.g. `/Volumes/SynoPub/News` → `/Volumes/SynoPub/.incomplete/News`), so in-progress payloads, `.aria2` control files, and saved `.torrent` metadata never appear in the target folder. When a download completes, aria2c invokes a generated hook (`on-complete-hook.sh` → `aria2s complete-hook`) as a one-shot process — no resident aria2s process is involved — which moves the payload into place via instant same-volume rename, repoints aria2 so seeding continues uninterrupted, and flushes the session. A sweep on `aria2s start`/dashboard launch retries any moves the hook missed. If a destination filename is already taken, the payload stays in staging (nothing is ever overwritten). Downloads added by other RPC clients are unaffected.
-
 Dashboard reads are bounded, batched RPC requests. Slow or unavailable RPC never blocks
 navigation or quit, failed refreshes keep last-known-good rows visible, and mutations with an
 unconfirmed outcome are reconciled without automatic resubmission.

@@ -42,14 +42,13 @@ func (session *DashboardSession) TaskDetail(ctx context.Context, gid string) (ar
 func (session *DashboardSession) AddURI(ctx context.Context, uri string, options aria2.AddOptions) (AddResult, error) {
 	ctx, cancel := context.WithTimeout(ctx, session.app.options.DashboardMutationTimeout)
 	defer cancel()
-	staged, target := session.app.stagedAddOptions(options)
-	gid, err := session.rpc.AddURI(ctx, session.identity, uri, staged)
+	gid, err := session.rpc.AddURI(ctx, session.identity, uri, options)
 	if err != nil {
 		return AddResult{}, err
 	}
 	result := AddResult{GID: gid}
 	if options.Dir != "" {
-		result.Warning = session.app.recordDir(target)
+		result.Warning = session.app.recordDir(options.Dir)
 	}
 	return result, nil
 }
@@ -89,8 +88,7 @@ func (session *DashboardSession) Retry(ctx context.Context, gid string) (RetryRe
 	if err != nil {
 		return RetryResult{}, fmt.Errorf("read retry source: %w", err)
 	}
-	staged, _ := session.app.stagedAddOptions(aria2.AddOptions{Dir: source.Dir})
-	newGID, err := session.rpc.AddURIs(ctx, session.identity, source.URIs, staged)
+	newGID, err := session.rpc.AddURIs(ctx, session.identity, source.URIs, aria2.AddOptions{Dir: source.Dir})
 	if err != nil {
 		return RetryResult{}, fmt.Errorf("add retry replacement: %w", err)
 	}

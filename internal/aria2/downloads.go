@@ -228,43 +228,6 @@ func (client *RPCClient) AddURIs(ctx context.Context, uris []string, opts AddOpt
 	return client.addURIs(ctx, uris, opts)
 }
 
-/** TaskLocation is the minimal position report used by the staging sweep. */
-type TaskLocation struct {
-	GID    string
-	Status string
-	Dir    string
-	Seeder bool
-}
-
-// TaskLocations lists every active and stopped download's location. Waiting
-// downloads are excluded: they hold no payload the sweep could move.
-func (client *RPCClient) TaskLocations(ctx context.Context) ([]TaskLocation, error) {
-	type rawLocation struct {
-		GID    string `json:"gid"`
-		Status string `json:"status"`
-		Dir    string `json:"dir"`
-		Seeder string `json:"seeder"`
-	}
-	keys := []string{"gid", "status", "dir", "seeder"}
-	var active, stopped []rawLocation
-	if err := client.call(ctx, "aria2.tellActive", []any{keys}, &active); err != nil {
-		return nil, err
-	}
-	if err := client.call(ctx, "aria2.tellStopped", []any{0, 1000, keys}, &stopped); err != nil {
-		return nil, err
-	}
-	locations := make([]TaskLocation, 0, len(active)+len(stopped))
-	for _, raw := range append(active, stopped...) {
-		locations = append(locations, TaskLocation{
-			GID:    raw.GID,
-			Status: raw.Status,
-			Dir:    raw.Dir,
-			Seeder: raw.Seeder == "true",
-		})
-	}
-	return locations, nil
-}
-
 func (client *RPCClient) SaveSession(ctx context.Context) error {
 	var ignored string
 	return client.call(ctx, "aria2.saveSession", nil, &ignored)

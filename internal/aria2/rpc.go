@@ -72,14 +72,6 @@ func (client *RPCClient) AddURI(ctx context.Context, uri string, opts AddOptions
 	return gid, nil
 }
 
-// ChangeOption applies per-download option overrides (aria2.changeOption).
-// Active downloads accept only a subset of options; dir is accepted while
-// paused, which is how the staging hook repoints seeding tasks after a move.
-func (client *RPCClient) ChangeOption(ctx context.Context, gid string, options map[string]string) error {
-	var ignored string
-	return client.mutation(ctx, "aria2.changeOption", []any{gid, options}, &ignored)
-}
-
 func (client *RPCClient) Version(ctx context.Context) (string, error) {
 	var version struct {
 		Version string `json:"version"`
