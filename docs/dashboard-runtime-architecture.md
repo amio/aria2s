@@ -2,6 +2,30 @@
 
 Status: Proposed
 
+## Managed Lifecycle Supersession
+
+`docs/reliable-managed-download-lifecycle.md` supersedes this document only where the new
+managed-job lifecycle needs durable publication intent. The asynchronous runtime mechanics
+here remain authoritative: `PrepareDashboard` still returns without waiting for RPC, there
+is one bounded snapshot pipeline, I/O stays outside `Update`/`View`, last-known-good data is
+retained, and unknown mutations are never blindly repeated.
+
+For new managed jobs, apply these newer contracts instead of the older examples below:
+
+- aria2 remains authoritative for transfer progress/protocol state, while the small jobs
+  store owns target, activity, publication WAL, retained metainfo, and restart recipe;
+- stable task ID (also the sole managed GID) is selection and pending-mutation identity;
+- `SetActivity(jobID, running)` replaces separate Pause/Resume workflows and `Retry(jobID)`
+  reconciles the same task instead of creating a replacement GID;
+- app snapshots join manifests with native aria2 facts and return canonical status groups;
+- Dashboard preparation may still reconcile managed service artifacts as described below,
+  but preparation and snapshots do not reconcile managed-job lifecycle or storage;
+  `managed-exec`, event hooks, and explicit Retry own those task mutations.
+
+Under the managed runtime schema, a native row without a manifest is an unsupported external
+mutation: it may use its GID as temporary display identity, but no replacement-GID Retry or
+durable compatibility path applies. Pre-managed tasks are never imported by the new runtime.
+
 ## Context
 
 The dashboard currently performs RPC and local I/O from Bubble Tea's `Update` path. A
