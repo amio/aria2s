@@ -20,6 +20,12 @@ func newDoctorCommand(application *app.App) *cobra.Command {
 			fmt.Fprintln(command.OutOrStdout(), "aria2s doctor: issues found")
 			for _, issue := range report.Issues {
 				fmt.Fprintf(command.OutOrStdout(), "- %s\n", issue.Message)
+				if issue.Detail != "" {
+					fmt.Fprintf(command.OutOrStdout(), "  %s\n", issue.Detail)
+				}
+				if issue.Remedy != "" {
+					fmt.Fprintf(command.OutOrStdout(), "  → %s\n", issue.Remedy)
+				}
 			}
 			return fmt.Errorf("doctor reported issues")
 		},

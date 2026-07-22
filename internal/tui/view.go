@@ -71,7 +71,7 @@ func (model Model) listView() string {
 		if model.list.HasSnapshot {
 			leftSide += "  " + colorizeForeground("STALE — last success "+model.list.LastSuccessAt.Format("15:04:05")+"; reconnecting", errorTextColor, false)
 		} else if model.list.Attempted {
-			leftSide += "  " + colorizeForeground("UNAVAILABLE — retrying; run aria2s doctor or check logs", errorTextColor, false)
+			leftSide += "  " + colorizeForeground("UNAVAILABLE — retrying; run `aria2s doctor` or `aria2s restart`", errorTextColor, false)
 		}
 	}
 	if model.notice != "" {
@@ -327,7 +327,7 @@ func (model Model) listBody(width int, height int) []string {
 			return model.loadingBody(width, height)
 		}
 		if model.list.Attempted && !model.list.HasSnapshot && model.list.LastError != nil {
-			return model.centeredMessageBody(width, height, "aria2 is unavailable; retrying automatically. Run aria2s doctor or check logs.")
+			return model.centeredMessageBody(width, height, "aria2 is unavailable; retrying automatically. Run `aria2s doctor` for details, or `aria2s restart` if it keeps failing.")
 		}
 		return model.emptyBody(width, height)
 	}

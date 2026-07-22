@@ -45,6 +45,8 @@ func TestCheckDetectsMissingBinaryAndPortConflict(t *testing.T) {
 	}
 	assertReportContains(t, report, "missing aria2c binary")
 	assertReportContains(t, report, "port conflict")
+	assertIssueHasDetailAndRemedy(t, report, "missing aria2c binary")
+	assertIssueHasDetailAndRemedy(t, report, "port conflict")
 }
 
 func TestCheckDoesNotReportPortConflictWhenManagedRPCIsReachable(t *testing.T) {
@@ -128,6 +130,7 @@ func TestCheckReportsSupervisorDrift(t *testing.T) {
 	}
 	assertReportContains(t, report, "missing service file")
 	assertReportContains(t, report, "supervisor unloaded")
+	assertIssueHasDetailAndRemedy(t, report, "supervisor unloaded")
 }
 
 func TestCheckReportsNotRunningAndRPCUnreachable(t *testing.T) {
@@ -175,6 +178,8 @@ func TestCheckReportsNotRunningAndRPCUnreachable(t *testing.T) {
 	}
 	assertReportContains(t, report, "supervisor not running")
 	assertReportContains(t, report, "RPC unreachable")
+	assertIssueHasDetailAndRemedy(t, report, "supervisor not running")
+	assertIssueHasDetailAndRemedy(t, report, "RPC unreachable")
 }
 
 func TestStatusReportOmitsRPCSecret(t *testing.T) {
@@ -416,6 +421,23 @@ func assertReportContains(t *testing.T, report doctor.Report, want string) {
 		}
 	}
 	t.Fatalf("expected report to contain %q, got %#v", want, report.Issues)
+}
+
+func assertIssueHasDetailAndRemedy(t *testing.T, report doctor.Report, want string) {
+	t.Helper()
+	for _, issue := range report.Issues {
+		if !strings.Contains(issue.Message, want) {
+			continue
+		}
+		if strings.TrimSpace(issue.Detail) == "" {
+			t.Fatalf("issue %q missing Detail", issue.Message)
+		}
+		if strings.TrimSpace(issue.Remedy) == "" {
+			t.Fatalf("issue %q missing Remedy", issue.Message)
+		}
+		return
+	}
+	t.Fatalf("issue %q not found in report", want)
 }
 
 func assertContains(t *testing.T, text, want string) {

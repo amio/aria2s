@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,6 +106,36 @@ func TestInstallStartTimeoutGivesRecoveryGuidance(t *testing.T) {
 	assertContains(t, message, "http://127.0.0.1:6800/jsonrpc")
 	assertContains(t, message, servicePaths.LogFile)
 	assertContains(t, message, "aria2s doctor")
+}
+
+// TestInstallStartTimeoutOnTransportErrorHintsRestart covers the stale-port
+// scenario the user hit: aria2 EOFs on RPC. The error should suggest
+// `aria2s restart` and translate the EOF into plain English.
+func TestInstallStartTimeoutOnTransportErrorHintsRestart(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	serviceBackend := &recordingService{}
+	rpc := &transportFailingRPC{cause: fmt.Errorf("%w: %w", aria2.ErrTransportUnavailable, io.EOF)}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
+		RPCReadyTimeout: time.Nanosecond,
+		RPCPollInterval: time.Nanosecond,
+		IsPortAvailable: func(int) bool {
+			return true
+		},
+	})
+
+	err := application.Install(context.Background(), true)
+	if err == nil {
+		t.Fatal("expected install --start timeout error")
+	}
+	message := err.Error()
+	assertContains(t, message, "aria2 did not become reachable")
+	assertContains(t, message, "connection closed by aria2 before responding")
+	assertContains(t, message, "aria2s restart")
+	if !errors.Is(err, aria2.ErrTransportUnavailable) {
+		t.Fatalf("expected err to wrap ErrTransportUnavailable, got: %v", err)
+	}
 }
 
 func TestStartPreflightsStateConfigAndWaitsForRPC(t *testing.T) {
@@ -976,6 +1007,24 @@ func (rpc *flakyRPC) Version(context.Context, state.State) (string, error) {
 	}
 	return rpc.version, nil
 }
+
+// transportFailingRPC always fails Version with a wrapped transport error,
+// simulating the stale-port / EOF scenario users hit in the wild.
+type transportFailingRPC struct {
+	cause error
+}
+
+func (rpc *transportFailingRPC) Version(context.Context, state.State) (string, error) {
+	return "", rpc.cause
+}
+
+func (rpc *transportFailingRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
+	return "", rpc.cause
+}
+
+func (rpc *transportFailingRPC) SaveSession(context.Context, state.State) error { return nil }
+
+func (rpc *transportFailingRPC) Shutdown(context.Context, state.State) error { return nil }
 
 func (rpc *flakyRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
 	return "2089b05ecca3d829", nil

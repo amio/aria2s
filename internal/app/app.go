@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -734,13 +735,72 @@ func (app *App) waitForRPC(ctx context.Context, current state.State) error {
 }
 
 func (app *App) rpcReadyError(current state.State, cause error) error {
-	return fmt.Errorf(
-		"aria2 did not become reachable within %s at %s: %w\nCheck logs at %s or run `aria2s doctor` for diagnostics",
+	plain := explainTransportError(cause)
+	hint := "Check logs at %s or run `aria2s doctor` for diagnostics."
+	if errors.Is(cause, aria2.ErrTransportUnavailable) {
+		hint = "This usually means aria2 crashed during startup or a stale process is holding the port.\n" +
+			"→ Try `aria2s restart`; if it still fails, check logs at %s or run `aria2s doctor`."
+	}
+	message := fmt.Sprintf(
+		"aria2 did not become reachable within %s at %s: %s\n"+hint,
 		app.options.RPCReadyTimeout,
 		endpoint(current.RPCPort),
-		cause,
+		plain,
 		current.LogPath,
 	)
+	return &rpcReadyError{message: message, cause: cause}
+}
+
+// rpcReadyError carries the user-facing message while preserving the original
+// cause (incl. aria2.ErrTransportUnavailable) for errors.Is checks.
+type rpcReadyError struct {
+	message string
+	cause   error
+}
+
+func (err *rpcReadyError) Error() string { return err.message }
+func (err *rpcReadyError) Unwrap() error { return err.cause }
+
+// explainTransportError translates a low-level RPC transport error into a
+// plain-English phrase for user-facing messages. It is presentation-only;
+// the underlying wrapped error (incl. aria2.ErrTransportUnavailable) is
+// preserved for errors.Is checks by callers.
+func explainTransportError(err error) string {
+	if err == nil {
+		return ""
+	}
+	if errors.Is(err, io.EOF) {
+		return "connection closed by aria2 before responding"
+	}
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		if strings.Contains(opErr.Err.Error(), "refused") {
+			return "no process is listening on the port"
+		}
+		return "network error: " + opErr.Err.Error()
+	}
+	// HTTP-status transport failures are wrapped as
+	// "aria2 rpc transport unavailable: aria2 RPC returned HTTP <code>".
+	if s := httpStatusFromError(err); s != "" {
+		return "aria2 returned HTTP " + s
+	}
+	return err.Error()
+}
+
+// httpStatusFromError extracts the HTTP status code embedded by
+// aria2.dispatch when it wraps non-2xx responses. Returns "" if not found.
+func httpStatusFromError(err error) string {
+	const marker = "aria2 RPC returned HTTP "
+	idx := strings.Index(err.Error(), marker)
+	if idx < 0 {
+		return ""
+	}
+	rest := err.Error()[idx+len(marker):]
+	end := strings.IndexAny(rest, " \":")
+	if end < 0 {
+		end = len(rest)
+	}
+	return rest[:end]
 }
 
 func (app *App) choosePort() (int, error) {
