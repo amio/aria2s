@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 	"time"
 
@@ -621,42 +620,37 @@ func (model Model) handleClipboardAdd(msg clipboardContentMsg) (tea.Model, tea.C
 
 func (model Model) items() []aria2.Download {
 	items := make([]aria2.Download, 0, len(model.snapshot.Active)+len(model.snapshot.Waiting)+len(model.snapshot.Stopped))
-	items = append(items, model.snapshot.Active...)
-	items = append(items, model.snapshot.Waiting...)
-	items = append(items, model.snapshot.Stopped...)
-	sort.SliceStable(items, func(i, j int) bool {
-		return statusRank(items[i]) < statusRank(items[j])
-	})
-	return items
-}
-
-// statusRank orders rows by their display status so identical labels group
-// together regardless of which aria2 bucket (active/waiting/stopped) reports
-// them: Metadata < Active < Seeding < Queued < Paused < Finished < Error <
-// Removed < Unknown. Stable sort preserves aria2's within-bucket ordering.
-func statusRank(d aria2.Download) int {
-	if d.IsMetadata {
-		return 0
-	}
-	switch d.Status {
-	case "active":
-		if d.Seeder {
-			return 2
+	appendBucket := func(downloads []aria2.Download, want bool) {
+		for _, d := range downloads {
+			if d.IsMetadata == want {
+				items = append(items, d)
+			}
 		}
-		return 1
-	case "waiting":
-		return 3
-	case "paused":
-		return 4
-	case "complete":
-		return 5
-	case "error":
-		return 6
-	case "removed":
-		return 7
-	default:
-		return 8
 	}
+	appendSeedingBucket := func(downloads []aria2.Download) {
+		for _, d := range downloads {
+			if !d.IsMetadata && d.Seeder {
+				items = append(items, d)
+			}
+		}
+	}
+	appendActiveBucket := func(downloads []aria2.Download) {
+		for _, d := range downloads {
+			if !d.IsMetadata && !d.Seeder {
+				items = append(items, d)
+			}
+		}
+	}
+	// Active metadata → Active (downloading) → Seeding → Queued metadata →
+	// Stopped metadata → Queued → Paused → Stopped.
+	appendBucket(model.snapshot.Active, true)
+	appendActiveBucket(model.snapshot.Active)
+	appendSeedingBucket(model.snapshot.Active)
+	appendBucket(model.snapshot.Waiting, true)
+	appendBucket(model.snapshot.Stopped, true)
+	appendBucket(model.snapshot.Waiting, false)
+	appendBucket(model.snapshot.Stopped, false)
+	return items
 }
 func (model Model) indexOf(gid string) int {
 	items := model.items()
