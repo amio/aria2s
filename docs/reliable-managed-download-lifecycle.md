@@ -6,9 +6,11 @@ resolving-magnet restart, RPC-added staged torrent recovery, final-seed
 regeneration/omission, session-write interruption, and direct HTTP/BitTorrent hook
 reentrancy all preserved one path, allocation, and GID. The Go suite, focused race suite,
 vet, and Linux publication cross-build pass, and independent gap review found no remaining
-code correctness blocker. Subprocess crash-injection/integration matrices and representative
-SMB/NFS plus real-supervisor behavior remain release gates, so this document stays active
-rather than moving to `implemented`.
+code correctness blocker. Focused subprocess crash/integration gates and an isolated real
+macOS launchd lifecycle pass locally. `.github/workflows/linux-ci.yml` now owns Linux tests,
+race detection, vet, and build validation but still needs its first GitHub run;
+representative SMB/NFS and real Linux `systemd --user` behavior remain external release
+gates, so this document stays active rather than moving to `implemented`.
 
 ## Decision Summary
 
@@ -956,6 +958,21 @@ On aria2 1.37.0 and APFS, disposable black-box spikes established:
     completion callbacks were harmless behind the durable publication-state guard. Final
     seeds created no target-side `.aria2` control file. The harness used only localhost peers
     and APFS, so it does not satisfy the separate SMB/NFS release gate.
+
+Focused automated validation additionally proves that an authoritative atomic file remains
+entirely old before rename and entirely new after rename when a helper process exits at the
+commit boundary; publication converges after detach and after rename; Remove converges after
+its tombstone and before native detach; duplicate completion hooks are idempotent; one
+offline storage does not suppress a healthy peer; and a hook process closes the inherited
+instance-lock FD without retaining the lease. A disposable, uniquely labelled LaunchAgent
+also passed real `bootstrap -> kickstart -> running -> bootout` validation without touching
+the installed aria2s service.
+
+The Linux CI workflow uses Ubuntu 24.04 to run the complete suite, focused race tests, vet,
+and a native Linux build. It pins GitHub-maintained actions to immutable full commit SHAs,
+uses the Go version and cache dependency from the module files, grants only `contents: read`,
+cancels superseded branch runs, and bounds the job runtime. Its first GitHub-hosted result is
+still required before Linux is considered validated.
 
 ### Slice 0: Mechanism Proofs Before Architecture Investment
 

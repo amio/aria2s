@@ -81,7 +81,7 @@ func TestManagedHTTPAddAndPublicationKeepTargetCleanUntilAtomicRoot(t *testing.T
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatal(err)
 	}
-	rpc := &lifecycleRPC{}
+	rpc := &lifecycleRPC{clearMakesAbsent: true}
 	application := New(Options{Paths: servicePaths, RPC: rpc, DownloadDir: target})
 	result, err := application.AddManaged(context.Background(), AddRequest{Source: "https://example.test/payload.bin", TargetDir: target})
 	if err != nil {
@@ -119,6 +119,12 @@ func TestManagedHTTPAddAndPublicationKeepTargetCleanUntilAtomicRoot(t *testing.T
 	job, _, err = repository.Load(job.ID)
 	if err != nil || job.Phase != jobs.PhasePublished || job.ActivityIntent != jobs.ActivityStopped {
 		t.Fatalf("published job=%+v err=%v", job, err)
+	}
+	if err := application.ManagedHook(context.Background(), "on-download-complete", job.ID); err != nil {
+		t.Fatalf("duplicate completion hook was not idempotent: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(target, "payload.bin")); err != nil || string(data) != "complete" {
+		t.Fatalf("duplicate hook changed published payload: %q err=%v", data, err)
 	}
 }
 
@@ -250,6 +256,51 @@ func TestRemovedRetryConvergesCrashAfterTombstone(t *testing.T) {
 	}
 	if err := application.ClearManaged(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRemovedRetryConvergesCrashBeforeNativeDetach(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	target := filepath.Join(root, "downloads")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.Save(servicePaths.StateFile, state.State{RuntimeSchemaVersion: 2}); err != nil {
+		t.Fatal(err)
+	}
+	rpc := &lifecycleRPC{clearMakesAbsent: true}
+	application := New(Options{Paths: servicePaths, RPC: rpc})
+	result, err := application.AddManaged(context.Background(), AddRequest{Source: "https://example.test/payload.bin", TargetDir: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := jobs.New(servicePaths.StateDir)
+	job, token, err := repository.Load(result.Task.GID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := repository.LoadStorage(job.StorageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workDir := jobs.WorkDir(scope, job.ID)
+	if err := os.WriteFile(filepath.Join(workDir, "partial.bin"), []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	job.Phase, job.ActivityIntent = jobs.PhaseRemoved, jobs.ActivityStopped
+	if _, err := repository.SaveCAS(job, token); err != nil {
+		t.Fatal(err)
+	}
+	rpc.status = aria2.LifecycleStatus{GID: job.ID, Status: "active", Dir: workDir}
+	if err := application.RetryManaged(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if rpc.forceCalls != 1 || rpc.clearCalls != 1 {
+		t.Fatalf("native detach calls: force=%d clear=%d", rpc.forceCalls, rpc.clearCalls)
+	}
+	if _, err := os.Stat(workDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging survived recovered Remove: %v", err)
 	}
 }
 

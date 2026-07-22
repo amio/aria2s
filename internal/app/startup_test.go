@@ -50,3 +50,27 @@ func TestPlanStartupRejectsDuplicateAndGeneratesFinalSeed(t *testing.T) {
 		t.Fatalf("seed options = %+v", plan.Blocks[0].Options)
 	}
 }
+
+func TestPlanStartupIsolatesOfflineStorage(t *testing.T) {
+	root := t.TempDir()
+	healthyScope := jobs.StorageScope{ID: "1111111111111111", StagingAnchor: filepath.Join(root, "healthy")}
+	offlineScope := jobs.StorageScope{ID: "2222222222222222", StagingAnchor: filepath.Join(root, "offline")}
+	healthy := jobs.Job{ID: "aaaaaaaaaaaaaaaa", Source: "https://example.test/healthy", StorageID: healthyScope.ID, Phase: jobs.PhaseStaged, ActivityIntent: jobs.ActivityRunning}
+	offline := jobs.Job{ID: "bbbbbbbbbbbbbbbb", Source: "https://example.test/offline", StorageID: offlineScope.ID, Phase: jobs.PhaseStaged, ActivityIntent: jobs.ActivityRunning}
+	healthyBlock := aria2.SessionBlock{URI: healthy.Source, Options: []aria2.SessionOption{{Key: "gid", Value: healthy.ID}}}
+	plan := PlanStartup(
+		[]jobs.Job{offline, healthy},
+		map[string]jobs.StorageScope{healthyScope.ID: healthyScope, offlineScope.ID: offlineScope},
+		map[string]StartupFact{healthy.ID: {StorageAvailable: true, WorkEmpty: true}, offline.ID: {StorageAvailable: false}},
+		[]aria2.SessionBlock{healthyBlock},
+	)
+	if len(plan.Blocks) != 1 {
+		t.Fatalf("healthy storage was suppressed by offline peer: %+v", plan)
+	}
+	if gid, _ := plan.Blocks[0].Option("gid"); gid != healthy.ID {
+		t.Fatalf("planned gid = %q, want %q", gid, healthy.ID)
+	}
+	if len(plan.Problems) != 1 || plan.Problems[0].JobID != offline.ID || plan.Problems[0].Code != "StorageOffline" {
+		t.Fatalf("offline storage problem = %+v", plan.Problems)
+	}
+}

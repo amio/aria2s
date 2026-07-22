@@ -10,6 +10,10 @@ import (
 )
 
 func Write(path string, data []byte, mode os.FileMode) error {
+	return write(path, data, mode, nil)
+}
+
+func write(path string, data []byte, mode os.FileMode, step func(string)) error {
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return err
@@ -38,8 +42,14 @@ func Write(path string, data []byte, mode os.FileMode) error {
 	if err := temp.Close(); err != nil {
 		return err
 	}
+	if step != nil {
+		step("before-rename")
+	}
 	if err := os.Rename(tempPath, path); err != nil {
 		return err
+	}
+	if step != nil {
+		step("after-rename")
 	}
 	return SyncDirectory(parent)
 }
