@@ -388,7 +388,7 @@ func TestListPauseKeyOnlyTargetsLiveRows(t *testing.T) {
 	if model.notice == "" || cmd == nil {
 		t.Fatal("pause on complete should flash a notice")
 	}
-	if !strings.Contains(model.notice, "finished") {
+	if !strings.Contains(model.notice, "complete") {
 		t.Fatalf("notice got %q", model.notice)
 	}
 
@@ -413,7 +413,7 @@ func TestInapplicableResumeNoticeRendersInListTopBar(t *testing.T) {
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
 	model = updated.(Model)
 	view := model.View().Content
-	if !strings.Contains(view, "NOTE:") || !strings.Contains(view, "already finished") {
+	if !strings.Contains(view, "NOTE:") || !strings.Contains(view, "already complete") {
 		t.Fatalf("list top bar missing inapplicable notice:\n%s", view)
 	}
 }

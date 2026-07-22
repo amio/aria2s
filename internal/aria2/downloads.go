@@ -48,7 +48,6 @@ type Download struct {
 	Status          string
 	Name            string
 	IsMetadata      bool
-	Seeder          bool
 	CompletedLength int64
 	TotalLength     int64
 	DownloadSpeed   int64
@@ -321,7 +320,6 @@ func (raw rawDownload) toDownload() Download {
 		Status:          raw.Status,
 		Name:            raw.name(),
 		IsMetadata:      raw.isMetadata(),
-		Seeder:          raw.Seeder == "true",
 		CompletedLength: parseInt(raw.CompletedLength),
 		TotalLength:     parseInt(raw.TotalLength),
 		DownloadSpeed:   parseInt(raw.DownloadSpeed),
@@ -421,7 +419,7 @@ func fileName(path string) string {
 }
 
 func downloadFields() []string {
-	return []string{"gid", "status", "files", "bittorrent", "seeder", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed"}
+	return []string{"gid", "status", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed"}
 }
 
 func detailFields() []string {

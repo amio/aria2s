@@ -627,25 +627,8 @@ func (model Model) items() []aria2.Download {
 			}
 		}
 	}
-	appendSeedingBucket := func(downloads []aria2.Download) {
-		for _, d := range downloads {
-			if !d.IsMetadata && d.Seeder {
-				items = append(items, d)
-			}
-		}
-	}
-	appendActiveBucket := func(downloads []aria2.Download) {
-		for _, d := range downloads {
-			if !d.IsMetadata && !d.Seeder {
-				items = append(items, d)
-			}
-		}
-	}
-	// Active metadata → Active (downloading) → Seeding → Queued metadata →
-	// Stopped metadata → Queued → Paused → Stopped.
+	appendBucket(model.snapshot.Active, false)
 	appendBucket(model.snapshot.Active, true)
-	appendActiveBucket(model.snapshot.Active)
-	appendSeedingBucket(model.snapshot.Active)
 	appendBucket(model.snapshot.Waiting, true)
 	appendBucket(model.snapshot.Stopped, true)
 	appendBucket(model.snapshot.Waiting, false)
@@ -722,11 +705,11 @@ func (model Model) flashInapplicable(action, status string) (tea.Model, tea.Cmd)
 func inapplicableActionMessage(action, status string) string {
 	switch status {
 	case "complete":
-		return "already finished — " + action + " does nothing"
+		return "already complete — " + action + " does nothing"
 	case "active":
 		return "already active — " + action + " does nothing"
 	case "waiting":
-		return "already queued — " + action + " does nothing"
+		return "already waiting — " + action + " does nothing"
 	case "paused":
 		return "paused — " + action + " does nothing"
 	case "error":
