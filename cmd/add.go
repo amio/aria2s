@@ -4,7 +4,6 @@ import (
 	"fmt"
 
 	"github.com/amio/aria2s/internal/app"
-	"github.com/amio/aria2s/internal/aria2"
 	"github.com/spf13/cobra"
 )
 
@@ -15,11 +14,14 @@ func newAddCommand(application *app.App) *cobra.Command {
 		Short: "Add a download URL or magnet URI",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			gid, err := application.Add(command.Context(), args[0], aria2.AddOptions{Dir: dir})
+			result, err := application.AddManaged(command.Context(), app.AddRequest{Source: args[0], TargetDir: dir})
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(command.OutOrStdout(), "Added download.\n\nGID:\n  %s\n", gid)
+			fmt.Fprintf(command.OutOrStdout(), "Added managed download.\n\nGID:\n  %s\n", result.Task.GID)
+			if result.Warning != nil {
+				fmt.Fprintf(command.ErrOrStderr(), "warning: %v\n", result.Warning)
+			}
 			return nil
 		},
 	}

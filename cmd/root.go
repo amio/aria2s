@@ -77,6 +77,25 @@ func newRoot(application *app.App, runner dashboardRunner) *cobra.Command {
 	versionCmd.GroupID = "setup"
 	root.AddCommand(versionCmd)
 
+	managedExecCmd := &cobra.Command{
+		Use:    "managed-exec",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			return application.ManagedExec(command.Context())
+		},
+	}
+	root.AddCommand(managedExecCmd)
+	managedHookCmd := &cobra.Command{
+		Use:    "managed-hook <event> <gid>",
+		Hidden: true,
+		Args:   cobra.ExactArgs(2),
+		RunE: func(command *cobra.Command, args []string) error {
+			return application.ManagedHook(command.Context(), args[0], args[1])
+		},
+	}
+	root.AddCommand(managedHookCmd)
+
 	root.SetHelpFunc(customRootHelp)
 	return root
 }

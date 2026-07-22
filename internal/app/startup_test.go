@@ -1,0 +1,52 @@
+package app
+
+import (
+	"path/filepath"
+	"testing"
+
+	"github.com/amio/aria2s/internal/aria2"
+	"github.com/amio/aria2s/internal/jobs"
+)
+
+func TestPlanStartupNormalizesHTTPAndFailsClosedWithoutRoot(t *testing.T) {
+	root := t.TempDir()
+	job := jobs.Job{ID: "0123456789abcdef", Source: "https://example.test/file", TargetDir: filepath.Join(root, "target"), StorageID: "fedcba9876543210", Phase: jobs.PhaseStaged, ActivityIntent: jobs.ActivityStopped, PayloadRoot: "resolved.bin"}
+	scope := jobs.StorageScope{ID: job.StorageID, StagingAnchor: root}
+	work := jobs.WorkDir(scope, job.ID)
+	block := aria2.SessionBlock{URI: job.Source, Options: []aria2.SessionOption{{Key: "gid", Value: job.ID}, {Key: "dir", Value: work}, {Key: "out", Value: "stale.bin"}, {Key: "header", Value: "opaque"}}}
+	plan := PlanStartup([]jobs.Job{job}, map[string]jobs.StorageScope{scope.ID: scope}, map[string]StartupFact{job.ID: {StorageAvailable: true}}, []aria2.SessionBlock{block})
+	if len(plan.Problems) != 0 || len(plan.Blocks) != 1 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if out, _ := plan.Blocks[0].Option("out"); out != "resolved.bin" {
+		t.Fatalf("out = %q", out)
+	}
+	if pause, _ := plan.Blocks[0].Option("pause"); pause != "true" {
+		t.Fatalf("pause = %q", pause)
+	}
+	job.PayloadRoot = ""
+	plan = PlanStartup([]jobs.Job{job}, map[string]jobs.StorageScope{scope.ID: scope}, map[string]StartupFact{job.ID: {StorageAvailable: true}}, []aria2.SessionBlock{block})
+	if len(plan.Blocks) != 0 || len(plan.Problems) != 1 || plan.Problems[0].Code != "RestartStateMissing" {
+		t.Fatalf("fail-closed plan = %+v", plan)
+	}
+}
+
+func TestPlanStartupRejectsDuplicateAndGeneratesFinalSeed(t *testing.T) {
+	root := t.TempDir()
+	scope := jobs.StorageScope{ID: "fedcba9876543210", StagingAnchor: root}
+	staged := jobs.Job{ID: "0123456789abcdef", Source: "magnet:?xt=x", TargetDir: filepath.Join(root, "target"), StorageID: scope.ID, Phase: jobs.PhaseStaged, ActivityIntent: jobs.ActivityRunning}
+	duplicate := aria2.SessionBlock{URI: staged.Source, Options: []aria2.SessionOption{{Key: "gid", Value: staged.ID}}}
+	plan := PlanStartup([]jobs.Job{staged}, map[string]jobs.StorageScope{scope.ID: scope}, map[string]StartupFact{staged.ID: {StorageAvailable: true, WorkEmpty: true}}, []aria2.SessionBlock{duplicate, duplicate})
+	if len(plan.Blocks) != 0 || len(plan.Problems) != 1 {
+		t.Fatalf("duplicate plan = %+v", plan)
+	}
+	published := staged
+	published.Phase = jobs.PhasePublished
+	plan = PlanStartup([]jobs.Job{published}, map[string]jobs.StorageScope{scope.ID: scope}, map[string]StartupFact{published.ID: {StorageAvailable: true, Torrent: true, HasMetainfo: true, MetainfoPath: filepath.Join(root, "meta.torrent")}}, nil)
+	if len(plan.Blocks) != 1 {
+		t.Fatalf("final seed plan = %+v", plan)
+	}
+	if value, _ := plan.Blocks[0].Option("bt-seed-unverified"); value != "true" {
+		t.Fatalf("seed options = %+v", plan.Blocks[0].Options)
+	}
+}

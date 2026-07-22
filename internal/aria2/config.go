@@ -1,3 +1,6 @@
+// Package aria2 owns the local aria2 configuration, JSON-RPC, and native
+// session contracts. It preserves transport state without owning managed job
+// intent or publication decisions.
 package aria2
 
 import (
@@ -7,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/amio/aria2s/internal/atomicfile"
 	"github.com/amio/aria2s/internal/state"
 )
 
@@ -30,13 +34,7 @@ func DefaultConfig(downloadDir string) string {
 }
 
 func WriteConfig(path, content string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o600)
+	return atomicfile.Create(path, []byte(content), 0o600)
 }
 
 func ParseConfig(content string) map[string]string {
@@ -76,6 +74,21 @@ func ManagedArgs(current state.State) []string {
 		"--input-file=" + current.SessionPath,
 		"--save-session=" + current.SessionPath,
 		"--save-session-interval=60",
+	}
+}
+
+func ManagedV2Args(current state.State, hooksDir string) []string {
+	return []string{
+		"--enable-rpc=true",
+		"--rpc-listen-all=false",
+		"--rpc-listen-port=" + strconv.Itoa(current.RPCPort),
+		"--rpc-secret=" + current.RPCSecret,
+		"--input-file=" + current.StartupInputPath,
+		"--save-session=" + current.SessionPath,
+		"--save-session-interval=60",
+		"--rpc-save-upload-metadata=false",
+		"--on-download-complete=" + filepath.Join(hooksDir, "on-download-complete"),
+		"--on-bt-download-complete=" + filepath.Join(hooksDir, "on-bt-download-complete"),
 	}
 }
 

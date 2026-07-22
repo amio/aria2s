@@ -101,9 +101,17 @@ func RenderLaunchAgent(current state.State) (string, error) {
 	builder.WriteString("\n<plist version=\"1.0\">\n<dict>\n")
 	writePlistString(&builder, "Label", current.ServiceName)
 	builder.WriteString("  <key>ProgramArguments</key>\n  <array>\n")
-	writePlistArrayString(&builder, current.Aria2cPath)
-	for _, arg := range aria2.ManagedArgs(current) {
-		writePlistArrayString(&builder, arg)
+	if current.RuntimeSchemaVersion == 2 {
+		if current.ControllerPath == "" {
+			return "", fmt.Errorf("controller path is required for runtime v2")
+		}
+		writePlistArrayString(&builder, current.ControllerPath)
+		writePlistArrayString(&builder, "managed-exec")
+	} else {
+		writePlistArrayString(&builder, current.Aria2cPath)
+		for _, arg := range aria2.ManagedArgs(current) {
+			writePlistArrayString(&builder, arg)
+		}
 	}
 	builder.WriteString("  </array>\n")
 	builder.WriteString("  <key>RunAtLoad</key>\n  <false/>\n")

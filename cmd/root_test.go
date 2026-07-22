@@ -3,6 +3,8 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -156,14 +158,29 @@ func writeExecutable(t *testing.T, path string) string {
 func writeInstalledStateAndConfig(t *testing.T, servicePaths paths.Paths, aria2c string) state.State {
 	t.Helper()
 	current := state.State{
-		Aria2cPath:   aria2c,
-		RPCPort:      6800,
-		RPCSecret:    "secret-token",
-		SessionPath:  servicePaths.SessionFile,
-		LogPath:      servicePaths.LogFile,
-		ErrorLogPath: servicePaths.ErrorLogFile,
-		ServiceName:  servicePaths.ServiceName,
+		RuntimeSchemaVersion: 2,
+		ControllerPath:       aria2c,
+		StartupInputPath:     servicePaths.StartupInputFile,
+		Aria2cPath:           aria2c,
+		RPCPort:              6800,
+		RPCSecret:            "secret-token",
+		SessionPath:          servicePaths.SessionFile,
+		LogPath:              servicePaths.LogFile,
+		ErrorLogPath:         servicePaths.ErrorLogFile,
+		ServiceName:          servicePaths.ServiceName,
 	}
+	controller, err := os.ReadFile(aria2c)
+	if err != nil {
+		t.Fatalf("read controller: %v", err)
+	}
+	controllerSum := sha256.Sum256(controller)
+	current.ControllerIdentity = hex.EncodeToString(controllerSum[:])
+	serviceFile, err := service.RenderLaunchAgent(current)
+	if err != nil {
+		t.Fatalf("render service: %v", err)
+	}
+	serviceSum := sha256.Sum256([]byte(serviceFile))
+	current.ServiceIdentity = hex.EncodeToString(serviceSum[:])
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
 	}
@@ -262,6 +279,10 @@ func (rpc *trackingRPC) AddURI(context.Context, state.State, string, aria2.AddOp
 
 func (rpc *trackingRPC) SaveSession(context.Context, state.State) error {
 	return nil
+}
+
+func (*trackingRPC) CompleteCensus(context.Context, state.State) ([]aria2.LifecycleStatus, error) {
+	return nil, nil
 }
 
 func (rpc *trackingRPC) Shutdown(context.Context, state.State) error {

@@ -35,6 +35,8 @@
 - The app layer is the composition and workflow owner; platform service packages only render and execute supervisor-specific operations.
 - User download tuning remains authoritative in `~/.aria2/aria2.conf`; aria2s passes only managed RPC and session arguments through the service definition.
 - The local JSON-RPC boundary is the sole control and observation channel between aria2s and the managed aria2c process.
+- Durable job ownership and publication intent live in versioned manifests; aria2's native v2 session remains the transport-resume artifact and is normalized into a fresh startup input before every managed exec.
+- Filesystem publication is one same-filesystem kernel no-replace rename of a single payload root; `publication` owns path/identity/syscall facts while `app` owns the detach/move/rehydrate transaction.
 
 ## Cross-Layer Contracts
 
@@ -43,12 +45,16 @@
 - Session state is saved periodically and before controlled stop or restart so managed downloads survive service lifecycle changes.
 - Dashboard reads are bounded and batched; refresh failures retain the last successful snapshot, and uncertain mutations are reconciled without blind resubmission.
 - macOS and Linux supervisors must express equivalent aria2 arguments and lifecycle semantics.
+- The supervisor runs `aria2s managed-exec`, which validates committed schema/artifact identity, holds an inherited instance lease through aria2c, and installs short-lived idempotent completion hooks.
+- Legacy restart state is never imported or deleted; a running legacy service or non-empty legacy session blocks v2 installation unless task discard is explicitly acknowledged.
 
 ## Component Map
 
 - **Application workflows and composition**: `internal/app/app.go`, `internal/app/dashboard.go`
 - **aria2 configuration and JSON-RPC contract**: `internal/aria2/config.go`, `internal/aria2/rpc.go`, `internal/aria2/downloads.go`, `internal/aria2/dashboard.go`
 - **Persistent managed state and filesystem layout**: `internal/state/state.go`, `internal/paths/paths.go`, `internal/paths/darwin.go`, `internal/paths/linux.go`
+- **Managed job manifests and durable writes**: `internal/jobs/repository.go`, `internal/atomicfile/atomicfile.go`
+- **Publication filesystem boundary and managed process runtime**: `internal/publication/publication.go`, `internal/runtime/runtime.go`, `internal/app/managedexec.go`, `internal/app/lifecycle.go`
 - **Service supervisor adapters**: `internal/service/backend.go`, `internal/service/launchd.go`, `internal/service/systemd.go`
 - **Terminal dashboard state and rendering**: `internal/tui/model.go`, `internal/tui/view.go`, `internal/tui/addform.go`
 - **CLI command surface**: `cmd/root.go`, `cmd/install.go`, `cmd/start.go`, `cmd/dashboard.go`

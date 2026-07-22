@@ -9,11 +9,12 @@ import (
 
 func newInstallCommand(application *app.App) *cobra.Command {
 	var start bool
+	var discardLegacyTasks bool
 	command := &cobra.Command{
 		Use:   "install",
 		Short: "Install the background service",
 		RunE: func(command *cobra.Command, _ []string) error {
-			if err := application.Install(command.Context(), start); err != nil {
+			if err := application.InstallManaged(command.Context(), app.InstallRequest{Start: start, DiscardLegacyTasks: discardLegacyTasks}); err != nil {
 				return err
 			}
 			paths := application.Paths()
@@ -27,5 +28,6 @@ func newInstallCommand(application *app.App) *cobra.Command {
 		},
 	}
 	command.Flags().BoolVar(&start, "start", false, "start the service after installing")
+	command.Flags().BoolVar(&discardLegacyTasks, "discard-legacy-tasks", false, "ignore legacy restart state without deleting legacy files")
 	return command
 }

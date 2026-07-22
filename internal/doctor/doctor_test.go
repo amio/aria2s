@@ -21,13 +21,14 @@ func TestCheckDetectsMissingBinaryAndPortConflict(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	current := state.State{
-		Aria2cPath:   filepath.Join(root, "missing-aria2c"),
-		RPCPort:      6800,
-		RPCSecret:    "secret-token",
-		SessionPath:  servicePaths.SessionFile,
-		LogPath:      servicePaths.LogFile,
-		ErrorLogPath: servicePaths.ErrorLogFile,
-		ServiceName:  servicePaths.ServiceName,
+		RuntimeSchemaVersion: 2,
+		Aria2cPath:           filepath.Join(root, "missing-aria2c"),
+		RPCPort:              6800,
+		RPCSecret:            "secret-token",
+		SessionPath:          servicePaths.SessionFile,
+		LogPath:              servicePaths.LogFile,
+		ErrorLogPath:         servicePaths.ErrorLogFile,
+		ServiceName:          servicePaths.ServiceName,
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
@@ -47,6 +48,39 @@ func TestCheckDetectsMissingBinaryAndPortConflict(t *testing.T) {
 	assertReportContains(t, report, "port conflict")
 }
 
+func TestCheckReportsCorruptManagedManifestWithRecoveryCode(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := filepath.Join(root, "aria2c")
+	if err := os.WriteFile(aria2c, []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	current := state.State{RuntimeSchemaVersion: 2, Aria2cPath: aria2c, RPCPort: 6800, ServiceName: servicePaths.ServiceName}
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, []byte("service"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	jobDir := filepath.Join(servicePaths.StateDir, "jobs", "0123456789abcdef")
+	if err := os.MkdirAll(jobDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jobDir, "manifest.json"), []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	report := doctor.Check(context.Background(), doctor.Options{Paths: servicePaths, Service: fixedService{loaded: true, running: true}, IsPortAvailable: func(int) bool { return true }, RPCReachable: func(context.Context, state.State) bool { return true }})
+	for _, issue := range report.Issues {
+		if issue.Code == "CorruptManifest" && len(issue.Recovery) > 0 {
+			return
+		}
+	}
+	t.Fatalf("corrupt manifest issue missing: %#v", report.Issues)
+}
+
 func TestCheckDoesNotReportPortConflictWhenManagedRPCIsReachable(t *testing.T) {
 	root := t.TempDir()
 	aria2c := filepath.Join(root, "aria2c")
@@ -55,13 +89,14 @@ func TestCheckDoesNotReportPortConflictWhenManagedRPCIsReachable(t *testing.T) {
 	}
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	current := state.State{
-		Aria2cPath:   aria2c,
-		RPCPort:      6800,
-		RPCSecret:    "secret-token",
-		SessionPath:  servicePaths.SessionFile,
-		LogPath:      servicePaths.LogFile,
-		ErrorLogPath: servicePaths.ErrorLogFile,
-		ServiceName:  servicePaths.ServiceName,
+		RuntimeSchemaVersion: 2,
+		Aria2cPath:           aria2c,
+		RPCPort:              6800,
+		RPCSecret:            "secret-token",
+		SessionPath:          servicePaths.SessionFile,
+		LogPath:              servicePaths.LogFile,
+		ErrorLogPath:         servicePaths.ErrorLogFile,
+		ServiceName:          servicePaths.ServiceName,
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
@@ -230,6 +265,9 @@ func TestInstallStartStatusAndAddCommands(t *testing.T) {
 	root := t.TempDir()
 	home := filepath.Join(root, "home")
 	servicePaths := paths.NewDarwin(home)
+	if err := os.MkdirAll(filepath.Join(home, "Downloads"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	aria2c := filepath.Join(root, "bin", "aria2c")
 	if err := os.MkdirAll(filepath.Dir(aria2c), 0o755); err != nil {
 		t.Fatalf("mkdir bin: %v", err)
@@ -283,8 +321,7 @@ func TestInstallStartStatusAndAddCommands(t *testing.T) {
 	if addErr != nil {
 		t.Fatalf("add failed: %v", addErr)
 	}
-	assertContains(t, addOut, "Added download.")
-	assertContains(t, addOut, "2089b05ecca3d829")
+	assertContains(t, addOut, "Added managed download.")
 	if rpc.addedURI != "https://example.com/file.zip" {
 		t.Fatalf("unexpected added URI: %s", rpc.addedURI)
 	}
@@ -376,10 +413,24 @@ func (rpc *fakeRPC) Version(context.Context, state.State) (string, error) {
 	return rpc.version, nil
 }
 
-func (rpc *fakeRPC) AddURI(_ context.Context, _ state.State, uri string, _ aria2.AddOptions) (string, error) {
+func (rpc *fakeRPC) AddURI(_ context.Context, _ state.State, uri string, options aria2.AddOptions) (string, error) {
 	rpc.addedURI = uri
+	if options.GID != "" {
+		rpc.gid = options.GID
+	}
 	return rpc.gid, nil
 }
+
+func (rpc *fakeRPC) AddTorrent(context.Context, state.State, []byte, aria2.AddOptions) (string, error) {
+	return rpc.gid, nil
+}
+func (rpc *fakeRPC) LifecycleStatus(context.Context, state.State, string) (aria2.LifecycleStatus, error) {
+	return aria2.LifecycleStatus{}, nil
+}
+func (rpc *fakeRPC) Pause(context.Context, state.State, string) error                { return nil }
+func (rpc *fakeRPC) Resume(context.Context, state.State, string) error               { return nil }
+func (rpc *fakeRPC) ForceRemove(context.Context, state.State, string) error          { return nil }
+func (rpc *fakeRPC) RemoveDownloadResult(context.Context, state.State, string) error { return nil }
 
 func (rpc *fakeRPC) SaveSession(context.Context, state.State) error {
 	return nil

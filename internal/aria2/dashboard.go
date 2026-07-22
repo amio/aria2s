@@ -90,6 +90,7 @@ func (client *RPCClient) DashboardSnapshot(ctx context.Context, query DashboardQ
 	var active, waiting, stopped []rawDownload
 	var detail rawDownload
 	var uris []rawURI
+	managedRaw := make(map[string]*rawDownload, len(query.ManagedGIDs))
 	descriptors := []callDescriptor{
 		{method: "aria2.tellActive", params: []any{downloadFields()}, apply: decodeInto(&active)},
 		{method: "aria2.tellWaiting", params: []any{0, query.List.WaitingLimit, downloadFields()}, apply: decodeInto(&waiting)},
@@ -103,6 +104,17 @@ func (client *RPCClient) DashboardSnapshot(ctx context.Context, query DashboardQ
 			sourceIndex = len(descriptors)
 			descriptors = append(descriptors, callDescriptor{method: "aria2.getUris", params: []any{query.DetailGID}, apply: decodeInto(&uris)})
 		}
+	}
+	if len(query.ManagedGIDs) > 300 {
+		return DashboardRead{}, errors.New("managed dashboard capacity exceeded")
+	}
+	managedIndexes := make(map[int]string, len(query.ManagedGIDs))
+	for _, gid := range query.ManagedGIDs {
+		value := new(rawDownload)
+		managedRaw[gid] = value
+		index := len(descriptors)
+		managedIndexes[index] = gid
+		descriptors = append(descriptors, callDescriptor{method: "aria2.tellStatus", params: []any{gid, downloadFields()}, apply: decodeInto(value)})
 	}
 	errs := client.multicall(ctx, descriptors)
 	if len(errs) == 1 && len(descriptors) != 1 && errs[0] != nil {
@@ -125,6 +137,19 @@ func (client *RPCClient) DashboardSnapshot(ctx context.Context, query DashboardQ
 	}
 	if sourceIndex >= 0 {
 		read.DetailSourceErr = errs[sourceIndex]
+	}
+	read.Managed = make(map[string]*Download, len(query.ManagedGIDs))
+	for index, gid := range managedIndexes {
+		if errs[index] == nil {
+			value := managedRaw[gid].toDownload()
+			read.Managed[gid] = &value
+			continue
+		}
+		if IsNotFound(errs[index]) {
+			read.Managed[gid] = nil
+			continue
+		}
+		read.ListErr = errors.Join(read.ListErr, errs[index])
 	}
 	return read, nil
 }

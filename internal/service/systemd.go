@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -101,10 +102,24 @@ func RenderSystemdUnit(current state.State) (string, error) {
 	builder.WriteString("[Service]\n")
 	builder.WriteString("Type=simple\n")
 	builder.WriteString("ExecStart=")
-	builder.WriteString(current.Aria2cPath)
-	for _, arg := range aria2.ManagedArgs(current) {
-		builder.WriteByte(' ')
-		builder.WriteString(arg)
+	var command []string
+	if current.RuntimeSchemaVersion == 2 {
+		if current.ControllerPath == "" {
+			return "", fmt.Errorf("controller path is required for runtime v2")
+		}
+		command = []string{current.ControllerPath, "managed-exec"}
+	} else {
+		command = append([]string{current.Aria2cPath}, aria2.ManagedArgs(current)...)
+	}
+	for index, arg := range command {
+		if index > 0 {
+			builder.WriteByte(' ')
+		}
+		escaped, err := systemdExecArgument(arg)
+		if err != nil {
+			return "", err
+		}
+		builder.WriteString(escaped)
 	}
 	builder.WriteString("\n")
 	builder.WriteString("Restart=on-failure\n")
@@ -122,4 +137,22 @@ func RenderSystemdUnit(current state.State) (string, error) {
 	builder.WriteString("\n[Install]\n")
 	builder.WriteString("WantedBy=default.target\n")
 	return builder.String(), nil
+}
+
+func systemdExecArgument(value string) (string, error) {
+	if value == "" || strings.ContainsAny(value, "\x00\r\n") {
+		return "", errors.New("systemd command argument is empty or contains a line break")
+	}
+	safe := true
+	for _, character := range value {
+		if !strings.ContainsRune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._:@+=,-", character) {
+			safe = false
+			break
+		}
+	}
+	if safe {
+		return value, nil
+	}
+	replacer := strings.NewReplacer("\\", "\\\\", "\"", "\\\"", "$", "$$", "%", "%%")
+	return "\"" + replacer.Replace(value) + "\"", nil
 }

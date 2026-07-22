@@ -1,10 +1,14 @@
 # Reliable Managed Download Lifecycle
 
-Status: Proposed for discussion. The detach/move/rehydrate mechanism, stable-GID magnet
-resolution, seed shutdown semantics, and the basic aria2 session format were proven locally
-with aria2 1.37.0. A later isolated RPC spike also proved normalized HTTP resume and direct
-HTTP/BitTorrent hook reentrancy, including same-GID seed rehydration. The full session
-matrix, crash reconciliation, and representative SMB/NFS behavior remain release gates.
+Status: Code implementation complete; core local validation passed. Slice 0 passed on
+macOS/APFS with aria2 1.37.0 on 2026-07-22: the full HTTP session-fidelity matrix,
+resolving-magnet restart, RPC-added staged torrent recovery, final-seed
+regeneration/omission, session-write interruption, and direct HTTP/BitTorrent hook
+reentrancy all preserved one path, allocation, and GID. The Go suite, focused race suite,
+vet, and Linux publication cross-build pass, and independent gap review found no remaining
+code correctness blocker. Subprocess crash-injection/integration matrices and representative
+SMB/NFS plus real-supervisor behavior remain release gates, so this document stays active
+rather than moving to `implemented`.
 
 ## Decision Summary
 
@@ -942,6 +946,16 @@ On aria2 1.37.0 and APFS, disposable black-box spikes established:
     `forcePause -> forceRemove -> rename -> same-GID addTorrent`; the final target contained
     only the payload, and the RPC-added seed was absent from native session output when
     `rpc-save-upload-metadata=false`.
+12. the complete disposable Slice 0 harness was rerun from a clean temporary directory on
+    2026-07-22. Plain, redirect-selected, and `Content-Disposition` HTTP downloads each
+    resumed in running and paused forms with the same GID and inode and no second root; a
+    kill concurrent with `saveSession` recovered from the prior complete block; a resolving
+    magnet resumed from its native block; retained metainfo restored a paused partial
+    RPC-added torrent and a running final seed while stopped final-seed intent emitted no
+    entry; direct HTTP and BitTorrent hooks completed synchronously, and duplicate final-seed
+    completion callbacks were harmless behind the durable publication-state guard. Final
+    seeds created no target-side `.aria2` control file. The harness used only localhost peers
+    and APFS, so it does not satisfy the separate SMB/NFS release gate.
 
 ### Slice 0: Mechanism Proofs Before Architecture Investment
 
@@ -961,10 +975,10 @@ aria2 spikes must prove the two assumptions on which the simplified architecture
    same transaction.
 
 The HTTP spike established that native session output does not retain the resolved output
-name. The overlay must therefore force a persisted or safely inferred `PayloadRoot` into
-every valid block beside a non-empty HTTP `WorkDir`. If no valid block exists beside partial
-artifacts, startup fails closed instead of guessing a minimal entry. The remaining Slice 0
-matrix must still prove one-path, one-allocation behavior before the v2 schema begins.
+name. The overlay therefore forces a persisted or safely inferred `PayloadRoot` into every
+valid block beside a non-empty HTTP `WorkDir`. If no valid block exists beside partial
+artifacts, startup fails closed instead of guessing a minimal entry. The completed Slice 0
+matrix proved one-path, one-allocation behavior before the v2 schema implementation began.
 
 ### Release Gates
 

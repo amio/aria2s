@@ -72,6 +72,24 @@ func TestDashboardSnapshotKeepsDetailWhenNestedListCallFails(t *testing.T) {
 	}
 }
 
+func TestDashboardSnapshotResolvesEveryManagedGIDAndTreatsOnlyNotFoundAsAbsent(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[[]],[[]],[[]],[{"gid":"0123456789abcdef","status":"paused","dir":"/stage/job","files":[]}],{"code":1,"message":"GID not found"}]}`)
+	}))
+	defer server.Close()
+	client := aria2.NewRPCClient(server.URL, "", server.Client())
+	read, err := client.DashboardSnapshot(context.Background(), aria2.DashboardQuery{ManagedGIDs: []string{"0123456789abcdef", "fedcba9876543210"}})
+	if err != nil || read.ListErr != nil {
+		t.Fatalf("managed resolution failed: read=%#v err=%v", read, err)
+	}
+	if row := read.Managed["0123456789abcdef"]; row == nil || row.Dir != "/stage/job" {
+		t.Fatalf("managed live row = %#v", row)
+	}
+	if row, ok := read.Managed["fedcba9876543210"]; !ok || row != nil {
+		t.Fatalf("managed absence was not proven: row=%#v ok=%v", row, ok)
+	}
+}
+
 func TestMutationTransportFailureIsOutcomeUnknownAndKeepsCause(t *testing.T) {
 	client := aria2.NewRPCClient("http://127.0.0.1:1", "", nil)
 	_, err := client.AddURI(context.Background(), "https://example.com/a", aria2.AddOptions{})

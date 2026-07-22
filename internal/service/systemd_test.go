@@ -36,6 +36,19 @@ func TestRenderSystemdUnitUsesAbsoluteAria2cPathWithoutShell(t *testing.T) {
 	assertNotContains(t, rendered, " -c ")
 }
 
+func TestRenderSystemdUnitEscapesRuntimeV2ControllerPath(t *testing.T) {
+	current := state.State{
+		RuntimeSchemaVersion: 2,
+		Aria2cPath:           "/opt/aria 2/aria2c",
+		ControllerPath:       "/opt/aria 2/aria2s$prod%name",
+	}
+	rendered, err := service.RenderSystemdUnit(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertContains(t, rendered, `ExecStart="/opt/aria 2/aria2s$$prod%%name" managed-exec`)
+}
+
 func TestSystemdBackendGeneratesLifecycleCommands(t *testing.T) {
 	runner := &systemdAwareRunner{loaded: false}
 	backend := service.NewSystemdBackend(runner, "aria2s.service")

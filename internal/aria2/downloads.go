@@ -2,6 +2,7 @@ package aria2
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"path/filepath"
@@ -24,6 +25,7 @@ type DashboardQuery struct {
 	List                ListQuery
 	DetailGID           string
 	ResolveDetailSource bool
+	ManagedGIDs         []string
 }
 
 /** DashboardRead contains independently valid list and detail portions. */
@@ -33,7 +35,11 @@ type DashboardRead struct {
 	Detail          *DownloadDetail
 	DetailErr       error
 	DetailSourceErr error
+	Counts          CanonicalCounts
+	Managed         map[string]*Download
 }
+
+type CanonicalCounts struct{ Visible, Downloading, Seeding, Queued, Paused, Finished, Error, Removed int }
 
 /** DownloadSnapshot groups the live and recent stopped task windows shown by the dashboard. */
 type DownloadSnapshot struct {
@@ -46,12 +52,20 @@ type DownloadSnapshot struct {
 type Download struct {
 	GID             string
 	Status          string
+	Dir             string
 	Name            string
 	IsMetadata      bool
 	CompletedLength int64
 	TotalLength     int64
 	DownloadSpeed   int64
 	UploadSpeed     int64
+	Seeder          bool
+	InfoHash        string
+	CanonicalStatus string
+	Ownership       string
+	Phase           string
+	ProblemCode     string
+	Actions         []string
 }
 
 /** DownloadDetail is the selected task payload fetched on demand. */
@@ -78,6 +92,11 @@ type DownloadDetail struct {
 	ErrorCode              string
 	ErrorMessage           string
 	Files                  []DownloadFile
+	CanonicalStatus        string
+	Ownership              string
+	Phase                  string
+	ProblemCode            string
+	Actions                []string
 }
 
 /** DownloadFile is a single file entry inside a task detail payload. */
@@ -155,9 +174,66 @@ func (client *RPCClient) Remove(ctx context.Context, gid string) error {
 	return client.mutation(ctx, "aria2.remove", []any{gid}, &ignored)
 }
 
+func (client *RPCClient) ForceRemove(ctx context.Context, gid string) error {
+	var ignored string
+	return client.mutation(ctx, "aria2.forceRemove", []any{gid}, &ignored)
+}
+
 func (client *RPCClient) RemoveDownloadResult(ctx context.Context, gid string) error {
 	var ignored string
 	return client.mutation(ctx, "aria2.removeDownloadResult", []any{gid}, &ignored)
+}
+
+type LifecycleStatus struct {
+	GID             string
+	Status          string
+	Dir             string
+	InfoHash        string
+	Seeder          bool
+	CompletedLength int64
+	TotalLength     int64
+	Files           []DownloadFile
+}
+
+func (client *RPCClient) CompleteCensus(ctx context.Context) ([]LifecycleStatus, error) {
+	var all []rawDownload
+	var active []rawDownload
+	if err := client.call(ctx, "aria2.tellActive", []any{detailFields()}, &active); err != nil {
+		return nil, err
+	}
+	all = append(all, active...)
+	for _, method := range []string{"aria2.tellWaiting", "aria2.tellStopped"} {
+		for offset := 0; ; offset += 100 {
+			var page []rawDownload
+			if err := client.call(ctx, method, []any{offset, 100, detailFields()}, &page); err != nil {
+				return nil, err
+			}
+			all = append(all, page...)
+			if len(page) < 100 {
+				break
+			}
+		}
+	}
+	result := make([]LifecycleStatus, 0, len(all))
+	for _, raw := range all {
+		detail := raw.toDetail()
+		result = append(result, LifecycleStatus{GID: raw.GID, Status: raw.Status, Dir: raw.Dir, InfoHash: raw.InfoHash, Seeder: raw.Seeder == "true", CompletedLength: detail.CompletedLength, TotalLength: detail.TotalLength, Files: detail.Files})
+	}
+	return result, nil
+}
+
+func (client *RPCClient) LifecycleStatus(ctx context.Context, gid string) (LifecycleStatus, error) {
+	var raw rawDownload
+	if err := client.call(ctx, "aria2.tellStatus", []any{gid, []string{"gid", "status", "dir", "infoHash", "seeder", "completedLength", "totalLength", "files"}}, &raw); err != nil {
+		return LifecycleStatus{}, err
+	}
+	detail := raw.toDetail()
+	return LifecycleStatus{GID: raw.GID, Status: raw.Status, Dir: raw.Dir, InfoHash: raw.InfoHash, Seeder: raw.Seeder == "true", CompletedLength: detail.CompletedLength, TotalLength: detail.TotalLength, Files: detail.Files}, nil
+}
+
+func IsNotFound(err error) bool {
+	var rpcErr *RPCError
+	return errors.As(err, &rpcErr) && (rpcErr.Code == 1 || strings.Contains(strings.ToLower(rpcErr.Message), "not found"))
 }
 
 func (client *RPCClient) retryURIs(ctx context.Context, gid string, detail DownloadDetail) ([]string, error) {
@@ -281,12 +357,15 @@ func (raw rawDownload) toDownload() Download {
 	return Download{
 		GID:             raw.GID,
 		Status:          raw.Status,
+		Dir:             raw.Dir,
 		Name:            raw.name(),
 		IsMetadata:      raw.isMetadata(),
 		CompletedLength: parseInt(raw.CompletedLength),
 		TotalLength:     parseInt(raw.TotalLength),
 		DownloadSpeed:   parseInt(raw.DownloadSpeed),
 		UploadSpeed:     parseInt(raw.UploadSpeed),
+		Seeder:          raw.Seeder == "true",
+		InfoHash:        raw.InfoHash,
 	}
 }
 
@@ -382,7 +461,7 @@ func fileName(path string) string {
 }
 
 func downloadFields() []string {
-	return []string{"gid", "status", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed"}
+	return []string{"gid", "status", "dir", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "infoHash", "seeder"}
 }
 
 func detailFields() []string {

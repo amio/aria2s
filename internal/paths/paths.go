@@ -4,13 +4,20 @@ import "fmt"
 
 /** Paths contains the filesystem locations owned by aria2s on the active platform. */
 type Paths struct {
-	ServiceName  string
-	ServiceFile  string
-	ConfigFile   string
-	StateFile    string
-	SessionFile  string
-	LogFile      string
-	ErrorLogFile string
+	StateDir          string
+	ServiceName       string
+	ServiceFile       string
+	ConfigFile        string
+	StateFile         string
+	SessionFile       string
+	LegacySessionFile string
+	StartupInputFile  string
+	JobsDir           string
+	StoragesDir       string
+	HooksDir          string
+	InstanceLockFile  string
+	LogFile           string
+	ErrorLogFile      string
 }
 
 func NewForOS(goos, home string) (Paths, error) {

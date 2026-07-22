@@ -1,56 +1,49 @@
+// Package state persists the committed managed-runtime identity. Schema v2 is
+// activated only after its controller, service artifact, and versioned session
+// locations are prepared and can be validated at process startup.
 package state
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
-	"path/filepath"
+
+	"github.com/amio/aria2s/internal/atomicfile"
 )
 
 /** State is the authoritative local runtime metadata for aria2s-managed RPC access. */
 type State struct {
-	Aria2cPath   string   `json:"aria2cPath"`
-	RPCPort      int      `json:"rpcPort"`
-	RPCSecret    string   `json:"rpcSecret"`
-	SessionPath  string   `json:"sessionPath"`
-	LogPath      string   `json:"logPath"`
-	ErrorLogPath string   `json:"errorLogPath"`
-	ServiceName  string   `json:"serviceName"`
-	RecentDirs   []string `json:"recentDirs,omitempty"`
+	RuntimeSchemaVersion int      `json:"runtimeSchemaVersion"`
+	ControllerPath       string   `json:"controllerPath"`
+	ControllerIdentity   string   `json:"controllerIdentity"`
+	ServiceIdentity      string   `json:"serviceIdentity"`
+	Aria2cPath           string   `json:"aria2cPath"`
+	RPCPort              int      `json:"rpcPort"`
+	RPCSecret            string   `json:"rpcSecret"`
+	SessionPath          string   `json:"sessionPath"`
+	StartupInputPath     string   `json:"startupInputPath"`
+	LogPath              string   `json:"logPath"`
+	ErrorLogPath         string   `json:"errorLogPath"`
+	ServiceName          string   `json:"serviceName"`
+	RecentDirs           []string `json:"recentDirs,omitempty"`
 }
 
 func Save(path string, current State) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(current, "", "  ")
 	if err != nil {
 		return err
 	}
-	temp, err := os.CreateTemp(filepath.Dir(path), ".state-*.tmp")
-	if err != nil {
-		return err
-	}
-	tempPath := temp.Name()
-	defer os.Remove(tempPath)
-	if err := temp.Chmod(0o600); err != nil {
-		temp.Close()
-		return err
-	}
-	if _, err := temp.Write(data); err != nil {
-		temp.Close()
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		temp.Close()
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tempPath, path)
+	return atomicfile.Write(path, data, 0o600)
 }
 
 func Load(path string) (State, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return State{}, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return State{}, errors.New("runtime state is not a regular file")
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return State{}, err

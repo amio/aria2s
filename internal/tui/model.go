@@ -1,3 +1,6 @@
+// Package tui renders app-owned canonical task state and dispatches only the
+// actions advertised for each row. It does not infer lifecycle ownership or
+// publication state from native aria2 buckets.
 package tui
 
 import (
@@ -408,6 +411,9 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		model.addForm = NewAddForm(model.service.DefaultDir())
 		return model, loadRecentDirs(model.ctx, model.service)
 	case key.Matches(msg, dashboardKeys.List.Pause):
+		if hasTaskAction(model.Selected(), "pause") {
+			return model.startAction(actionPause)
+		}
 		// forcePause only applies to live queue rows; stopped/complete GIDs reject it.
 		switch model.Selected().Status {
 		case "active", "waiting":
@@ -415,6 +421,12 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return model.flashInapplicable("pause", model.Selected().Status)
 	case key.Matches(msg, dashboardKeys.List.Resume):
+		if hasTaskAction(model.Selected(), "retry") {
+			return model.startAction(actionRetry)
+		}
+		if hasTaskAction(model.Selected(), "resume") || hasTaskAction(model.Selected(), "start-seeding") {
+			return model.startAction(actionResume)
+		}
 		// r is dual-purpose: unpause paused rows, re-queue failed ones. complete/removed
 		// are not unpausable, and RetrySource intentionally rejects non-error statuses.
 		switch model.Selected().Status {
@@ -425,10 +437,13 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return model.flashInapplicable("retry/resume", model.Selected().Status)
 	case key.Matches(msg, dashboardKeys.List.Remove):
-		if isStopped(model.Selected()) {
+		if hasTaskAction(model.Selected(), "clear") {
 			return model.startAction(actionClear)
 		}
-		return model.startAction(actionRemove)
+		if hasTaskAction(model.Selected(), "remove") {
+			return model.startAction(actionRemove)
+		}
+		return model.flashInapplicable("remove/clear", model.Selected().CanonicalStatus)
 	case key.Matches(msg, dashboardKeys.List.NextPage):
 		model.stoppedPage++
 		model.list.Requested.StoppedOffset = model.stoppedPage * model.stoppedLimit
@@ -447,6 +462,19 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return model.startOpen()
 	}
 	return model, nil
+}
+
+func hasTaskAction(download aria2.Download, action string) bool {
+	return hasAction(download.Actions, action)
+}
+
+func hasAction(actions []string, action string) bool {
+	for _, candidate := range actions {
+		if candidate == action {
+			return true
+		}
+	}
+	return false
 }
 
 func (model Model) handleAddKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
@@ -511,10 +539,10 @@ func (model Model) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, dashboardKeys.Detail.Open):
 		return model.startOpen()
 	case key.Matches(msg, dashboardKeys.Detail.Retry):
-		if model.detail.Status == "error" {
+		if hasAction(model.detail.Actions, "retry") {
 			return model.startAction(actionRetry)
 		}
-		return model.flashInapplicable("retry", model.detail.Status)
+		return model.flashInapplicable("retry", model.detail.CanonicalStatus)
 	}
 	return model, nil
 }
@@ -653,9 +681,6 @@ func indexOfGID(items []aria2.Download, gid string) (int, bool) {
 		}
 	}
 	return 0, false
-}
-func isStopped(download aria2.Download) bool {
-	return download.Status == "complete" || download.Status == "error" || download.Status == "removed"
 }
 
 func pendingStatus(kind actionKind) string {

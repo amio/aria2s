@@ -1,8 +1,12 @@
+// Package app owns managed-download workflows and composition. Durable job
+// intent is reconciled with aria2 observations here; filesystem and supervisor
+// packages expose mechanisms but never decide lifecycle transitions.
 package app
 
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -17,10 +21,13 @@ import (
 	"time"
 
 	"github.com/amio/aria2s/internal/aria2"
+	"github.com/amio/aria2s/internal/atomicfile"
 	"github.com/amio/aria2s/internal/doctor"
+	"github.com/amio/aria2s/internal/jobs"
 	"github.com/amio/aria2s/internal/paths"
 	"github.com/amio/aria2s/internal/service"
 	"github.com/amio/aria2s/internal/state"
+	"golang.org/x/sys/unix"
 )
 
 type RPC interface {
@@ -172,13 +179,25 @@ func defaultOptionsForOS(goos, home string, uid int, runner service.CommandRunne
 	return options, nil
 }
 
+type InstallRequest struct {
+	Start              bool
+	DiscardLegacyTasks bool
+}
+
 func (app *App) Install(ctx context.Context, start bool) error {
+	return app.InstallManaged(ctx, InstallRequest{Start: start})
+}
+
+func (app *App) InstallManaged(ctx context.Context, request InstallRequest) error {
+	if err := app.legacyInstallGate(ctx, request.DiscardLegacyTasks); err != nil {
+		return err
+	}
 	desired, err := app.desiredManagedState("")
 	if err != nil {
 		return err
 	}
 	current, err := app.reconcileManagedRuntime(ctx, desired)
-	if err != nil || !start {
+	if err != nil || !request.Start {
 		return err
 	}
 	if err := app.startSupervisor(ctx); err != nil {
@@ -209,8 +228,23 @@ func (app *App) desiredManagedState(storedExecutable string) (state.State, error
 		}
 	}
 	desired := current
+	controller, err := os.Executable()
+	if err != nil {
+		return state.State{}, err
+	}
+	controller, err = filepath.EvalSymlinks(controller)
+	if err != nil {
+		return state.State{}, err
+	}
+	desired.RuntimeSchemaVersion = 2
+	desired.ControllerPath = controller
+	desired.ControllerIdentity, err = fileIdentity(controller)
+	if err != nil {
+		return state.State{}, err
+	}
 	desired.Aria2cPath = aria2c
 	desired.SessionPath = app.options.Paths.SessionFile
+	desired.StartupInputPath = app.options.Paths.StartupInputFile
 	desired.LogPath = app.options.Paths.LogFile
 	desired.ErrorLogPath = app.options.Paths.ErrorLogFile
 	desired.ServiceName = app.options.Paths.ServiceName
@@ -239,6 +273,13 @@ func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State
 			return state.State{}, fmt.Errorf("load state: %w", err)
 		}
 	}
+	previous := current
+	serviceFile, err := app.options.RenderService(desired)
+	if err != nil {
+		return state.State{}, err
+	}
+	serviceHash := sha256.Sum256([]byte(serviceFile))
+	desired.ServiceIdentity = hex.EncodeToString(serviceHash[:])
 	stateChanged := !stateExists || !sameState(current, desired)
 	current = desired
 	configNeedsCreate, err := fileMissing(app.options.Paths.ConfigFile)
@@ -246,11 +287,14 @@ func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State
 		return state.State{}, err
 	}
 	sessionNeedsRepair := needs0600File(current.SessionPath)
-	logDirNeedsCreate := !dirExists(filepath.Dir(current.LogPath))
-	serviceFile, err := app.options.RenderService(current)
-	if err != nil {
-		return state.State{}, err
+	if !stateExists || previous.RuntimeSchemaVersion != 2 {
+		empty, proofErr := stableEmptyFile(current.SessionPath)
+		if proofErr != nil || !empty {
+			return state.State{}, errors.New("InstallIncomplete: runtime-v2 session is not a fresh empty file")
+		}
+		sessionNeedsRepair = true
 	}
+	logDirNeedsCreate := !dirExists(filepath.Dir(current.LogPath))
 	serviceLoaded := false
 	serviceRunning := false
 	if app.options.Service != nil {
@@ -264,11 +308,6 @@ func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State
 	}
 	if !stateChanged && !configNeedsCreate && !sessionNeedsRepair && !logDirNeedsCreate && !serviceChanged && serviceLoaded {
 		return current, nil
-	}
-	if stateChanged {
-		if err := state.Save(app.options.Paths.StateFile, current); err != nil {
-			return state.State{}, err
-		}
 	}
 	if configNeedsCreate {
 		if err := aria2.WriteConfig(app.options.Paths.ConfigFile, aria2.DefaultConfig(app.defaultDownloadDir())); err != nil {
@@ -287,6 +326,14 @@ func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State
 	}
 	if app.options.Service != nil && serviceLoaded && serviceChanged {
 		if serviceRunning {
+			if previous.RuntimeSchemaVersion == 2 {
+				if err := app.guardUnmanagedTasks(ctx, previous, false); err != nil {
+					return state.State{}, err
+				}
+				if err := app.saveSession(ctx, previous); err != nil {
+					return state.State{}, err
+				}
+			}
 			if err := app.options.Service.Stop(ctx); err != nil {
 				return state.State{}, err
 			}
@@ -301,7 +348,16 @@ func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State
 		if err := os.MkdirAll(filepath.Dir(app.options.Paths.ServiceFile), 0o755); err != nil {
 			return state.State{}, err
 		}
-		if err := os.WriteFile(app.options.Paths.ServiceFile, []byte(serviceFile), 0o644); err != nil {
+		if err := atomicfile.Write(app.options.Paths.ServiceFile, []byte(serviceFile), 0o644); err != nil {
+			return state.State{}, err
+		}
+	}
+	installedService, err := os.ReadFile(app.options.Paths.ServiceFile)
+	if err != nil || string(installedService) != serviceFile {
+		return state.State{}, errors.New("InstallIncomplete: service artifact readback does not match rendered configuration")
+	}
+	if stateChanged {
+		if err := state.Save(app.options.Paths.StateFile, current); err != nil {
 			return state.State{}, err
 		}
 	}
@@ -320,13 +376,89 @@ func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State
 	return current, nil
 }
 
+func (app *App) legacyInstallGate(ctx context.Context, discard bool) error {
+	current, err := state.Load(app.options.Paths.StateFile)
+	if err == nil && current.RuntimeSchemaVersion == 2 {
+		return nil
+	}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("load legacy state: %w", err)
+	}
+	if app.options.Service != nil && app.options.Service.IsRunning(ctx) {
+		return errors.New("UpgradeRequired: stop the old service with the old aria2s binary before installing v2")
+	}
+	if !discard {
+		empty, proofErr := stableEmptyFile(app.options.Paths.LegacySessionFile)
+		if proofErr != nil || !empty {
+			return errors.New("LegacyTasksPresent: legacy session is not provably empty; finish it with the old binary or pass --discard-legacy-tasks")
+		}
+	}
+	if app.options.Service != nil && app.options.Service.IsLoaded(ctx) {
+		if err := app.options.Service.Uninstall(ctx); err != nil {
+			return err
+		}
+		if app.options.Service.IsLoaded(ctx) || app.options.Service.IsRunning(ctx) {
+			return errors.New("InstallIncomplete: legacy supervisor could not be disabled")
+		}
+	}
+	if !discard {
+		empty, proofErr := stableEmptyFile(app.options.Paths.LegacySessionFile)
+		if proofErr != nil || !empty {
+			return errors.New("LegacyTasksPresent: legacy session changed while disabling the old service")
+		}
+	}
+	return nil
+}
+
+func stableEmptyFile(path string) (bool, error) {
+	before, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil || !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 || before.Size() != 0 {
+		return false, err
+	}
+	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return false, err
+	}
+	file := os.NewFile(uintptr(fd), path)
+	after, statErr := file.Stat()
+	closeErr := file.Close()
+	if statErr != nil {
+		return false, statErr
+	}
+	if closeErr != nil {
+		return false, closeErr
+	}
+	current, pathErr := os.Lstat(path)
+	if pathErr != nil {
+		return false, pathErr
+	}
+	return after.Mode().IsRegular() && after.Mode()&os.ModeSymlink == 0 && after.Size() == 0 &&
+		os.SameFile(before, after) && os.SameFile(after, current) &&
+		before.ModTime() == after.ModTime() && after.ModTime() == current.ModTime(), nil
+}
+
+func fileIdentity(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
+}
+
 func (app *App) inspectDashboard(ctx context.Context) (state.State, bool, error) {
 	current, err := state.Load(app.options.Paths.StateFile)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return state.State{}, true, nil
+			return state.State{}, false, errors.New("UpgradeRequired: run `aria2s install` before opening Dashboard")
 		}
 		return state.State{}, false, fmt.Errorf("load state: %w", err)
+	}
+	if current.RuntimeSchemaVersion != 2 {
+		return current, false, errors.New("UpgradeRequired: Dashboard requires managed runtime v2")
 	}
 	if !isExecutable(current.Aria2cPath) {
 		return current, true, nil
@@ -334,6 +466,14 @@ func (app *App) inspectDashboard(ctx context.Context) (state.State, bool, error)
 	serviceFile, err := app.options.RenderService(current)
 	if err != nil {
 		return state.State{}, false, err
+	}
+	serviceHash := sha256.Sum256([]byte(serviceFile))
+	if current.ServiceIdentity != hex.EncodeToString(serviceHash[:]) {
+		return current, true, nil
+	}
+	controllerIdentity, identityErr := fileIdentity(current.ControllerPath)
+	if identityErr != nil || controllerIdentity != current.ControllerIdentity {
+		return current, true, nil
 	}
 	serviceChanged, err := fileContentChanged(app.options.Paths.ServiceFile, serviceFile)
 	if err != nil {
@@ -405,11 +545,21 @@ func (app *App) Start(ctx context.Context) error {
 }
 
 func (app *App) Stop(ctx context.Context) error {
+	return app.StopManaged(ctx, StopOptions{})
+}
+
+type StopOptions struct {
+	DiscardUnmanagedTasks bool
+}
+
+func (app *App) StopManaged(ctx context.Context, options StopOptions) error {
 	var saveErr error
 	if app.options.Service.IsRunning(ctx) {
 		current, err := state.Load(app.options.Paths.StateFile)
 		if err != nil {
 			saveErr = err
+		} else if err := app.guardUnmanagedTasks(ctx, current, options.DiscardUnmanagedTasks); err != nil {
+			return err
 		} else if err := app.saveSession(ctx, current); err != nil {
 			if !errors.Is(err, aria2.ErrTransportUnavailable) {
 				saveErr = err
@@ -422,16 +572,59 @@ func (app *App) Stop(ctx context.Context) error {
 	return saveErr
 }
 
+func (app *App) guardUnmanagedTasks(ctx context.Context, current state.State, discard bool) error {
+	if current.RuntimeSchemaVersion != 2 || discard {
+		return nil
+	}
+	type censusRPC interface {
+		CompleteCensus(context.Context, state.State) ([]aria2.LifecycleStatus, error)
+	}
+	rpc, ok := app.options.RPC.(censusRPC)
+	if !ok {
+		return errors.New("UnmanagedTaskCensusUnavailable: refusing lifecycle stop without a complete census")
+	}
+	native, err := rpc.CompleteCensus(ctx, current)
+	if err != nil {
+		return err
+	}
+	scanned, err := jobs.New(app.options.Paths.StateDir).Scan()
+	if err != nil {
+		return err
+	}
+	managed := make(map[string]struct{}, len(scanned))
+	for _, job := range scanned {
+		if job.Err == nil {
+			managed[job.ID] = struct{}{}
+		}
+	}
+	for _, task := range native {
+		if _, ok := managed[task.GID]; ok {
+			continue
+		}
+		if task.Status == "active" || task.CompletedLength < task.TotalLength {
+			return errors.New("UnmanagedTasksWouldBeLost: stop refused; pass --discard-unmanaged-tasks to acknowledge")
+		}
+	}
+	return nil
+}
+
 func (app *App) Restart(ctx context.Context) error {
+	return app.RestartManaged(ctx, StopOptions{})
+}
+
+func (app *App) RestartManaged(ctx context.Context, options StopOptions) error {
 	current, err := app.preflightLifecycle()
 	if err != nil {
 		return err
 	}
-	return app.restartServiceGracefully(ctx, current)
+	return app.restartServiceGracefully(ctx, current, options.DiscardUnmanagedTasks)
 }
 
-func (app *App) restartServiceGracefully(ctx context.Context, current state.State) error {
+func (app *App) restartServiceGracefully(ctx context.Context, current state.State, discardUnmanaged bool) error {
 	if app.options.Service.IsRunning(ctx) {
+		if err := app.guardUnmanagedTasks(ctx, current, discardUnmanaged); err != nil {
+			return err
+		}
 		if err := app.saveSession(ctx, current); err != nil {
 			if !errors.Is(err, aria2.ErrTransportUnavailable) {
 				return err
@@ -548,6 +741,9 @@ func (app *App) preflightLifecycle() (state.State, error) {
 	if !isExecutable(current.Aria2cPath) {
 		return state.State{}, fmt.Errorf("stored aria2c path is not executable: %s", current.Aria2cPath)
 	}
+	if current.RuntimeSchemaVersion != 2 {
+		return state.State{}, errors.New("UpgradeRequired: install managed runtime v2 before controlling the service")
+	}
 	return current, nil
 }
 
@@ -596,11 +792,18 @@ func (app *App) choosePort() (int, error) {
 }
 
 func fileContentChanged(path, content string) (bool, error) {
-	data, err := os.ReadFile(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return true, nil
 		}
+		return false, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return true, nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
 		return false, err
 	}
 	return string(data) != content, nil
@@ -656,6 +859,26 @@ func (r *LocalRPC) Version(ctx context.Context, current state.State) (string, er
 
 func (r *LocalRPC) AddURI(ctx context.Context, current state.State, uri string, opts aria2.AddOptions) (string, error) {
 	return r.rpcClient(current).AddURI(ctx, uri, opts)
+}
+
+func (r *LocalRPC) AddTorrent(ctx context.Context, current state.State, metainfo []byte, opts aria2.AddOptions) (string, error) {
+	return r.rpcClient(current).AddTorrent(ctx, metainfo, opts)
+}
+
+func (r *LocalRPC) LifecycleStatus(ctx context.Context, current state.State, gid string) (aria2.LifecycleStatus, error) {
+	return r.rpcClient(current).LifecycleStatus(ctx, gid)
+}
+
+func (r *LocalRPC) CompleteCensus(ctx context.Context, current state.State) ([]aria2.LifecycleStatus, error) {
+	return r.rpcClient(current).CompleteCensus(ctx)
+}
+
+func (r *LocalRPC) ForceRemove(ctx context.Context, current state.State, gid string) error {
+	return r.rpcClient(current).ForceRemove(ctx, gid)
+}
+
+func (r *LocalRPC) RemoveDownloadResult(ctx context.Context, current state.State, gid string) error {
+	return r.rpcClient(current).RemoveDownloadResult(ctx, gid)
 }
 
 func (r *LocalRPC) SaveSession(ctx context.Context, current state.State) error {
@@ -727,21 +950,33 @@ func touch0600(path string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(path, os.O_CREATE, 0o600)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o600)
 	if err != nil {
+		return err
+	}
+	if err := file.Chmod(0o600); err != nil {
+		file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		file.Close()
 		return err
 	}
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Chmod(path, 0o600)
+	return atomicfile.SyncDirectory(filepath.Dir(path))
 }
 
 func sameState(left, right state.State) bool {
-	if left.Aria2cPath != right.Aria2cPath ||
+	if left.RuntimeSchemaVersion != right.RuntimeSchemaVersion ||
+		left.ControllerPath != right.ControllerPath ||
+		left.ControllerIdentity != right.ControllerIdentity ||
+		left.ServiceIdentity != right.ServiceIdentity ||
+		left.Aria2cPath != right.Aria2cPath ||
 		left.RPCPort != right.RPCPort ||
 		left.RPCSecret != right.RPCSecret ||
-		left.SessionPath != right.SessionPath ||
+		left.SessionPath != right.SessionPath || left.StartupInputPath != right.StartupInputPath ||
 		left.LogPath != right.LogPath ||
 		left.ErrorLogPath != right.ErrorLogPath ||
 		left.ServiceName != right.ServiceName ||

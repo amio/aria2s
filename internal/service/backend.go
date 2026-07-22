@@ -1,3 +1,5 @@
+// Package service renders and controls platform supervisors. It preserves
+// argv parity across launchd and systemd while leaving lifecycle policy to app.
 package service
 
 import "context"

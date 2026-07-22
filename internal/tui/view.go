@@ -199,6 +199,15 @@ func (model Model) detailView() string {
 
 	lines := []string{}
 	lines = appendDetailLabelLines(lines, "GID", detail.GID, contentWidth)
+	if detail.Ownership != "" {
+		lines = appendDetailLabelLines(lines, "Ownership", detail.Ownership, contentWidth)
+	}
+	if detail.Phase != "" {
+		lines = appendDetailLabelLines(lines, "Phase", detail.Phase, contentWidth)
+	}
+	if detail.ProblemCode != "" {
+		lines = appendDetailErrorLines(lines, "Problem", detail.ProblemCode, contentWidth)
+	}
 	if detail.InfoHash != "" {
 		lines = appendDetailLabelLines(lines, "Info Hash", detail.InfoHash, contentWidth)
 	}
@@ -439,7 +448,11 @@ func (model Model) downloadRow(width int, download aria2.Download, selected bool
 		status = pendingStatus(kind)
 	}
 	add(status, l.statusWidth, false)
-	add(download.Name, l.nameWidth, false)
+	name := download.Name
+	if download.ProblemCode != "" {
+		name += " [" + download.ProblemCode + "]"
+	}
+	add(name, l.nameWidth, false)
 	add(formatBytes(download.TotalLength), l.sizeWidth, true)
 	add(formatBytes(download.CompletedLength), l.downloadedWidth, true)
 	add(formatProgress(download.CompletedLength, download.TotalLength), l.progressWidth, true)
@@ -619,13 +632,13 @@ func statusLabel(status string) string {
 
 func statusTone(status string) rgb {
 	switch status {
-	case "active":
+	case "active", "downloading", "seeding":
 		return rgb{125, 215, 160}
-	case "waiting":
+	case "waiting", "queued":
 		return rgb{240, 210, 120}
 	case "paused":
 		return rgb{240, 182, 120}
-	case "complete":
+	case "complete", "finished":
 		return rgb{125, 210, 242}
 	case "error", "removed":
 		return rgb{250, 140, 140}
@@ -638,6 +651,9 @@ func downloadStatusLabel(download aria2.Download) string {
 	if download.IsMetadata {
 		return "Metadata"
 	}
+	if download.CanonicalStatus != "" {
+		return statusLabel(download.CanonicalStatus)
+	}
 	return statusLabel(download.Status)
 }
 
@@ -645,12 +661,18 @@ func downloadStatusTone(download aria2.Download) rgb {
 	if download.IsMetadata {
 		return rgb{165, 180, 228}
 	}
+	if download.CanonicalStatus != "" {
+		return statusTone(download.CanonicalStatus)
+	}
 	return statusTone(download.Status)
 }
 
 func detailStatusLabel(detail aria2.DownloadDetail) string {
 	if detail.IsMetadata {
 		return "Metadata"
+	}
+	if detail.CanonicalStatus != "" {
+		return statusLabel(detail.CanonicalStatus)
 	}
 	return statusLabel(detail.Status)
 }

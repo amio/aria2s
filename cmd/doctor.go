@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/amio/aria2s/internal/app"
 	"github.com/spf13/cobra"
@@ -19,7 +20,13 @@ func newDoctorCommand(application *app.App) *cobra.Command {
 			}
 			fmt.Fprintln(command.OutOrStdout(), "aria2s doctor: issues found")
 			for _, issue := range report.Issues {
-				fmt.Fprintf(command.OutOrStdout(), "- %s\n", issue.Message)
+				fmt.Fprintf(command.OutOrStdout(), "- [%s] %s: %s\n", issue.Severity, issue.Code, issue.Summary)
+				if issue.Evidence != "" {
+					fmt.Fprintf(command.OutOrStdout(), "  evidence: %s\n", issue.Evidence)
+				}
+				if len(issue.Recovery) > 0 {
+					fmt.Fprintf(command.OutOrStdout(), "  recovery: %s\n", strings.Join(issue.Recovery, " "))
+				}
 			}
 			return fmt.Errorf("doctor reported issues")
 		},

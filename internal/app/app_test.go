@@ -2,6 +2,8 @@ package app_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -469,7 +471,7 @@ func TestInstallWritesSystemdUnitForLinuxPaths(t *testing.T) {
 	text := string(unit)
 	assertContains(t, text, "[Unit]")
 	assertContains(t, text, "Description=aria2 RPC service managed by aria2s")
-	assertContains(t, text, "ExecStart="+aria2c+" --enable-rpc=true --rpc-listen-all=false --rpc-listen-port=6800 --rpc-secret=secret-token --input-file="+servicePaths.SessionFile+" --save-session="+servicePaths.SessionFile+" --save-session-interval=60")
+	assertContains(t, text, " managed-exec")
 	assertContains(t, text, "WantedBy=default.target")
 }
 
@@ -507,13 +509,16 @@ func TestInstallReloadsLoadedServiceWhenPlistChanges(t *testing.T) {
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
 	current := state.State{
-		Aria2cPath:   aria2c,
-		RPCPort:      6800,
-		RPCSecret:    "secret-token",
-		SessionPath:  servicePaths.SessionFile,
-		LogPath:      servicePaths.LogFile,
-		ErrorLogPath: servicePaths.ErrorLogFile,
-		ServiceName:  servicePaths.ServiceName,
+		RuntimeSchemaVersion: 2,
+		ControllerPath:       aria2c,
+		StartupInputPath:     servicePaths.StartupInputFile,
+		Aria2cPath:           aria2c,
+		RPCPort:              6800,
+		RPCSecret:            "secret-token",
+		SessionPath:          servicePaths.SessionFile,
+		LogPath:              servicePaths.LogFile,
+		ErrorLogPath:         servicePaths.ErrorLogFile,
+		ServiceName:          servicePaths.ServiceName,
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
@@ -542,13 +547,16 @@ func TestInstallStartGracefullyStopsRunningServiceBeforeReloadingChangedPlist(t 
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
 	current := state.State{
-		Aria2cPath:   aria2c,
-		RPCPort:      6800,
-		RPCSecret:    "secret-token",
-		SessionPath:  servicePaths.SessionFile,
-		LogPath:      servicePaths.LogFile,
-		ErrorLogPath: servicePaths.ErrorLogFile,
-		ServiceName:  servicePaths.ServiceName,
+		RuntimeSchemaVersion: 2,
+		ControllerPath:       aria2c,
+		StartupInputPath:     servicePaths.StartupInputFile,
+		Aria2cPath:           aria2c,
+		RPCPort:              6800,
+		RPCSecret:            "secret-token",
+		SessionPath:          servicePaths.SessionFile,
+		LogPath:              servicePaths.LogFile,
+		ErrorLogPath:         servicePaths.ErrorLogFile,
+		ServiceName:          servicePaths.ServiceName,
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
@@ -571,11 +579,11 @@ func TestInstallStartGracefullyStopsRunningServiceBeforeReloadingChangedPlist(t 
 		t.Fatalf("install: %v", err)
 	}
 
-	if rpc.saveSessionCalls != 0 || rpc.shutdownCalls != 0 {
-		t.Fatalf("expected no saveSession or shutdown, got save=%d shutdown=%d", rpc.saveSessionCalls, rpc.shutdownCalls)
+	if rpc.saveSessionCalls != 1 || rpc.shutdownCalls != 0 {
+		t.Fatalf("expected one checkpoint and no shutdown, got save=%d shutdown=%d", rpc.saveSessionCalls, rpc.shutdownCalls)
 	}
-	if strings.Join(events, ",") != "stop,uninstall,install,start,version" {
-		t.Fatalf("expected stop, uninstall, install, start, version, got %v", events)
+	if strings.Join(events, ",") != "saveSession,stop,uninstall,install,start,version" {
+		t.Fatalf("expected checkpoint, stop, reinstall, start, version, got %v", events)
 	}
 }
 
@@ -584,13 +592,16 @@ func TestInstallPreservesRunningServiceAcrossChangedPlistWithoutStartFlag(t *tes
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
 	current := state.State{
-		Aria2cPath:   aria2c,
-		RPCPort:      6800,
-		RPCSecret:    "secret-token",
-		SessionPath:  servicePaths.SessionFile,
-		LogPath:      servicePaths.LogFile,
-		ErrorLogPath: servicePaths.ErrorLogFile,
-		ServiceName:  servicePaths.ServiceName,
+		RuntimeSchemaVersion: 2,
+		ControllerPath:       aria2c,
+		StartupInputPath:     servicePaths.StartupInputFile,
+		Aria2cPath:           aria2c,
+		RPCPort:              6800,
+		RPCSecret:            "secret-token",
+		SessionPath:          servicePaths.SessionFile,
+		LogPath:              servicePaths.LogFile,
+		ErrorLogPath:         servicePaths.ErrorLogFile,
+		ServiceName:          servicePaths.ServiceName,
 	}
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
@@ -610,8 +621,8 @@ func TestInstallPreservesRunningServiceAcrossChangedPlistWithoutStartFlag(t *tes
 		t.Fatalf("install: %v", err)
 	}
 
-	if strings.Join(events, ",") != "stop,uninstall,install,start" {
-		t.Fatalf("expected stop, uninstall, install, start, got %v", events)
+	if strings.Join(events, ",") != "saveSession,stop,uninstall,install,start" {
+		t.Fatalf("expected checkpoint, stop, reinstall, start, got %v", events)
 	}
 }
 
@@ -639,18 +650,7 @@ func TestInstallWritesDefaultConfigWithoutBootstrappingWhenServiceAlreadyLoaded(
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
-	current := state.State{
-		Aria2cPath:   aria2c,
-		RPCPort:      6800,
-		RPCSecret:    "secret-token",
-		SessionPath:  servicePaths.SessionFile,
-		LogPath:      servicePaths.LogFile,
-		ErrorLogPath: servicePaths.ErrorLogFile,
-		ServiceName:  servicePaths.ServiceName,
-	}
-	if err := state.Save(servicePaths.StateFile, current); err != nil {
-		t.Fatalf("save state: %v", err)
-	}
+	current := writeInstalledStateAndConfig(t, servicePaths, aria2c)
 	plist, err := service.RenderLaunchAgent(current)
 	if err != nil {
 		t.Fatalf("render plist: %v", err)
@@ -743,15 +743,38 @@ func writeExecutable(t *testing.T, path string) string {
 
 func writeInstalledStateAndConfig(t *testing.T, servicePaths paths.Paths, aria2c string) state.State {
 	t.Helper()
-	current := state.State{
-		Aria2cPath:   aria2c,
-		RPCPort:      6800,
-		RPCSecret:    "secret-token",
-		SessionPath:  servicePaths.SessionFile,
-		LogPath:      servicePaths.LogFile,
-		ErrorLogPath: servicePaths.ErrorLogFile,
-		ServiceName:  servicePaths.ServiceName,
+	controller, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
 	}
+	controller, err = filepath.EvalSymlinks(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controllerData, err := os.ReadFile(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controllerHash := sha256.Sum256(controllerData)
+	current := state.State{
+		RuntimeSchemaVersion: 2,
+		ControllerPath:       controller,
+		ControllerIdentity:   hex.EncodeToString(controllerHash[:]),
+		StartupInputPath:     servicePaths.StartupInputFile,
+		Aria2cPath:           aria2c,
+		RPCPort:              6800,
+		RPCSecret:            "secret-token",
+		SessionPath:          servicePaths.SessionFile,
+		LogPath:              servicePaths.LogFile,
+		ErrorLogPath:         servicePaths.ErrorLogFile,
+		ServiceName:          servicePaths.ServiceName,
+	}
+	serviceFile, err := service.RenderLaunchAgent(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serviceHash := sha256.Sum256([]byte(serviceFile))
+	current.ServiceIdentity = hex.EncodeToString(serviceHash[:])
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatalf("save state: %v", err)
 	}
@@ -1008,6 +1031,10 @@ type sessionRecordingRPC struct {
 	shutdownErr      error
 	events           *[]string
 	service          *recordingService
+}
+
+func (rpc *sessionRecordingRPC) CompleteCensus(context.Context, state.State) ([]aria2.LifecycleStatus, error) {
+	return nil, nil
 }
 
 func (rpc *sessionRecordingRPC) Version(context.Context, state.State) (string, error) {

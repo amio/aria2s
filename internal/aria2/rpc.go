@@ -3,6 +3,7 @@ package aria2
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -54,7 +55,17 @@ func NewRPCClient(endpoint, secret string, client *http.Client) *RPCClient {
 
 /** AddOptions carries optional per-task overrides sent to aria2.addUri. */
 type AddOptions struct {
-	Dir string
+	Dir               string
+	GID               string
+	Out               string
+	Pause             bool
+	Managed           bool
+	MetadataOnly      bool
+	SaveMetadata      bool
+	SeedUnverified    bool
+	CheckIntegrity    *bool
+	ForceSave         *bool
+	RemoveControlFile *bool
 }
 
 func (client *RPCClient) AddURI(ctx context.Context, uri string, opts AddOptions) (string, error) {
@@ -62,14 +73,67 @@ func (client *RPCClient) AddURI(ctx context.Context, uri string, opts AddOptions
 		return "", fmt.Errorf("unsupported URI: %s", uri)
 	}
 	params := []any{[]string{uri}}
-	if opts.Dir != "" {
-		params = append(params, map[string]string{"dir": opts.Dir})
+	if values := opts.values(); len(values) > 0 {
+		params = append(params, values)
 	}
 	var gid string
 	if err := client.mutation(ctx, "aria2.addUri", params, &gid); err != nil {
 		return "", err
 	}
 	return gid, nil
+}
+
+func (client *RPCClient) AddTorrent(ctx context.Context, metainfo []byte, opts AddOptions) (string, error) {
+	if len(metainfo) == 0 {
+		return "", errors.New("torrent metainfo is empty")
+	}
+	params := []any{base64.StdEncoding.EncodeToString(metainfo), []string{}, opts.values()}
+	var gid string
+	if err := client.mutation(ctx, "aria2.addTorrent", params, &gid); err != nil {
+		return "", err
+	}
+	return gid, nil
+}
+
+func (opts AddOptions) values() map[string]string {
+	values := make(map[string]string)
+	if opts.Dir != "" {
+		values["dir"] = opts.Dir
+	}
+	if opts.GID != "" {
+		values["gid"] = opts.GID
+	}
+	if opts.Out != "" {
+		values["out"] = opts.Out
+	}
+	if opts.Pause {
+		values["pause"] = "true"
+	}
+	if opts.Managed {
+		values["allow-overwrite"] = "false"
+		values["auto-file-renaming"] = "false"
+		values["remove-control-file"] = "false"
+		values["follow-torrent"] = "false"
+	}
+	if opts.MetadataOnly {
+		values["bt-metadata-only"] = "true"
+	}
+	if opts.SaveMetadata {
+		values["bt-save-metadata"] = "true"
+	}
+	if opts.SeedUnverified {
+		values["bt-seed-unverified"] = "true"
+	}
+	if opts.CheckIntegrity != nil {
+		values["check-integrity"] = fmt.Sprintf("%t", *opts.CheckIntegrity)
+	}
+	if opts.ForceSave != nil {
+		values["force-save"] = fmt.Sprintf("%t", *opts.ForceSave)
+	}
+	if opts.RemoveControlFile != nil {
+		values["remove-control-file"] = fmt.Sprintf("%t", *opts.RemoveControlFile)
+	}
+	return values
 }
 
 func (client *RPCClient) Version(ctx context.Context) (string, error) {
