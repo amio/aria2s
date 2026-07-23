@@ -1,3 +1,6 @@
+// Package app owns dashboard task-state projection. Public states reuse aria2
+// names except for the user-relevant downloading, metadata, and seeding
+// substates of native active work; managed phases remain internal facts.
 package app
 
 import "github.com/amio/aria2s/internal/jobs"
@@ -9,9 +12,10 @@ type TaskAction string
 const (
 	StatusDownloading  TaskStatus    = "downloading"
 	StatusSeeding      TaskStatus    = "seeding"
-	StatusQueued       TaskStatus    = "queued"
+	StatusMetadata     TaskStatus    = "metadata"
+	StatusWaiting      TaskStatus    = "waiting"
 	StatusPaused       TaskStatus    = "paused"
-	StatusFinished     TaskStatus    = "finished"
+	StatusComplete     TaskStatus    = "complete"
 	StatusError        TaskStatus    = "error"
 	StatusRemoved      TaskStatus    = "removed"
 	OwnershipManaged   TaskOwnership = "managed"
@@ -25,7 +29,7 @@ type ClassificationFact struct {
 	ProblemCode      string
 	NativeStatus     string
 	NativeSeeder     bool
-	NativeWaiting    bool
+	NativeMetadata   bool
 	IdentityConflict bool
 }
 
@@ -51,55 +55,30 @@ func ClassifyTask(fact ClassificationFact) TaskClassification {
 		result.Status = StatusRemoved
 	case fact.Managed && fact.ProblemCode != "" && fact.ProblemCode != "PowerLossDurabilityUnavailable":
 		result.Status = StatusError
+	case fact.NativeStatus == "active" && fact.NativeMetadata:
+		result.Status = StatusMetadata
 	case fact.NativeStatus == "active" && fact.NativeSeeder:
 		result.Status = StatusSeeding
 	case fact.NativeStatus == "active":
 		result.Status = StatusDownloading
-	case fact.NativeStatus == "waiting" || (fact.NativeWaiting && fact.NativeStatus != "paused"):
-		result.Status = StatusQueued
-	case fact.Managed && fact.Intent == jobs.ActivityStopped && fact.Phase != jobs.PhasePublished:
-		result.Status = StatusPaused
-	case fact.Managed && fact.Intent == jobs.ActivityStopped && fact.Phase == jobs.PhasePublished:
-		result.Status = StatusFinished
-	case fact.NativeStatus == "error":
-		result.Status = StatusError
-	case fact.Managed && fact.Phase == jobs.PhasePublishing:
-		result.Status = StatusDownloading
+	case fact.NativeStatus == "waiting":
+		result.Status = StatusWaiting
 	case fact.NativeStatus == "paused":
 		result.Status = StatusPaused
 	case fact.NativeStatus == "complete":
-		result.Status = StatusFinished
+		result.Status = StatusComplete
+	case fact.NativeStatus == "error":
+		result.Status = StatusError
 	case fact.NativeStatus == "removed":
 		result.Status = StatusRemoved
+	case fact.Managed && fact.Intent == jobs.ActivityStopped && fact.Phase != jobs.PhasePublished:
+		result.Status = StatusPaused
+	case fact.Managed && fact.Intent == jobs.ActivityStopped && fact.Phase == jobs.PhasePublished:
+		result.Status = StatusComplete
+	case fact.Managed && fact.Phase == jobs.PhasePublishing:
+		result.Status = StatusDownloading
 	default:
 		result.Status = StatusError
 	}
 	return result
-}
-
-type StatusCounts struct {
-	Visible, Downloading, Seeding, Queued, Paused, Finished, Error, Removed int
-}
-
-func CountStatuses(rows []TaskClassification) StatusCounts {
-	counts := StatusCounts{Visible: len(rows)}
-	for _, row := range rows {
-		switch row.Status {
-		case StatusDownloading:
-			counts.Downloading++
-		case StatusSeeding:
-			counts.Seeding++
-		case StatusQueued:
-			counts.Queued++
-		case StatusPaused:
-			counts.Paused++
-		case StatusFinished:
-			counts.Finished++
-		case StatusError:
-			counts.Error++
-		case StatusRemoved:
-			counts.Removed++
-		}
-	}
-	return counts
 }

@@ -85,11 +85,11 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 			read.Downloads.Stopped = append(read.Downloads.Stopped, *row)
 		}
 	}
-	decorate := func(rows []aria2.Download, waiting bool) {
+	decorate := func(rows []aria2.Download) {
 		for index := range rows {
 			row := &rows[index]
 			job, owned := managed[row.GID]
-			fact := ClassificationFact{Managed: owned, NativeStatus: row.Status, NativeSeeder: row.Seeder, NativeWaiting: waiting}
+			fact := ClassificationFact{Managed: owned, NativeStatus: row.Status, NativeSeeder: row.Seeder, NativeMetadata: row.IsMetadata}
 			if owned {
 				fact.Phase, fact.Intent, fact.ProblemCode = job.Phase, job.ActivityIntent, job.ProblemCode
 				fact.IdentityConflict = session.nativeDirConflict(job, row.Dir)
@@ -101,9 +101,9 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 			row.Actions = session.availableActions(classification, owned, job)
 		}
 	}
-	decorate(read.Downloads.Active, false)
-	decorate(read.Downloads.Waiting, true)
-	decorate(read.Downloads.Stopped, false)
+	decorate(read.Downloads.Active)
+	decorate(read.Downloads.Waiting)
+	decorate(read.Downloads.Stopped)
 	for gid, job := range managed {
 		if _, ok := seen[gid]; ok {
 			continue
@@ -112,26 +112,6 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 		read.Downloads.Stopped = append(read.Downloads.Stopped, aria2.Download{GID: gid, Status: "absent", Name: firstNonempty(job.PayloadRoot, job.Source), CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), Phase: classification.Phase, ProblemCode: job.ProblemCode, Actions: session.availableActions(classification, true, job)})
 	}
 	read.Downloads.Stopped = pageManagedHistory(read.Downloads.Stopped, managed, page)
-	all := append(append(append([]aria2.Download{}, read.Downloads.Active...), read.Downloads.Waiting...), read.Downloads.Stopped...)
-	for _, row := range all {
-		read.Counts.Visible++
-		switch TaskStatus(row.CanonicalStatus) {
-		case StatusDownloading:
-			read.Counts.Downloading++
-		case StatusSeeding:
-			read.Counts.Seeding++
-		case StatusQueued:
-			read.Counts.Queued++
-		case StatusPaused:
-			read.Counts.Paused++
-		case StatusFinished:
-			read.Counts.Finished++
-		case StatusError:
-			read.Counts.Error++
-		case StatusRemoved:
-			read.Counts.Removed++
-		}
-	}
 	return read
 }
 
@@ -173,9 +153,9 @@ func (session *DashboardSession) availableActions(classification TaskClassificat
 	}
 	var actions []string
 	switch classification.Status {
-	case StatusDownloading, StatusSeeding:
+	case StatusDownloading, StatusSeeding, StatusMetadata:
 		actions = append(actions, "pause", "remove")
-	case StatusQueued:
+	case StatusWaiting:
 		actions = append(actions, "pause", "remove")
 	case StatusPaused:
 		actions = append(actions, "resume", "remove")
@@ -184,7 +164,7 @@ func (session *DashboardSession) availableActions(classification TaskClassificat
 		if !managed || (job.Phase != jobs.PhasePublishing && job.Phase != jobs.PhaseRemoved) {
 			actions = append(actions, "remove")
 		}
-	case StatusFinished:
+	case StatusComplete:
 		if managed && session.hasMetainfo(job.ID) {
 			actions = append(actions, "start-seeding")
 		}
@@ -232,12 +212,12 @@ func (session *DashboardSession) TaskDetail(ctx context.Context, gid string) (ar
 		return detail, err
 	}
 	if job, _, loadErr := jobs.New(session.app.options.Paths.StateDir).Load(gid); loadErr == nil {
-		classification := ClassifyTask(ClassificationFact{Managed: true, Phase: job.Phase, Intent: job.ActivityIntent, ProblemCode: job.ProblemCode, NativeStatus: detail.Status, NativeSeeder: detail.Seeder, IdentityConflict: session.nativeDirConflict(job, detail.DownloadDir)})
+		classification := ClassifyTask(ClassificationFact{Managed: true, Phase: job.Phase, Intent: job.ActivityIntent, ProblemCode: job.ProblemCode, NativeStatus: detail.Status, NativeSeeder: detail.Seeder, NativeMetadata: detail.IsMetadata, IdentityConflict: session.nativeDirConflict(job, detail.DownloadDir)})
 		detail.CanonicalStatus, detail.Ownership, detail.Phase = string(classification.Status), string(classification.Ownership), classification.Phase
 		detail.ProblemCode = job.ProblemCode
 		detail.Actions = session.availableActions(classification, true, job)
 	} else {
-		classification := ClassifyTask(ClassificationFact{NativeStatus: detail.Status, NativeSeeder: detail.Seeder})
+		classification := ClassifyTask(ClassificationFact{NativeStatus: detail.Status, NativeSeeder: detail.Seeder, NativeMetadata: detail.IsMetadata})
 		detail.CanonicalStatus, detail.Ownership = string(classification.Status), string(classification.Ownership)
 		detail.Actions = session.availableActions(classification, false, jobs.Job{})
 	}

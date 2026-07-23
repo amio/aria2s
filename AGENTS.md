@@ -45,6 +45,7 @@
 - Session state is saved periodically and before controlled stop or restart so managed downloads survive service lifecycle changes.
 - Each job remains pinned to its registered staging scope by `StorageID`; new jobs share a canonical mount-root scope when the mount root is writable, otherwise they reuse or create a same-mount scope beside the target.
 - Dashboard reads are bounded and batched; refresh failures retain the last successful snapshot, and uncertain mutations are reconciled without blind resubmission.
+- Dashboard public status is app-owned and rendered verbatim by the TUI: native `active` is refined to `downloading`, `metadata`, or `seeding`, while `waiting`, `paused`, `complete`, `error`, and `removed` retain aria2 names; see `docs/implemented/unified-dashboard-status.md`.
 - macOS and Linux supervisors must express equivalent aria2 arguments and lifecycle semantics.
 - The supervisor runs `aria2s managed-exec`, which validates committed schema/artifact identity, holds an inherited instance lease through aria2c, and installs short-lived idempotent completion hooks.
 - Legacy restart state is never imported or deleted; users may reinstall the last v1 release to drain it, while a running service or non-empty session blocks v2 installation unless discard is explicit.

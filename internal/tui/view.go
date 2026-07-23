@@ -662,7 +662,7 @@ func statusLabel(status string) string {
 	case "paused":
 		return "Paused"
 	case "complete":
-		return "Done"
+		return "Complete"
 	case "error":
 		return "Error"
 	case "removed":
@@ -679,11 +679,13 @@ func statusTone(status string) rgb {
 	switch status {
 	case "active", "downloading", "seeding":
 		return rgb{125, 215, 160}
-	case "waiting", "queued":
+	case "metadata":
+		return rgb{165, 180, 228}
+	case "waiting":
 		return rgb{240, 210, 120}
 	case "paused":
 		return rgb{240, 182, 120}
-	case "complete", "finished":
+	case "complete":
 		return rgb{125, 210, 242}
 	case "error", "removed":
 		return rgb{250, 140, 140}
@@ -693,33 +695,15 @@ func statusTone(status string) rgb {
 }
 
 func downloadStatusLabel(download aria2.Download) string {
-	if download.IsMetadata {
-		return "Metadata"
-	}
-	if download.CanonicalStatus != "" {
-		return statusLabel(download.CanonicalStatus)
-	}
-	return statusLabel(download.Status)
+	return statusLabel(download.CanonicalStatus)
 }
 
 func downloadStatusTone(download aria2.Download) rgb {
-	if download.IsMetadata {
-		return rgb{165, 180, 228}
-	}
-	if download.CanonicalStatus != "" {
-		return statusTone(download.CanonicalStatus)
-	}
-	return statusTone(download.Status)
+	return statusTone(download.CanonicalStatus)
 }
 
 func detailStatusLabel(detail aria2.DownloadDetail) string {
-	if detail.IsMetadata {
-		return "Metadata"
-	}
-	if detail.CanonicalStatus != "" {
-		return statusLabel(detail.CanonicalStatus)
-	}
-	return statusLabel(detail.Status)
+	return statusLabel(detail.CanonicalStatus)
 }
 
 func formatBytes(value int64) string {

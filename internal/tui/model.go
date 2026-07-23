@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -414,12 +415,7 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if hasTaskAction(model.Selected(), "pause") {
 			return model.startAction(actionPause)
 		}
-		// forcePause only applies to live queue rows; stopped/complete GIDs reject it.
-		switch model.Selected().Status {
-		case "active", "waiting":
-			return model.startAction(actionPause)
-		}
-		return model.flashInapplicable("pause", model.Selected().Status)
+		return model.flashInapplicable("pause", model.Selected().CanonicalStatus)
 	case key.Matches(msg, dashboardKeys.List.Resume):
 		if hasTaskAction(model.Selected(), "retry") {
 			return model.startAction(actionRetry)
@@ -427,15 +423,7 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if hasTaskAction(model.Selected(), "resume") || hasTaskAction(model.Selected(), "start-seeding") {
 			return model.startAction(actionResume)
 		}
-		// r is dual-purpose: unpause paused rows, re-queue failed ones. complete/removed
-		// are not unpausable, and RetrySource intentionally rejects non-error statuses.
-		switch model.Selected().Status {
-		case "error":
-			return model.startAction(actionRetry)
-		case "paused":
-			return model.startAction(actionResume)
-		}
-		return model.flashInapplicable("retry/resume", model.Selected().Status)
+		return model.flashInapplicable("retry/resume", model.Selected().CanonicalStatus)
 	case key.Matches(msg, dashboardKeys.List.Remove):
 		if hasTaskAction(model.Selected(), "clear") {
 			return model.startAction(actionClear)
@@ -648,21 +636,60 @@ func (model Model) handleClipboardAdd(msg clipboardContentMsg) (tea.Model, tea.C
 
 func (model Model) items() []aria2.Download {
 	items := make([]aria2.Download, 0, len(model.snapshot.Active)+len(model.snapshot.Waiting)+len(model.snapshot.Stopped))
-	appendBucket := func(downloads []aria2.Download, want bool) {
-		for _, d := range downloads {
-			if d.IsMetadata == want {
-				items = append(items, d)
-			}
+	items = append(items, model.snapshot.Active...)
+	items = append(items, model.snapshot.Waiting...)
+	items = append(items, model.snapshot.Stopped...)
+	// Stable ordering retains aria2's queue order and the app's newest-first
+	// stopped history while grouping rows by their user-facing task state.
+	sort.SliceStable(items, func(left, right int) bool {
+		leftRank, rightRank := downloadStatusRank(items[left]), downloadStatusRank(items[right])
+		if leftRank != rightRank {
+			return leftRank < rightRank
 		}
-	}
-	appendBucket(model.snapshot.Active, false)
-	appendBucket(model.snapshot.Active, true)
-	appendBucket(model.snapshot.Waiting, true)
-	appendBucket(model.snapshot.Stopped, true)
-	appendBucket(model.snapshot.Waiting, false)
-	appendBucket(model.snapshot.Stopped, false)
+		if leftRank != downloadingStatusRank {
+			return false
+		}
+		leftKnown, rightKnown := items[left].TotalLength > 0, items[right].TotalLength > 0
+		if leftKnown != rightKnown {
+			return leftKnown
+		}
+		if !leftKnown {
+			return false
+		}
+		leftProgress := float64(items[left].CompletedLength) / float64(items[left].TotalLength)
+		rightProgress := float64(items[right].CompletedLength) / float64(items[right].TotalLength)
+		return leftProgress > rightProgress
+	})
 	return items
 }
+
+const downloadingStatusRank = 0
+
+func downloadStatusRank(download aria2.Download) int {
+	switch app.TaskStatus(download.CanonicalStatus) {
+	case app.StatusDownloading:
+		return downloadingStatusRank
+	case app.StatusMetadata:
+		return 1
+	case app.StatusSeeding:
+		return 2
+	case app.StatusWaiting:
+		return 3
+	case app.StatusPaused:
+		return 4
+	case app.StatusError:
+		return 5
+	case app.StatusRemoved:
+		return 6
+	case app.StatusComplete:
+		return 8
+	default:
+		// Unknown states remain visible near other exceptional states, while
+		// Complete is always the final group.
+		return 7
+	}
+}
+
 func (model Model) indexOf(gid string) int {
 	items := model.items()
 	if len(items) == 0 {

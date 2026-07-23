@@ -112,6 +112,48 @@ func TestPartialListFailurePreservesLastKnownGood(t *testing.T) {
 	}
 }
 
+func TestItemsGroupByCanonicalStatusAndSortDownloadingByProgress(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.snapshot = aria2.DownloadSnapshot{
+		Active: []aria2.Download{
+			{GID: "download-low", Status: "active", CanonicalStatus: "downloading", CompletedLength: 25, TotalLength: 100},
+			{GID: "metadata", Status: "active", CanonicalStatus: "metadata", IsMetadata: true},
+			{GID: "seed", Status: "active", CanonicalStatus: "seeding", Seeder: true},
+		},
+		Waiting: []aria2.Download{
+			{GID: "waiting-first", Status: "waiting", CanonicalStatus: "waiting"},
+			{GID: "download-high", Status: "waiting", CanonicalStatus: "downloading", CompletedLength: 3, TotalLength: 4},
+			{GID: "waiting-second", Status: "waiting", CanonicalStatus: "waiting"},
+			{GID: "paused", Status: "paused", CanonicalStatus: "paused"},
+		},
+		Stopped: []aria2.Download{
+			{GID: "complete-new", Status: "complete", CanonicalStatus: "complete"},
+			{GID: "removed", Status: "removed", CanonicalStatus: "removed"},
+			{GID: "error", Status: "error", CanonicalStatus: "error"},
+			{GID: "complete-old", Status: "complete", CanonicalStatus: "complete"},
+		},
+	}
+
+	items := model.items()
+	got := make([]string, 0, len(items))
+	for _, item := range items {
+		got = append(got, item.GID)
+	}
+	want := []string{
+		"download-high", "download-low",
+		"metadata",
+		"seed",
+		"waiting-first", "waiting-second",
+		"paused",
+		"error",
+		"removed",
+		"complete-new", "complete-old",
+	}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("ordered GIDs got %v, want %v", got, want)
+	}
+}
+
 func TestDetailResultCanApplyWhenListFails(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.detailState.RequestedGID = "a"
@@ -317,30 +359,33 @@ func TestOldNoticeExpiryCannotClearAddError(t *testing.T) {
 	}
 }
 
-func TestListResumeKeyDispatchesByStatus(t *testing.T) {
+func TestListResumeKeyDispatchesAdvertisedAction(t *testing.T) {
 	cases := []struct {
-		name   string
-		status string
-		want   string
+		name      string
+		native    string
+		canonical string
+		actions   []string
+		want      string
 	}{
-		{name: "paused resumes", status: "paused", want: "resume:g1"},
-		{name: "error retries", status: "error", want: "retry:g1"},
-		{name: "complete is no-op", status: "complete", want: ""},
-		{name: "active is no-op", status: "active", want: ""},
-		{name: "waiting is no-op", status: "waiting", want: ""},
+		{name: "paused resumes", native: "paused", canonical: "paused", actions: []string{"resume"}, want: "resume:g1"},
+		{name: "error retries", native: "error", canonical: "error", actions: []string{"retry"}, want: "retry:g1"},
+		{name: "complete is no-op", native: "complete", canonical: "complete"},
+		{name: "downloading without action is no-op", native: "active", canonical: "downloading"},
+		{name: "waiting without action is no-op", native: "waiting", canonical: "waiting"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			service := &fakeService{}
 			model := NewModel(context.Background(), service, time.Second, "dev")
-			model.snapshot.Stopped = []aria2.Download{{GID: "g1", Status: tc.status}}
-			if tc.status == "active" {
+			row := aria2.Download{GID: "g1", Status: tc.native, CanonicalStatus: tc.canonical, Actions: tc.actions}
+			model.snapshot.Stopped = []aria2.Download{row}
+			if tc.native == "active" {
 				model.snapshot.Stopped = nil
-				model.snapshot.Active = []aria2.Download{{GID: "g1", Status: tc.status}}
+				model.snapshot.Active = []aria2.Download{row}
 			}
-			if tc.status == "waiting" {
+			if tc.native == "waiting" {
 				model.snapshot.Stopped = nil
-				model.snapshot.Waiting = []aria2.Download{{GID: "g1", Status: tc.status}}
+				model.snapshot.Waiting = []aria2.Download{row}
 			}
 			updated, cmd := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
 			model = updated.(Model)
@@ -379,7 +424,7 @@ func TestListResumeKeyDispatchesByStatus(t *testing.T) {
 func TestListPauseKeyOnlyTargetsLiveRows(t *testing.T) {
 	service := &fakeService{}
 	model := NewModel(context.Background(), service, time.Second, "dev")
-	model.snapshot.Stopped = []aria2.Download{{GID: "done", Status: "complete"}}
+	model.snapshot.Stopped = []aria2.Download{{GID: "done", Status: "complete", CanonicalStatus: "complete"}}
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	model = updated.(Model)
 	if len(service.actions) != 0 {
@@ -394,7 +439,7 @@ func TestListPauseKeyOnlyTargetsLiveRows(t *testing.T) {
 
 	model.notice = ""
 	model.snapshot.Stopped = nil
-	model.snapshot.Active = []aria2.Download{{GID: "live", Status: "active"}}
+	model.snapshot.Active = []aria2.Download{{GID: "live", Status: "active", CanonicalStatus: "downloading", Actions: []string{"pause"}}}
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	model = updated.(Model)
 	if cmd == nil {
@@ -409,7 +454,7 @@ func TestListPauseKeyOnlyTargetsLiveRows(t *testing.T) {
 func TestInapplicableResumeNoticeRendersInListTopBar(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.loaded = true
-	model.snapshot.Stopped = []aria2.Download{{GID: "done", Status: "complete", Name: "done.iso"}}
+	model.snapshot.Stopped = []aria2.Download{{GID: "done", Status: "complete", CanonicalStatus: "complete", Name: "done.iso"}}
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
 	model = updated.(Model)
 	view := model.View().Content

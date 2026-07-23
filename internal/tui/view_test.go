@@ -27,6 +27,32 @@ func TestTableShowsPeerMetricsAtWideViewport(t *testing.T) {
 	}
 }
 
+func TestStatusLabelsRenderCanonicalStatusWithoutAttributeOverrides(t *testing.T) {
+	labels := map[string]string{
+		"downloading": "Downloading",
+		"metadata":    "Metadata",
+		"seeding":     "Seeding",
+		"waiting":     "Waiting",
+		"paused":      "Paused",
+		"complete":    "Complete",
+		"error":       "Error",
+		"removed":     "Removed",
+	}
+	for status, want := range labels {
+		if got := downloadStatusLabel(aria2.Download{CanonicalStatus: status}); got != want {
+			t.Fatalf("canonical status %q rendered as %q, want %q", status, got, want)
+		}
+	}
+
+	metadataTransfer := aria2.Download{IsMetadata: true, CanonicalStatus: "downloading"}
+	if got := downloadStatusLabel(metadataTransfer); got != "Downloading" {
+		t.Fatalf("metadata attribute overrode canonical status: %q", got)
+	}
+	if got := detailStatusLabel(aria2.DownloadDetail{IsMetadata: true, CanonicalStatus: "complete"}); got != "Complete" {
+		t.Fatalf("detail metadata attribute overrode canonical status: %q", got)
+	}
+}
+
 func TestTableColumnsHideByPriority(t *testing.T) {
 	full := computeLayout(118)
 	if full.seedsWidth == 0 || full.peersWidth == 0 {

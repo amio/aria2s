@@ -35,11 +35,8 @@ type DashboardRead struct {
 	Detail          *DownloadDetail
 	DetailErr       error
 	DetailSourceErr error
-	Counts          CanonicalCounts
 	Managed         map[string]*Download
 }
-
-type CanonicalCounts struct{ Visible, Downloading, Seeding, Queued, Paused, Finished, Error, Removed int }
 
 /** DownloadSnapshot groups the live and recent stopped task windows shown by the dashboard. */
 type DownloadSnapshot struct {
