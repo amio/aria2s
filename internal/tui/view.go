@@ -29,6 +29,8 @@ const (
 	progressBaseWidth   = 10
 	downBaseWidth       = 12
 	upBaseWidth         = 10
+	seedsBaseWidth      = 5
+	peersBaseWidth      = 5
 )
 
 type rgb struct {
@@ -298,7 +300,7 @@ func (model Model) tableHeader(contentWidth int) string {
 		return fitLeft("Status  Name  Progress  Down Speed", contentWidth)
 	}
 	l := computeLayout(contentWidth)
-	parts := make([]string, 0, 7)
+	parts := make([]string, 0, 9)
 	add := func(text string, width int, right bool) {
 		if width > 0 {
 			if right {
@@ -315,6 +317,8 @@ func (model Model) tableHeader(contentWidth int) string {
 	add("Progress", l.progressWidth, true)
 	add("Down Speed", l.downWidth, true)
 	add("Up Speed", l.upWidth, true)
+	add("Seeds", l.seedsWidth, true)
+	add("Peers", l.peersWidth, true)
 	return strings.Join(parts, columnGap)
 }
 
@@ -433,7 +437,7 @@ func (model Model) centeredBodyLine(width int, text string) string {
 func (model Model) downloadRow(width int, download aria2.Download, selected bool) string {
 	contentWidth := contentInner(width)
 	l := computeLayout(contentWidth)
-	parts := make([]string, 0, 7)
+	parts := make([]string, 0, 9)
 	add := func(text string, width int, right bool) {
 		if width > 0 {
 			if right {
@@ -458,6 +462,8 @@ func (model Model) downloadRow(width int, download aria2.Download, selected bool
 	add(formatProgress(download.CompletedLength, download.TotalLength), l.progressWidth, true)
 	add(formatSpeed(download.DownloadSpeed), l.downWidth, true)
 	add(formatSpeed(download.UploadSpeed), l.upWidth, true)
+	add(fmt.Sprintf("%d", download.NumSeeders), l.seedsWidth, true)
+	add(fmt.Sprintf("%d", download.Connections), l.peersWidth, true)
 
 	row := strings.Join(parts, columnGap)
 	background := contentBgColor
@@ -514,9 +520,9 @@ func (model Model) viewport() (int, int) {
 	return width, height
 }
 
-func tableColumnWidths(width int) (int, int, int, int, int, int, int) {
+func tableColumnWidths(width int) (int, int, int, int, int, int, int, int, int) {
 	l := computeLayout(width)
-	return l.statusWidth, l.nameWidth, l.sizeWidth, l.downloadedWidth, l.progressWidth, l.downWidth, l.upWidth
+	return l.statusWidth, l.nameWidth, l.sizeWidth, l.downloadedWidth, l.progressWidth, l.downWidth, l.upWidth, l.seedsWidth, l.peersWidth
 }
 
 // tableLayout holds the computed column widths for a given content width.
@@ -529,10 +535,13 @@ type tableLayout struct {
 	progressWidth   int
 	downWidth       int
 	upWidth         int
+	seedsWidth      int
+	peersWidth      int
 }
 
 // computeLayout determines which columns are visible and their widths.
-// Columns are hidden in this order as width shrinks: Downloaded, Size, Up Speed.
+// Columns are hidden in this order as width shrinks:
+// Seeds, Peers, Downloaded, Size, Up Speed.
 func computeLayout(width int) tableLayout {
 	l := tableLayout{
 		statusWidth:     statusBaseWidth,
@@ -541,6 +550,8 @@ func computeLayout(width int) tableLayout {
 		progressWidth:   progressBaseWidth,
 		downWidth:       downBaseWidth,
 		upWidth:         upBaseWidth,
+		seedsWidth:      seedsBaseWidth,
+		peersWidth:      peersBaseWidth,
 	}
 	for l.fixed()+minNameWidth > width && l.hideNext() {
 	}
@@ -550,7 +561,7 @@ func computeLayout(width int) tableLayout {
 
 // fixed returns the total width of all non-name columns plus column gaps.
 func (l tableLayout) fixed() int {
-	w := l.statusWidth + l.sizeWidth + l.downloadedWidth + l.progressWidth + l.downWidth + l.upWidth
+	w := l.statusWidth + l.sizeWidth + l.downloadedWidth + l.progressWidth + l.downWidth + l.upWidth + l.seedsWidth + l.peersWidth
 	n := l.visible()
 	if n > 1 {
 		w += (n - 1) * len(columnGap)
@@ -576,11 +587,25 @@ func (l tableLayout) visible() int {
 	if l.upWidth > 0 {
 		n++
 	}
+	if l.seedsWidth > 0 {
+		n++
+	}
+	if l.peersWidth > 0 {
+		n++
+	}
 	return n
 }
 
 // hideNext removes the next optional column; returns false when none remain.
 func (l *tableLayout) hideNext() bool {
+	if l.seedsWidth > 0 {
+		l.seedsWidth = 0
+		return true
+	}
+	if l.peersWidth > 0 {
+		l.peersWidth = 0
+		return true
+	}
 	if l.downloadedWidth > 0 {
 		l.downloadedWidth = 0
 		return true

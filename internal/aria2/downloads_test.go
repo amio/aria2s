@@ -105,8 +105,10 @@ func TestListDownloadsDecodesMetadataDisplayName(t *testing.T) {
 		call := decodeRPCCall(t, r)
 		switch call.Method {
 		case "aria2.tellActive":
+			assertRequestIncludesField(t, call, "numSeeders")
+			assertRequestIncludesField(t, call, "connections")
 			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[
-				{"gid":"m1","status":"active","files":[{"path":"[METADATA]The+New+York+Times+Best+Sellers"}],"completedLength":"0","totalLength":"20480"}
+				{"gid":"m1","status":"active","files":[{"path":"[METADATA]The+New+York+Times+Best+Sellers"}],"completedLength":"0","totalLength":"20480","numSeeders":"7","connections":"13"}
 			]}`)
 		case "aria2.tellWaiting":
 			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[]}`)
@@ -129,6 +131,9 @@ func TestListDownloadsDecodesMetadataDisplayName(t *testing.T) {
 	}
 	if snapshot.Active[0].Name != "The New York Times Best Sellers" {
 		t.Fatalf("metadata name got %q, want 'The New York Times Best Sellers'", snapshot.Active[0].Name)
+	}
+	if snapshot.Active[0].NumSeeders != 7 || snapshot.Active[0].Connections != 13 {
+		t.Fatalf("peer metrics got seeds=%d peers=%d, want 7 and 13", snapshot.Active[0].NumSeeders, snapshot.Active[0].Connections)
 	}
 }
 
@@ -306,12 +311,13 @@ func assertRPCRequest(t *testing.T, call rpcCall, method string, params ...any) 
 
 func assertRequestIncludesField(t *testing.T, call rpcCall, field string) {
 	t.Helper()
-	if len(call.Params) < 3 {
-		t.Fatalf("params got %#v, want detail field list", call.Params)
+	if len(call.Params) == 0 {
+		t.Fatalf("params got %#v, want field list", call.Params)
 	}
-	fields, ok := call.Params[2].([]any)
+	fieldParam := call.Params[len(call.Params)-1]
+	fields, ok := fieldParam.([]any)
 	if !ok {
-		t.Fatalf("field params got %#v, want []any", call.Params[2])
+		t.Fatalf("field params got %#v, want []any", fieldParam)
 	}
 	for _, item := range fields {
 		if item == field {

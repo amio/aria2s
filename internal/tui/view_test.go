@@ -4,8 +4,48 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/amio/aria2s/internal/aria2"
 	"github.com/charmbracelet/x/ansi"
 )
+
+func TestTableShowsPeerMetricsAtWideViewport(t *testing.T) {
+	const contentWidth = 111
+	model := Model{}
+	header := model.tableHeader(contentWidth)
+	if !strings.Contains(header, "Seeds") || !strings.Contains(header, "Peers") {
+		t.Fatalf("wide header missing peer metrics: %q", header)
+	}
+
+	row := stripANSI(model.downloadRow(contentWidth+8, aria2.Download{
+		GID:         "a",
+		Name:        "torrent",
+		NumSeeders:  73,
+		Connections: 41,
+	}, false))
+	if !strings.Contains(row, "73") || !strings.Contains(row, "41") {
+		t.Fatalf("wide row missing peer metrics: %q", row)
+	}
+}
+
+func TestPeerMetricsHideBeforeExistingOptionalColumns(t *testing.T) {
+	full := computeLayout(111)
+	if full.seedsWidth == 0 || full.peersWidth == 0 {
+		t.Fatalf("peer metrics hidden in full layout: %#v", full)
+	}
+
+	oneHidden := computeLayout(110)
+	if oneHidden.seedsWidth != 0 || oneHidden.peersWidth == 0 {
+		t.Fatalf("first low-priority column was not hidden first: %#v", oneHidden)
+	}
+
+	bothHidden := computeLayout(103)
+	if bothHidden.seedsWidth != 0 || bothHidden.peersWidth != 0 {
+		t.Fatalf("peer metrics survived narrow layout: %#v", bothHidden)
+	}
+	if bothHidden.downloadedWidth == 0 || bothHidden.sizeWidth == 0 || bothHidden.upWidth == 0 {
+		t.Fatalf("existing optional columns hid before peer metrics: %#v", bothHidden)
+	}
+}
 
 func TestAppendDetailLabelLinesWrapsLongValues(t *testing.T) {
 	value := "disk error: insufficient space on volume /very/long/path/to/downloads/folder"

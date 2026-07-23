@@ -59,6 +59,8 @@ type Download struct {
 	TotalLength     int64
 	DownloadSpeed   int64
 	UploadSpeed     int64
+	NumSeeders      int64
+	Connections     int64
 	Seeder          bool
 	InfoHash        string
 	CanonicalStatus string
@@ -364,6 +366,8 @@ func (raw rawDownload) toDownload() Download {
 		TotalLength:     parseInt(raw.TotalLength),
 		DownloadSpeed:   parseInt(raw.DownloadSpeed),
 		UploadSpeed:     parseInt(raw.UploadSpeed),
+		NumSeeders:      parseInt(raw.NumSeeders),
+		Connections:     parseInt(raw.Connections),
 		Seeder:          raw.Seeder == "true",
 		InfoHash:        raw.InfoHash,
 	}
@@ -461,7 +465,7 @@ func fileName(path string) string {
 }
 
 func downloadFields() []string {
-	return []string{"gid", "status", "dir", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "infoHash", "seeder"}
+	return []string{"gid", "status", "dir", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "infoHash", "numSeeders", "connections", "seeder"}
 }
 
 func detailFields() []string {
