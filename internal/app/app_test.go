@@ -238,11 +238,13 @@ func TestPrepareDashboardExplainsHowToReplaceLegacyRuntime(t *testing.T) {
 		t.Fatal("expected legacy runtime to block Dashboard")
 	}
 	message := err.Error()
-	assertContains(t, message, "managed runtime v1 is still installed\n\n")
-	assertContains(t, message, "\n\nTo keep existing tasks:\n  1. Finish them with the old aria2s binary.\n")
-	assertContains(t, message, "  2. Stop the v1 service with the old binary.\n  3. Run: aria2s install\n")
-	assertContains(t, message, "\nTo discard existing tasks:\n  Run: aria2s install --discard-legacy-tasks\n")
-	assertContains(t, message, "\nThis stops the v1 service and installs v2 without importing its tasks.")
+	assertContains(t, message, "managed runtime v1 is still installed; this binary cannot manage its tasks\n\n")
+	assertContains(t, message, "\n\nOption 1 — Keep existing tasks\n\nInstall the last v1 release:\n")
+	assertContains(t, message, "curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | sh -s -- --version v0.4.0\n")
+	assertContains(t, message, "\nFinish the tasks, then stop v1:\n  aria2s dashboard\n  aria2s stop\n")
+	assertContains(t, message, "\nReinstall the latest version:\n")
+	assertContains(t, message, "\nOption 2 — Discard existing tasks\n\nRun:\n  aria2s install --discard-legacy-tasks\n")
+	assertContains(t, message, "\nDiscard stops the v1 service and installs v2 without importing its tasks.")
 }
 
 func TestStopSavesSessionBeforeStoppingService(t *testing.T) {

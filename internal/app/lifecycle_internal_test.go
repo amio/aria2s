@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/amio/aria2s/internal/aria2"
@@ -615,8 +616,13 @@ func TestLegacyInstallGateRefusesRunningOrNonemptyStateAndRequiresExplicitDiscar
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	backend := &gateService{loaded: true, running: true}
 	application := New(Options{Paths: servicePaths, Service: backend})
-	if err := application.legacyInstallGate(context.Background(), false); err == nil || backend.uninstallCalls != 0 {
+	err := application.legacyInstallGate(context.Background(), false)
+	if err == nil || backend.uninstallCalls != 0 {
 		t.Fatalf("running legacy service was mutated: err=%v calls=%d", err, backend.uninstallCalls)
+	}
+	if !strings.Contains(err.Error(), "--version v0.4.0") ||
+		!strings.Contains(err.Error(), "aria2s dashboard") {
+		t.Fatalf("running legacy recovery is not actionable: %v", err)
 	}
 	backend.running = false
 	if err := os.MkdirAll(filepath.Dir(servicePaths.LegacySessionFile), 0o700); err != nil {

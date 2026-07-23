@@ -15,6 +15,17 @@ Or if you have Go installed
 go install github.com/amio/aria2s@latest
 ```
 
+Install a specific release:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | \
+  sh -s -- --version v0.4.0
+```
+
+This replaces the current `aria2s` binary and runs that release's setup. It is primarily a
+recovery path for finishing v1 tasks before reinstalling the latest managed runtime. The
+downloaded release is verified with its published checksum.
+
 ## Uninstall
 
 ```bash

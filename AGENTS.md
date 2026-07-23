@@ -46,7 +46,7 @@
 - Dashboard reads are bounded and batched; refresh failures retain the last successful snapshot, and uncertain mutations are reconciled without blind resubmission.
 - macOS and Linux supervisors must express equivalent aria2 arguments and lifecycle semantics.
 - The supervisor runs `aria2s managed-exec`, which validates committed schema/artifact identity, holds an inherited instance lease through aria2c, and installs short-lived idempotent completion hooks.
-- Legacy restart state is never imported or deleted; a running legacy service or non-empty legacy session blocks v2 installation unless task discard is explicitly acknowledged.
+- Legacy restart state is never imported or deleted; users may reinstall the last v1 release to drain it, while a running service or non-empty session blocks v2 installation unless discard is explicit.
 
 ## Component Map
 
@@ -57,5 +57,5 @@
 - **Publication filesystem boundary and managed process runtime**: `internal/publication/publication.go`, `internal/runtime/runtime.go`, `internal/app/managedexec.go`, `internal/app/lifecycle.go`
 - **Service supervisor adapters**: `internal/service/backend.go`, `internal/service/launchd.go`, `internal/service/systemd.go`
 - **Terminal dashboard state and rendering**: `internal/tui/model.go`, `internal/tui/view.go`, `internal/tui/addform.go`
-- **CLI command surface**: `cmd/root.go`, `cmd/install.go`, `cmd/start.go`, `cmd/dashboard.go`
+- **CLI command and release installer surface**: `cmd/root.go`, `cmd/install.go`, `cmd/start.go`, `cmd/dashboard.go`, `install.sh`
 - **Runtime diagnostics**: `internal/doctor/doctor.go`, `cmd/doctor.go`, `cmd/status.go`, `cmd/logs.go`

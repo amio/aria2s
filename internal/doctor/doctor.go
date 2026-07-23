@@ -40,7 +40,7 @@ func Check(ctx context.Context, options Options) Report {
 		return Report{Healthy: false, Issues: []Issue{problem("InstallIncomplete", "state file missing or unreadable", err.Error(), "Run `aria2s install`.")}}
 	}
 	if current.RuntimeSchemaVersion != 2 {
-		issues = append(issues, problem("UpgradeRequired", "managed runtime upgrade required", fmt.Sprintf("schema=%d", current.RuntimeSchemaVersion), "Finish legacy tasks with the old binary or run install with explicit discard."))
+		issues = append(issues, problem("UpgradeRequired", "managed runtime upgrade required", fmt.Sprintf("schema=%d", current.RuntimeSchemaVersion), "Run `aria2s dashboard` for v1 reinstall instructions, or `aria2s install --discard-legacy-tasks`."))
 	}
 	if !isExecutable(current.Aria2cPath) {
 		issues = append(issues, problem("ControllerUnavailable", "missing aria2c binary", current.Aria2cPath, "Install aria2 and rerun `aria2s install`."))

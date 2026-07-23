@@ -6,9 +6,14 @@ set -eu
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | \
+#     sh -s -- --version v0.4.0
 #
-# Options (via environment variables):
-#   VERSION   Install a specific version (e.g. "v0.0.3")
+# Options:
+#   --version VERSION   Install a specific release (e.g. "v0.4.0")
+#
+# Environment variables remain supported:
+#   VERSION   Default version when --version is omitted
 #   BINDIR    Install directory (default: /usr/local/bin)
 # =============================================================================
 
@@ -16,6 +21,7 @@ set -eu
 OWNER="amio"
 REPO="aria2s"
 BINDIR="${BINDIR:-/usr/local/bin}"
+REQUESTED_VERSION="${VERSION:-}"
 
 # --- color helpers (with terminal detection) ---
 if [ -t 1 ]; then
@@ -33,6 +39,46 @@ info()  { printf '%s==>%s %s%s%s\n' "${BLUE}" "${RESET}" "${BOLD}" "$*" "${RESET
 ok()    { printf '%s==>%s %s%s%s\n' "${GREEN}" "${RESET}" "${BOLD}" "$*" "${RESET}"; }
 warn()  { printf '%sWarning:%s %s\n' "${YELLOW}" "${RESET}" "$*" >&2; }
 err()   { printf '%sError:%s %s\n' "${RED}" "${RESET}" "$*" >&2; exit 1; }
+
+usage() {
+  cat <<'EOF'
+Usage:
+  curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | sh
+  curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | \
+    sh -s -- [options]
+
+Options:
+  --version VERSION  Install a specific release, such as v0.4.0
+  -h, --help         Show this help
+EOF
+}
+
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --version)
+      [ "$#" -ge 2 ] || err "--version requires a value"
+      REQUESTED_VERSION="$2"
+      shift 2
+      ;;
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    *)
+      err "unknown option: $1 (run with --help for usage)"
+      ;;
+  esac
+done
+
+if [ -n "$REQUESTED_VERSION" ]; then
+  case "$REQUESTED_VERSION" in
+    v[0-9]*) ;;
+    *) err "invalid version: ${REQUESTED_VERSION} (expected a release tag such as v0.4.0)" ;;
+  esac
+  case "$REQUESTED_VERSION" in
+    *[!A-Za-z0-9._+-]*) err "invalid version: ${REQUESTED_VERSION}" ;;
+  esac
+fi
 
 # --- prerequisite checks ---
 need_cmd() {
@@ -90,8 +136,8 @@ esac
 info "detected: ${OS}/${ARCH}"
 
 # --- determine version ---
-if [ -n "${VERSION:-}" ]; then
-  TAG="$VERSION"
+if [ -n "$REQUESTED_VERSION" ]; then
+  TAG="$REQUESTED_VERSION"
   info "using specified version: ${TAG}"
 else
   info "fetching latest release..."

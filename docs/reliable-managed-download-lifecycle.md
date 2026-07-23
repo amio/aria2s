@@ -51,7 +51,9 @@ Everything around that core is intentionally smaller than the previous proposal:
    dirty-state, and cache-rebuild protocols.
 5. **A hard legacy upgrade boundary.** The new binary never runs an old service artifact or
    offers `LegacyRuntime`. A non-empty pre-managed session blocks installation until the
-   user finishes it with the old binary or explicitly passes `--discard-legacy-tasks`.
+   user temporarily reinstalls the last v1 release to finish it or explicitly passes
+   `--discard-legacy-tasks`. The release installer accepts an exact version and overwrites
+   the same binary path, so reinstalling latest afterward leaves no compatibility binary.
    Managed v2 uses a new versioned session path, so discard can leave the old session and all
    payloads untouched; no archive transaction or legacy session parser is needed.
 6. **Weak-identity crash recovery is fail-closed without a confirmation workflow.** Normal
@@ -112,8 +114,8 @@ copy there. The viable mechanism is detach, rename, and rehydrate.
 - Local state is private to the user. aria2s still parses native session output
   defensively, but this is crash/corruption protection rather than a hostile-input security
   boundary.
-- Pre-managed tasks are never imported. The user either drains them with the old binary or
-  explicitly abandons their restart state during upgrade.
+- Pre-managed tasks are never imported. The user either drains them after reinstalling the
+  checksummed last v1 release or explicitly abandons their restart state during upgrade.
 - The durability promise covers aria2/aria2s process death and supervisor restart. On a
   provider that explicitly does not support directory sync, host or NAS power-loss
   durability is outside the guarantee and is reported as a capability warning.
@@ -657,16 +659,16 @@ There is no compatibility runtime in the new binary.
 For an old schema:
 
 1. `install` checks whether the known old supervisor is loaded/enabled or running. If it is
-   running, plain installation changes nothing and tells the user to finish/stop it with the
-   old aria2s binary; explicit discard authorizes the installer to stop it directly.
+   running, plain installation changes nothing and gives an exact command that reinstalls
+   the last v1 release; explicit discard authorizes the installer to stop it directly.
 2. Without explicit discard, once the old supervisor is confirmed stopped, install opens
    the known legacy session as a no-follow regular file and verifies stable identity/size
    before and after the read. Only an absent path or a stable zero-length file is empty;
    whitespace, comments, any other byte, unreadable/non-regular state, or concurrent change
    is conservatively not empty. This check precedes every service/state mutation and needs
    no legacy grammar.
-3. If the old session is not provably empty, plain install changes nothing. The user
-   either resumes with the old binary or supplies `--discard-legacy-tasks`.
+3. If the old session is not provably empty, plain install changes nothing. The user either
+   reinstalls v1 temporarily or supplies `--discard-legacy-tasks`.
 4. Explicit discard authorizes stopping the old supervisor and means “do not load old
    restart state into managed v2.” It does not delete, move, parse, validate, or archive that
    session or any payload/control file.
@@ -686,7 +688,7 @@ The crash outcomes remain small:
 
 | Last durable step | Recovery |
 | --- | --- |
-| Before old disable/unload | Old runtime remains authoritative and may still be used with the old binary. |
+| Before old disable/unload | Old runtime remains authoritative and may still be used after reinstalling the last v1 release. |
 | Old disabled/unloaded, before v2 artifact/state | No service can auto-start; rerun install or deliberately restore the old artifact. |
 | V2 artifact written, before schema commit | `managed-exec` rejects the old schema; rerun install. |
 | V2 schema committed, before enable/load/start | The exact v2 artifact and state agree; rerun install or start it normally. |
@@ -698,8 +700,9 @@ refuses to run before the v2 state commit.
 
 `start`, Dashboard, Add, and task mutation reject an old schema with `UpgradeRequired`.
 `doctor` and `install` remain available to explain the two choices. Users who need to drain
-legacy work must invoke the old binary; keeping a temporary exact-artifact validator in the
-new code would create a second service/runtime lifecycle for one upgrade window.
+legacy work temporarily reinstall the checksummed last-v1 release; keeping an exact-artifact
+validator in the new code would create a second service/runtime lifecycle for one upgrade
+window.
 
 ## Canonical Dashboard Read Model
 
@@ -895,10 +898,10 @@ recoverable from the `Published` manifest and retained metainfo.
 
 ### Breaking Upgrade
 
-Users with old active tasks need the old binary or must abandon restart state. The new
-binary does not offer a compatibility view. The cost is visible and temporary; avoiding a
-second runtime mode permanently reduces service and recovery complexity. Old session and
-payload files remain available for manual recovery.
+Users with old active tasks need to reinstall v1 temporarily or must abandon restart state.
+The new binary does not offer a compatibility view. The cost is visible and temporary;
+avoiding a second runtime mode permanently reduces service and recovery complexity. Old
+session and payload files remain available for manual recovery.
 
 ### Weak-Identity Manual Recovery
 
