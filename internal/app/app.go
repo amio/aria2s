@@ -458,7 +458,9 @@ func (app *App) inspectDashboard(ctx context.Context) (state.State, bool, error)
 		return state.State{}, false, fmt.Errorf("load state: %w", err)
 	}
 	if current.RuntimeSchemaVersion != 2 {
-		return current, false, errors.New("UpgradeRequired: Dashboard requires managed runtime v2")
+		return current, false, errors.New("UpgradeRequired: this Dashboard cannot manage the installed v1 runtime. " +
+			"To keep its tasks, finish them with the old aria2s binary, stop the v1 service, then run `aria2s install`. " +
+			"To abandon them, stop the v1 service with the old binary, then run `aria2s install --discard-legacy-tasks`")
 	}
 	if !isExecutable(current.Aria2cPath) {
 		return current, true, nil

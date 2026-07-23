@@ -224,6 +224,27 @@ func TestPrepareDashboardRepairsAndStartsWithoutWaitingForRPC(t *testing.T) {
 	}
 }
 
+func TestPrepareDashboardExplainsHowToReplaceLegacyRuntime(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	if err := state.Save(servicePaths.StateFile, state.State{RuntimeSchemaVersion: 1}); err != nil {
+		t.Fatalf("save legacy state: %v", err)
+	}
+	application := app.New(app.Options{Paths: servicePaths})
+
+	_, err := application.PrepareDashboard(context.Background())
+
+	if err == nil {
+		t.Fatal("expected legacy runtime to block Dashboard")
+	}
+	message := err.Error()
+	assertContains(t, message, "cannot manage the installed v1 runtime")
+	assertContains(t, message, "finish them with the old aria2s binary")
+	assertContains(t, message, "stop the v1 service")
+	assertContains(t, message, "`aria2s install`")
+	assertContains(t, message, "`aria2s install --discard-legacy-tasks`")
+}
+
 func TestStopSavesSessionBeforeStoppingService(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))

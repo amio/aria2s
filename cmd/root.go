@@ -18,6 +18,7 @@ func newRoot(application *app.App, runner dashboardRunner) *cobra.Command {
 		Use:                   "aria2s",
 		Short:                 "Your aria2c, always on — sets it up as a background service, manage downloads with a terminal dashboard",
 		Version:               Version,
+		SilenceErrors:         true,
 		SilenceUsage:          true,
 		DisableFlagsInUseLine: true,
 		RunE: func(command *cobra.Command, _ []string) error {
