@@ -174,25 +174,11 @@ func (app *App) ClearManaged(ctx context.Context, gid string) error {
 			return statusErr
 		}
 	}
-	if job.Phase == jobs.PhasePublishing && !rpcOK {
-		return errors.New("cannot prove native absence for publication recovery")
-	}
-	if job.Phase == jobs.PhasePublishing && job.ProblemCode != "PublicationRecoveryRequired" {
-		return errors.New("publication recovery metadata cannot be cleared in the current state")
-	}
 	if job.Phase == jobs.PhasePublishing {
-		scope, loadErr := repository.LoadStorage(job.StorageID)
-		if loadErr != nil || !storageMatches(scope, job) || job.PayloadIdentity.ReliableAcrossRename {
-			return errors.New("publication metadata abandon requires available weak-identity storage")
+		if !rpcOK {
+			return errors.New("cannot prove native absence for publication recovery")
 		}
-		source := filepath.Join(jobs.WorkDir(scope, gid), job.PayloadRoot)
-		destination := filepath.Join(job.TargetDir, job.PayloadRoot)
-		if _, sourceErr := os.Lstat(source); !errors.Is(sourceErr, os.ErrNotExist) {
-			return errors.New("publication metadata abandon requires an absent staging payload")
-		}
-		if _, destinationErr := os.Lstat(destination); destinationErr != nil {
-			return errors.New("publication metadata abandon requires an existing final payload")
-		}
+		return errors.New("publication must reconcile with Retry before Clear")
 	}
 	if job.ProblemCode == "CleanupFailed" {
 		return errors.New("managed cleanup must succeed before Clear")
@@ -211,8 +197,6 @@ func (app *App) ClearManaged(ctx context.Context, gid string) error {
 			return workErr
 		}
 	}
-	// Publishing + PublicationRecoveryRequired is the explicit metadata-only
-	// abandon path. Native absence was proven above; no payload path is touched.
 	return repository.DeleteCAS(gid, token)
 }
 
@@ -233,11 +217,6 @@ func (app *App) RetryManaged(ctx context.Context, gid string) error {
 	}
 	if !storageIdentityMatches(scope, job) {
 		return errors.New("StorageOffline: registered storage is unavailable or mismatched")
-	}
-	if job.Phase == jobs.PhasePending || job.Phase == jobs.PhaseStaged {
-		if err := probeRetryPublication(repository, scope, job); err != nil {
-			return err
-		}
 	}
 	if job.Phase == jobs.PhaseRemoved {
 		current, loadErr := state.Load(app.options.Paths.StateFile)
@@ -528,28 +507,6 @@ func (app *App) persistCurrentProblem(repository *jobs.Repository, gid, code str
 	return persistJobProblem(repository, currentJob, token, code, cause)
 }
 
-func probeRetryPublication(repository *jobs.Repository, scope jobs.StorageScope, job jobs.Job) error {
-	target, err := publication.InspectTarget(job.TargetDir)
-	if err != nil {
-		return fmt.Errorf("StorageOffline: inspect retry target: %w", err)
-	}
-	if target.Identity.MountID != job.TargetIdentity.MountID ||
-		(job.TargetIdentity.ReliableAcrossRename && target.Identity.ObjectID != job.TargetIdentity.ObjectID) {
-		return errors.New("StorageMismatch: retry target identity changed")
-	}
-	storageRoot := filepath.Join(scope.StagingAnchor, ".aria2s_staging", scope.ID)
-	probe, err := publication.ProbeNoReplace(storageRoot, target.Path)
-	if err != nil {
-		return fmt.Errorf("target publication retry probe: %w", err)
-	}
-	scope.Capability = jobs.PublicationCapability{
-		NoReplace:        true,
-		IdentityReliable: scope.Marker.ReliableAcrossRename,
-		DirectorySync:    !probe.DirectorySyncUnsupported,
-	}
-	return repository.SaveStorage(scope)
-}
-
 type AddRequest struct {
 	Source    string
 	TargetDir string
@@ -589,18 +546,6 @@ func (app *App) AddManaged(ctx context.Context, request AddRequest) (ManagedAddR
 	repository := jobs.New(app.options.Paths.StateDir)
 	scope, err := ensureStorageScope(repository, target)
 	if err != nil {
-		return ManagedAddResult{}, err
-	}
-	storageRoot := filepath.Join(scope.StagingAnchor, ".aria2s_staging", scope.ID)
-	if err := os.MkdirAll(storageRoot, 0o700); err != nil {
-		return ManagedAddResult{}, err
-	}
-	probe, err := publication.ProbeNoReplace(storageRoot, target.Path)
-	if err != nil {
-		return ManagedAddResult{}, fmt.Errorf("target publication probe: %w", err)
-	}
-	scope.Capability = jobs.PublicationCapability{NoReplace: true, IdentityReliable: scope.Marker.ReliableAcrossRename, DirectorySync: !probe.DirectorySyncUnsupported}
-	if err := repository.SaveStorage(scope); err != nil {
 		return ManagedAddResult{}, err
 	}
 	id, err := randomID()
@@ -852,7 +797,7 @@ func (app *App) ManagedHook(ctx context.Context, event, gid string) error {
 	if err != nil || !publication.SameObject(identity, currentIdentity) {
 		return errors.New("PublicationPayloadMismatch: payload identity changed before publication")
 	}
-	move, err := publication.MoveNoReplaceExpected(source, destination, identity, publicationIdentity(job.TargetIdentity))
+	move, err := publication.MoveExpected(source, destination, identity, publicationIdentity(job.TargetIdentity))
 	if err != nil {
 		return persistJobProblem(repository, job, token, publicationProblem(err), err)
 	}
@@ -891,7 +836,7 @@ func publicationProblem(err error) string {
 	switch {
 	case errors.Is(err, publication.ErrConflict):
 		return "PublicationConflict"
-	case errors.Is(err, publication.ErrCrossDevice), errors.Is(err, publication.ErrUnsupported):
+	case errors.Is(err, publication.ErrCrossDevice):
 		return "PublicationUnsupported"
 	default:
 		return "PublicationStateUncertain"

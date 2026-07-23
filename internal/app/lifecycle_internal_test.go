@@ -328,14 +328,6 @@ func TestStagedStorageRetryRestoresEmptyWorkTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	job.ProblemCode = "StorageOffline"
-	scope, err := repository.LoadStorage(job.StorageID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	scope.Capability = jobs.PublicationCapability{}
-	if err := repository.SaveStorage(scope); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := repository.SaveCAS(job, token); err != nil {
 		t.Fatal(err)
 	}
@@ -346,10 +338,6 @@ func TestStagedStorageRetryRestoresEmptyWorkTask(t *testing.T) {
 	job, _, err = repository.Load(job.ID)
 	if err != nil || job.ProblemCode != "" || rpc.status.GID != job.ID {
 		t.Fatalf("staged Retry did not converge: job=%+v status=%+v err=%v", job, rpc.status, err)
-	}
-	scope, err = repository.LoadStorage(job.StorageID)
-	if err != nil || !scope.Capability.NoReplace {
-		t.Fatalf("Retry did not refresh publication capability: %+v err=%v", scope.Capability, err)
 	}
 }
 
@@ -472,7 +460,7 @@ func TestRemovedPublishedCleanupMustConvergeBeforeClear(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := publication.MoveNoReplace(payload, filepath.Join(target, "payload.bin")); err != nil {
+	if _, err := publication.Move(payload, filepath.Join(target, "payload.bin")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(workDir, "payload.bin.aria2"), []byte("control"), 0o600); err != nil {
@@ -509,7 +497,7 @@ func TestPublishingActionsMatchLifecycleMutations(t *testing.T) {
 	}
 }
 
-func TestWeakIdentityPublicationAbandonRequiresDestinationOnlyState(t *testing.T) {
+func TestPublishingClearRequiresRetryReconciliation(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	target := filepath.Join(root, "downloads")
@@ -544,7 +532,7 @@ func TestWeakIdentityPublicationAbandonRequiresDestinationOnlyState(t *testing.T
 		t.Fatal(err)
 	}
 	destination := filepath.Join(target, "payload.bin")
-	if _, err := publication.MoveNoReplace(source, destination); err != nil {
+	if _, err := publication.Move(source, destination); err != nil {
 		t.Fatal(err)
 	}
 	job.Phase, job.PayloadRoot, job.ProblemCode = jobs.PhasePublishing, "payload.bin", "PublicationRecoveryRequired"
@@ -553,8 +541,8 @@ func TestWeakIdentityPublicationAbandonRequiresDestinationOnlyState(t *testing.T
 	if _, err := repository.SaveCAS(job, token); err != nil {
 		t.Fatal(err)
 	}
-	if err := application.ClearManaged(context.Background(), job.ID); err != nil {
-		t.Fatal(err)
+	if err := application.ClearManaged(context.Background(), job.ID); err == nil {
+		t.Fatal("Clear accepted unresolved publication")
 	}
 	if data, err := os.ReadFile(destination); err != nil || string(data) != "payload" {
 		t.Fatalf("metadata abandon touched final payload: %q err=%v", data, err)

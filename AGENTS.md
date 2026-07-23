@@ -36,7 +36,7 @@
 - User download tuning remains authoritative in `~/.aria2/aria2.conf`; aria2s passes only managed RPC and session arguments through the service definition.
 - The local JSON-RPC boundary is the sole control and observation channel between aria2s and the managed aria2c process.
 - Durable job ownership and publication intent live in versioned manifests; aria2's native v2 session remains the transport-resume artifact and is normalized into a fresh startup input before every managed exec.
-- Filesystem publication is one same-filesystem kernel no-replace rename of a single payload root; `publication` owns path/identity/syscall facts while `app` owns the detach/move/rehydrate transaction.
+- Filesystem publication is one guarded, portable same-filesystem rename of a single payload root; `publication` owns path/identity/filesystem facts while `app` owns the detach/move/rehydrate transaction. Existing destinations are rejected before the move, while concurrent external target writers are outside the guarantee.
 
 ## Cross-Layer Contracts
 

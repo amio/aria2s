@@ -1,7 +1,8 @@
 // Package publication owns the filesystem half of managed publication. It
 // validates paths without following the payload root, proves same-mount
-// placement, performs one kernel no-replace rename, and reports directory-sync
-// capability separately from rename success.
+// placement, performs one guarded portable rename, and reports directory-sync
+// capability separately from rename success. Existing destinations are checked
+// before the move; concurrent external target writers are outside the contract.
 package publication
 
 import (
@@ -18,7 +19,6 @@ import (
 var (
 	ErrConflict        = errors.New("publication destination already exists")
 	ErrCrossDevice     = errors.New("publication paths are on different filesystems")
-	ErrUnsupported     = errors.New("kernel no-replace rename is unsupported")
 	ErrMountRootTarget = errors.New("target directory cannot be a mount root")
 )
 
@@ -104,7 +104,7 @@ func ValidatePayloadRoot(workDir, relative string) (string, Identity, error) {
 	return path, identity, err
 }
 
-func MoveNoReplace(source, destination string) (MoveResult, error) {
+func Move(source, destination string) (MoveResult, error) {
 	sourceIdentity, err := Identify(source)
 	if err != nil {
 		return MoveResult{}, err
@@ -117,86 +117,55 @@ func MoveNoReplace(source, destination string) (MoveResult, error) {
 	if sourceIdentity.MountID != parentIdentity.MountID {
 		return MoveResult{}, ErrCrossDevice
 	}
-	return MoveNoReplaceExpected(source, destination, sourceIdentity, parentIdentity)
+	return MoveExpected(source, destination, sourceIdentity, parentIdentity)
 }
 
-// MoveNoReplaceExpected binds the rename to identities observed before the
-// publication transaction, closing path-replacement races at both parents.
-func MoveNoReplaceExpected(source, destination string, sourceIdentity, destinationParentIdentity Identity) (MoveResult, error) {
+// MoveExpected binds a portable rename to identities observed before the
+// publication transaction. The destination preflight avoids intentional
+// replacement, but an external writer can still race the ordinary rename.
+func MoveExpected(source, destination string, sourceIdentity, destinationParentIdentity Identity) (MoveResult, error) {
 	if sourceIdentity.MountID != destinationParentIdentity.MountID {
 		return MoveResult{}, ErrCrossDevice
 	}
-	return renameNoReplace(filepath.Dir(source), filepath.Base(source), filepath.Dir(destination), filepath.Base(destination), sourceIdentity, destinationParentIdentity)
-}
-
-func ProbeNoReplace(sourceParent, destinationParent string) (result MoveResult, resultErr error) {
-	source, err := os.CreateTemp(sourceParent, ".aria2s-probe-")
+	currentSource, err := Identify(source)
 	if err != nil {
 		return MoveResult{}, err
 	}
-	sourcePath := source.Name()
-	defer cleanupProbePath(sourcePath, sourceParent, &result, &resultErr)
-	if _, err := source.WriteString("source"); err != nil {
-		source.Close()
-		return MoveResult{}, err
+	if !SameObject(currentSource, sourceIdentity) {
+		return MoveResult{}, errors.New("publication source identity changed")
 	}
-	if err := source.Close(); err != nil {
-		return MoveResult{}, err
-	}
-	destination := filepath.Join(destinationParent, filepath.Base(sourcePath)+"-destination")
-	defer cleanupProbePath(destination, destinationParent, &result, &resultErr)
-	destinationFile, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	destinationParent := filepath.Dir(destination)
+	currentParent, err := Identify(destinationParent)
 	if err != nil {
 		return MoveResult{}, err
 	}
-	if _, err := destinationFile.WriteString("destination"); err != nil {
-		destinationFile.Close()
+	if !SameObject(currentParent, destinationParentIdentity) {
+		return MoveResult{}, errors.New("publication destination parent identity changed")
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return MoveResult{}, ErrConflict
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return MoveResult{}, err
 	}
-	if err := destinationFile.Close(); err != nil {
-		return MoveResult{}, err
+	if err := os.Rename(source, destination); err != nil {
+		switch {
+		case errors.Is(err, syscall.EEXIST), errors.Is(err, syscall.ENOTEMPTY):
+			return MoveResult{}, ErrConflict
+		case errors.Is(err, syscall.EXDEV):
+			return MoveResult{}, ErrCrossDevice
+		default:
+			return MoveResult{}, err
+		}
 	}
-	if _, err := MoveNoReplace(sourcePath, destination); !errors.Is(err, ErrConflict) {
-		return MoveResult{}, fmt.Errorf("no-replace collision probe: %w", err)
-	}
-	data, err := os.ReadFile(destination)
-	if err != nil || string(data) != "destination" {
-		return MoveResult{}, errors.New("no-replace collision probe modified destination")
-	}
-	before, err := Identify(sourcePath)
-	if err != nil {
-		return MoveResult{}, err
-	}
-	if err := os.Remove(destination); err != nil {
-		return MoveResult{}, err
-	}
-	result, err = MoveNoReplace(sourcePath, destination)
-	if err != nil {
-		return MoveResult{}, err
-	}
-	after, err := Identify(destination)
-	if err != nil {
-		return MoveResult{}, err
-	}
-	if !SameObject(before, after) {
-		return MoveResult{}, errors.New("publication probe did not preserve identity")
+	result := MoveResult{}
+	for _, parent := range []string{filepath.Dir(source), destinationParent} {
+		if err := atomicfile.SyncDirectory(parent); isDirectorySyncUnsupported(err) {
+			result.DirectorySyncUnsupported = true
+		} else if err != nil {
+			return result, fmt.Errorf("sync publication directory: %w", err)
+		}
 	}
 	return result, nil
-}
-
-func cleanupProbePath(path, parent string, result *MoveResult, resultErr *error) {
-	removeErr := os.Remove(path)
-	if errors.Is(removeErr, os.ErrNotExist) {
-		removeErr = nil
-	}
-	syncErr := atomicfile.SyncDirectory(parent)
-	if isDirectorySyncUnsupported(syncErr) {
-		result.DirectorySyncUnsupported = true
-		syncErr = nil
-	}
-	if removeErr != nil || syncErr != nil {
-		*resultErr = errors.Join(*resultErr, removeErr, syncErr)
-	}
 }
 
 func findMountPoint(path string, device uint64) (string, error) {
@@ -216,5 +185,3 @@ func findMountPoint(path string, device uint64) (string, error) {
 		current = parent
 	}
 }
-
-var errDirectorySyncUnsupported = errors.New("directory sync unsupported")

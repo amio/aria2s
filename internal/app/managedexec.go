@@ -164,7 +164,7 @@ func (app *App) ManagedExec(ctx context.Context) error {
 var managedExec = managedruntime.Exec
 
 func storageMatches(scope jobs.StorageScope, job jobs.Job) bool {
-	return scope.Capability.NoReplace && storageIdentityMatches(scope, job)
+	return storageIdentityMatches(scope, job)
 }
 
 func storageIdentityMatches(scope jobs.StorageScope, job jobs.Job) bool {
@@ -207,7 +207,7 @@ func reconcilePublishing(repository *jobs.Repository, job jobs.Job, token jobs.T
 			}
 			token = next
 		}
-		if move, err := publication.MoveNoReplaceExpected(source, destination, sourceIdentity, publicationIdentity(job.TargetIdentity)); err == nil {
+		if move, err := publication.MoveExpected(source, destination, sourceIdentity, publicationIdentity(job.TargetIdentity)); err == nil {
 			finalizeReconciledPublication(repository, &job)
 			if move.DirectorySyncUnsupported && job.ProblemCode == "" {
 				job.ProblemCode = "PowerLossDurabilityUnavailable"
@@ -218,9 +218,7 @@ func reconcilePublishing(repository *jobs.Repository, job jobs.Job, token jobs.T
 			job.ProblemCode = publicationProblem(err)
 		}
 	} else if !sourceExists && destinationExists {
-		if !job.PayloadIdentity.ReliableAcrossRename {
-			job.ProblemCode = "PublicationRecoveryRequired"
-		} else if destinationIdentity.MountID == job.PayloadIdentity.MountID && destinationIdentity.ObjectID == job.PayloadIdentity.ObjectID {
+		if !job.PayloadIdentity.ReliableAcrossRename || (destinationIdentity.MountID == job.PayloadIdentity.MountID && destinationIdentity.ObjectID == job.PayloadIdentity.ObjectID) {
 			finalizeReconciledPublication(repository, &job)
 			next, saveErr := repository.SaveCAS(job, token)
 			return job, next, saveErr
@@ -329,7 +327,7 @@ func inspectStartupFact(repository *jobs.Repository, job jobs.Job, scope jobs.St
 
 func transientStartupProblem(code string) bool {
 	switch code {
-	case "StorageOffline", "RestartStateMissing", "PublicationRecoveryRequired":
+	case "StorageOffline", "RestartStateMissing":
 		return true
 	default:
 		return false

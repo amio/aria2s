@@ -41,7 +41,7 @@ func TestReconcilePublishingConvergesMoveAndReliablePostMoveCrash(t *testing.T) 
 				t.Fatal(err)
 			}
 			if afterRename {
-				if _, err := publication.MoveNoReplace(source, filepath.Join(target, "payload.bin")); err != nil {
+				if _, err := publication.Move(source, filepath.Join(target, "payload.bin")); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -59,6 +59,48 @@ func TestReconcilePublishingConvergesMoveAndReliablePostMoveCrash(t *testing.T) 
 				t.Fatalf("data=%q err=%v", data, err)
 			}
 		})
+	}
+}
+
+func TestReconcilePublishingConvergesWeakIdentityPostMoveCrash(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	repository := jobs.New(filepath.Join(root, "state"))
+	scope := jobs.StorageScope{ID: "fedcba9876543210", MountPoint: root, StagingAnchor: root}
+	work := jobs.WorkDir(scope, "0123456789abcdef")
+	if err := os.MkdirAll(work, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(work, "payload.bin")
+	if err := os.WriteFile(source, []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := publication.Identify(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetIdentity, err := publication.Identify(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := jobs.Job{ID: "0123456789abcdef", Source: "https://example.test/payload", TargetDir: target, TargetIdentity: jobIdentity(targetIdentity), StorageID: scope.ID, Phase: jobs.PhasePublishing, ActivityIntent: jobs.ActivityRunning, PayloadRoot: "payload.bin", PayloadIdentity: jobIdentity(identity)}
+	job.PayloadIdentity.ReliableAcrossRename = false
+	token, err := repository.Create(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := publication.Move(source, filepath.Join(target, "payload.bin")); err != nil {
+		t.Fatal(err)
+	}
+	job, _, err = reconcilePublishing(repository, job, token, scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Phase != jobs.PhasePublished || job.ProblemCode != "" || job.ActivityIntent != jobs.ActivityStopped {
+		t.Fatalf("weak-identity publication did not converge: %+v", job)
 	}
 }
 
@@ -121,7 +163,7 @@ func TestReconcileHTTPDescriptorPreservesRunningSeedIntent(t *testing.T) {
 	if err := repository.WriteMetainfo(job.ID, metainfo); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := publication.MoveNoReplace(source, filepath.Join(target, "payload.bin")); err != nil {
+	if _, err := publication.Move(source, filepath.Join(target, "payload.bin")); err != nil {
 		t.Fatal(err)
 	}
 	job, _, err = reconcilePublishing(repository, job, token, scope)

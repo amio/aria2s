@@ -169,11 +169,7 @@ func (session *DashboardSession) availableActions(classification TaskClassificat
 		if job.ProblemCode == "" {
 			return nil
 		}
-		actions := []string{"retry"}
-		if job.ProblemCode == "PublicationRecoveryRequired" {
-			actions = append(actions, "clear")
-		}
-		return actions
+		return []string{"retry"}
 	}
 	var actions []string
 	switch classification.Status {
@@ -185,9 +181,7 @@ func (session *DashboardSession) availableActions(classification TaskClassificat
 		actions = append(actions, "resume", "remove")
 	case StatusError:
 		actions = append(actions, "retry")
-		if managed && job.Phase == jobs.PhasePublishing && job.ProblemCode == "PublicationRecoveryRequired" {
-			actions = append(actions, "clear")
-		} else if !managed || (job.Phase != jobs.PhasePublishing && job.Phase != jobs.PhaseRemoved) {
+		if !managed || (job.Phase != jobs.PhasePublishing && job.Phase != jobs.PhaseRemoved) {
 			actions = append(actions, "remove")
 		}
 	case StatusFinished:

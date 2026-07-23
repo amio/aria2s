@@ -45,19 +45,12 @@ type ObjectIdentity struct {
 	ReliableAcrossRename bool   `json:"reliableAcrossRename"`
 }
 
-type PublicationCapability struct {
-	NoReplace        bool `json:"noReplace"`
-	IdentityReliable bool `json:"identityReliable"`
-	DirectorySync    bool `json:"directorySync"`
-}
-
 type StorageScope struct {
-	Version       int                   `json:"version"`
-	ID            string                `json:"id"`
-	MountPoint    string                `json:"mountPoint"`
-	StagingAnchor string                `json:"stagingAnchor"`
-	Marker        ObjectIdentity        `json:"marker"`
-	Capability    PublicationCapability `json:"capability"`
+	Version       int            `json:"version"`
+	ID            string         `json:"id"`
+	MountPoint    string         `json:"mountPoint"`
+	StagingAnchor string         `json:"stagingAnchor"`
+	Marker        ObjectIdentity `json:"marker"`
 }
 
 type Job struct {

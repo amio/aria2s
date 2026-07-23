@@ -20,7 +20,7 @@ The irreducible problem is the conjunction of three product promises:
 2. publication never allocates a second payload or downloads the bytes again;
 3. unfinished downloads and requested seeding survive process restart.
 
-The first two promises force same-filesystem staging plus a no-replace rename. The third
+The first two promises force same-filesystem staging plus one rename without copying. The third
 forces aria2s to detach aria2 before the rename and, for BitTorrent, rehydrate one seed from
 retained metainfo at the final path. That transaction is the lifecycle core; simplifying it
 away would weaken the product rather than simplify the implementation.
@@ -42,7 +42,7 @@ Everything around that core is intentionally smaller than the previous proposal:
    HTTP block may be normalized with a safely inferred output root; a missing block beside
    partial artifacts is retained as a recoverable error rather than guessed.
 3. **One atomic publication transaction.** Complete payloads are detached according to
-   their native status, moved once with kernel no-replace semantics, and optionally re-added
+   their native status, conflict-checked and moved once with portable same-filesystem rename, and optionally re-added
    as a final seed. Active torrent seeds require pause/remove; completed HTTP results require
    only result clear. `JobPhase` makes only this transaction durable across crashes.
 4. **No persistent catalog subsystem.** Dashboard scans manifests on each asynchronous
@@ -56,11 +56,10 @@ Everything around that core is intentionally smaller than the previous proposal:
    the same binary path, so reinstalling latest afterward leaves no compatibility binary.
    Managed v2 uses a new versioned session path, so discard can leave the old session and all
    payloads untouched; no archive transaction or legacy session parser is needed.
-6. **Weak-identity crash recovery is fail-closed without a confirmation workflow.** Normal
-   publication is allowed when no-replace rename works. If a crash leaves only the
-   destination and that storage cannot prove object identity across rename, aria2s reports
-   a manual recovery procedure. MVP has no `ConfirmPublication` use case or authorization
-   path for this rare state.
+6. **Weak-identity crash recovery follows path presence.** Publication uses ordinary rename
+   on local and network filesystems. If a crash leaves only the destination, the durable
+   `Publishing` state plus source absence is enough to converge to `Published`; reliable
+   filesystems additionally verify the preserved object identity.
 7. **Single identity and canonical status remain.** One managed job ID is its only aria2
    GID. `follow-torrent=false` prevents implicit child tasks. The app layer alone derives
    the seven product statuses and action capabilities for both managed and unmanaged rows.
@@ -102,13 +101,12 @@ copy there. The viable mechanism is detach, rename, and rehydrate.
 - Supported sources remain HTTP(S) and magnet. Each job yields one publishable root: one
   file for HTTP/single-file torrents or one root directory for multi-file torrents.
 - “Target stays clean” means no partial payload, `.aria2` control file, or saved `.torrent`
-  metadata is created below `TargetDir`. Byte-sized capability probes created and removed
-  during Add are the only exception.
+  metadata or capability probe is created below `TargetDir`.
 - The target already exists and belongs to a filesystem that can host one private staging
   namespace outside the target. A target equal to the mount root is unsupported because no
   same-mount staging anchor can then remain outside it.
-- macOS and Linux are in scope. A filesystem that cannot provide kernel no-replace rename is
-  unsupported for managed publication; there is no racy or copy fallback.
+- macOS and Linux are in scope. Publication requires ordinary same-filesystem rename, not
+  optional no-replace syscall support; there is no copy fallback.
 - Job counts are expected to remain in the low hundreds for MVP. A full local manifest scan
   per asynchronous Dashboard refresh is acceptable.
 - Local state is private to the user. aria2s still parses native session output
@@ -123,7 +121,8 @@ copy there. The viable mechanism is detach, rename, and rehydrate.
 ## Goals
 
 - Keep partial artifacts out of the target and publish exactly one complete root atomically.
-- Never replace an existing target entry, even under a concurrent external write.
+- Reject a target entry that already exists before publication. Concurrent external writes
+  during the narrow preflight/rename interval are outside the guarantee.
 - Never copy, clone, hard-link, or redownload a complete payload as part of publication.
 - Resume normal unfinished transfers and requested final seeds after graceful restart and
   representative abrupt process death.
@@ -141,7 +140,7 @@ copy there. The viable mechanism is detach, rename, and rehydrate.
   receive bounded native controls only.
 - Make cross-filesystem publication atomic or fall back to copying.
 - Auto-suffix a conflicting final name.
-- Automatically accept a weak-identity destination-only crash state.
+- Provide a strong no-overwrite guarantee against concurrent external target writers.
 - Make every corrupt or missing native session automatically reconstructible. If safe input
   cannot be derived without risking a second payload, aria2s retains the bytes and asks for
   explicit manual recovery.
@@ -158,7 +157,9 @@ copy there. The viable mechanism is detach, rename, and rehydrate.
 1. `WorkDir` is one isolated job directory in a registered same-filesystem staging scope
    outside `TargetDir`.
 2. Publication moves one payload root, never its children individually.
-3. The final syscall has no-replace semantics. Existing destination content is untouched.
+3. Publication checks that the destination is absent immediately before ordinary rename.
+   Existing content observed by aria2s is untouched; concurrent external writers are not a
+   supported synchronization boundary.
 4. `Publishing` plus the relative payload root and observed identity is durable before aria2
    is detached. `Published` is durable against the stated process-crash model after the
    rename and every supported directory sync; an actual sync I/O error or unknown outcome
@@ -258,7 +259,7 @@ flowchart TB
 | `internal/app` | Use-case sequencing, managed/unmanaged policy, lifecycle reconciliation, pure session-overlay planning, classification, action capabilities | Session grammar, persistence encoding, RPC wire fields, filesystem syscalls, supervisor syntax, TUI layout |
 | `internal/jobs` | Versioned manifests/storage scopes, CAS writes, per-job locks, retained metainfo, full scans | Native progress, RPC, session grammar, publication syscalls, UI grouping |
 | `internal/aria2` | JSON-RPC, native facts/mutations, strict/lossless session parsing, option schema, deterministic input encoding | Manifest joins, product status, target policy, job phases, recovery wording |
-| `internal/publication` | No-follow path validation, mount/object facts, no-replace move, directory durability, cleanup primitives | Jobs, RPC ordering, user recovery policy |
+| `internal/publication` | No-follow path validation, mount/object facts, guarded portable move, directory durability, cleanup primitives | Jobs, RPC ordering, user recovery policy |
 | `internal/runtime` | Instance lease/FD inheritance, hook/worker mechanics, atomic startup input, and final `exec` | Choosing job policy, parsing sessions, interpreting phases, supervisor semantics |
 | `internal/service` | Structured launchd/systemd inspection and install/start/stop | Task/session policy, diagnosis wording |
 | `internal/doctor` | Stable problem codes, wording, recovery steps, redaction | Lifecycle mutation or storage probing |
@@ -332,7 +333,6 @@ type StorageScope struct {
     MountPoint    string
     StagingAnchor string
     Marker        ObjectIdentity
-    Capability    PublicationCapability
 }
 
 type Job struct {
@@ -397,16 +397,14 @@ publication problem and rejects Remove rather than discarding the only recovery 
    `.aria2s_staging/<storage-id>/`. aria2 receives that directory as `dir`; there is no
    target-name, `work`, `control`, or per-job marker layer.
 3. Create the manifest as `Pending` using a random 16-hex ID/GID.
-4. On StorageScope registration or marker-generation change, use byte-sized entries to
-   classify no-replace support and identity preservation once. Every Add still validates
-   target identity/same-mount placement and performs one tiny cross-parent no-replace probe
-   against the actual staging/target parents, because directory ACLs may differ on NAS.
-   Remove only the exact probe entries; no preflight bit is persisted.
+4. Every Add validates target identity and same-mount staging placement. It does not run a
+   speculative rename capability probe: file probes cannot prove directory rename behavior,
+   and optional no-replace syscalls reject otherwise usable NAS/removable filesystems.
 5. Add the URI with managed invariants: `gid`, `dir`, `allow-overwrite=false`,
    `auto-file-renaming=false`, `remove-control-file=false`, and
    `follow-torrent=false`. Magnets additionally use metadata-only/save/load options.
 6. After confirmed Add, persist `Staged` and request a native session checkpoint. Unknown
-   Add stays `Pending`; explicit Retry repeats the target probe, reconciles live/session GID
+   Add stays `Pending`; explicit Retry revalidates storage, reconciles live/session GID
    evidence, and only then advances or resubmits. Deterministic rejection records a problem
    for Retry. A failed checkpoint retains the managed task and reports degraded restart
    durability rather than pretending Add did not happen.
@@ -470,19 +468,18 @@ Once aria2 reports one complete payload root:
    `removeDownloadResult` not-found after force-remove is idempotent success;
 5. reopen source parent, target directory, storage marker, and payload root without
    following symlinks; revalidate mount and identities;
-6. move the root once using kernel no-replace rename;
+6. reject an observed destination conflict, then move the root once using ordinary
+   same-filesystem rename;
 7. sync supported source/destination parents and persist `Published`; for HTTP also persist
    `Stopped` in the same manifest write;
 8. if this is a running torrent, re-add retained metainfo at `TargetDir` under the same GID
    and confirm every native file path is below the final root.
 
-Platform operations are:
-
-- Linux: `renameat2(..., RENAME_NOREPLACE)`;
-- macOS: `renameatx_np(..., RENAME_EXCL)`.
-
-`golang.org/x/sys/unix` becomes a direct dependency. Unsupported and cross-device results
-are errors. There is no ordinary-rename, hard-link, clone, or copy fallback.
+Both platforms use Go's portable `os.Rename` after source, destination-parent, mount, and
+destination-absence validation. Cross-device results are errors. There is no hard-link,
+clone, or copy fallback. POSIX rename may replace a destination created by another process
+between the absence check and the syscall; aria2s deliberately does not claim synchronization
+with concurrent external target writers.
 
 The seed interruption is intentional. A conflict retains the complete staging root but does
 not re-add a staging seed; Retry performs one publication attempt and creates only the final
@@ -495,9 +492,9 @@ The state table is deliberately limited to the publication boundary:
 | Durable/observed facts | Recovery |
 | --- | --- |
 | `Publishing`, native GID exists | Finish the status-aware detach/clear; do not move while ownership is uncertain. |
-| GID absent, matching source exists, final absent | Retry the no-replace move. |
+| GID absent, matching source exists, final absent | Retry the guarded portable move. |
 | Source absent, final reliable identity matches | Treat rename as committed, sync, persist `Published`. |
-| Source absent, final exists, identity is weak/unreliable | Keep `Publishing`; report `PublicationRecoveryRequired`; start no I/O. |
+| Source absent, final exists, identity is weak/unreliable | Treat the durable move as committed and persist `Published`. |
 | Source and final both exist | Keep both, report conflict/external mutation, never overwrite. |
 | Source absent, final differs or both are absent | Retain manifest/metainfo and report payload state error. |
 | `Published`, running torrent lacks seed | Re-add final seed from retained metainfo. |
@@ -505,20 +502,10 @@ The state table is deliberately limited to the publication boundary:
 | Storage absent or normally failing | Omit this job; keep intent for explicit Retry. |
 | Mounted storage marker/target identity mismatches | Fail closed; never auto-adopt replacement storage. |
 
-For weak-identity destination-only recovery, MVP exposes two deliberately simple outcomes:
-
-1. **Recover managed publication:** the user inspects the paths and moves the final root
-   back to the exact empty `WorkDir`. Its presence there is an explicit human trust signal;
-   Retry revalidates the root structure/path, captures a fresh identity, and performs the
-   ordinary no-replace publication transaction.
-2. **Keep the final payload unmanaged:** when no live GID exists, Clear may abandon only the
-   manifest/metainfo/history. It never touches source or final filesystem entries. The
-   payload remains where the user left it and permanently loses aria2s-managed Retry and
-   reseeding unless added later through a separately designed adoption feature.
-
-aria2s never accepts the destination as `Published` through a confirmation flag. This is
-worse UX in a rare crash window but removes a privileged workflow and prevents a guess from
-becoming durable truth.
+Weak-identity storage cannot prove inode continuity across rename. The durable `Publishing`
+record, absence of the private staging source, and presence of the final destination form
+the recovery evidence instead. This avoids a manual confirmation/abandon workflow on NAS
+while reliable local filesystems retain the stronger identity check.
 
 ### Cleanup
 
@@ -527,9 +514,8 @@ After `Published` and final seed rehydration are confirmed, remove the now paylo
 allows deletion of an unpublished staging payload only after native ownership is confirmed
 absent; it never deletes a published final root. Cleanup failure retains the tombstone so a
 restart cannot reload the task. Clear normally removes history/control metadata only after
-those ownership and cleanup conditions are satisfied. Its one exceptional use on
-`Publishing + PublicationRecoveryRequired` is the explicit metadata-only abandon described
-above: no live GID may exist and no payload path is touched.
+those ownership and cleanup conditions are satisfied. A `Publishing` task must reconcile
+through Retry before Clear can remove its metadata.
 
 The storage registration and empty storage-ID marker are not automatically collected. This
 avoids reference counting and marker-adoption races in MVP.
@@ -787,7 +773,7 @@ problems such as:
 
 - `UpgradeRequired` / `LegacySessionPresent`;
 - `StorageOffline` / `StorageMismatch`;
-- `PublicationConflict` / `PublicationRecoveryRequired`;
+- `PublicationConflict` / `PublicationStateUncertain`;
 - `RestartStateMissing` / `CorruptManifest`;
 - `ManagedIdentityConflict`;
 - `UnmanagedTasksWouldBeLost`;
@@ -795,8 +781,8 @@ problems such as:
 - controller/session/RPC failures required to start the lifecycle.
 
 `start`, `doctor`, and Dashboard render the same catalog. Dashboard health work remains
-asynchronous and preserves last-known-good tasks. Task Retry performs its own one-shot
-storage/publication probe; ordinary refresh never mutates storage state.
+asynchronous and preserves last-known-good tasks. Task Retry revalidates registered storage;
+ordinary refresh never mutates storage state.
 
 Managed IPv4/IPv6 DHT arguments, routing-table paths, bootstrap entries, and the complete
 supervisor/config/log Inspector remain a follow-up release. They do not change the job,
@@ -832,8 +818,8 @@ into staging after unpause.
 ### Hard-Link, Clone, or Copy Publication
 
 Rejected. Hard links are unavailable on important macOS SMB paths; clones are not portable
-to NAS; copies double space and write traffic. Same-filesystem rename is the only supported
-one-allocation publication primitive.
+to NAS; copies double space and write traffic. Ordinary same-filesystem rename is the only
+supported one-allocation publication primitive.
 
 ### Path Convention Without Manifests
 
@@ -930,7 +916,7 @@ MVP scale and is observable. Optimization is deferred until measurements justify
 
 On aria2 1.37.0 and APFS, disposable black-box spikes established:
 
-1. staging remained the only payload location until one no-replace move;
+1. staging remained the only payload location until one same-filesystem move;
 2. `changeOption(dir)` caused a second download and is unusable;
 3. force-remove allowed immediate same-GID torrent re-add; from a BitTorrent completion
    hook, `removeDownloadResult` may already return not-found and must be idempotent success;
@@ -939,7 +925,8 @@ On aria2 1.37.0 and APFS, disposable black-box spikes established:
 5. `follow-torrent=false` kept magnet metadata and payload under one GID;
 6. natural seed completion emitted the completion hook while graceful shutdown did not
    falsely persist stopped intent;
-7. `renamex_np(RENAME_EXCL)` preserved identity and rejected file/directory collisions;
+7. the earlier `renamex_np(RENAME_EXCL)` spike preserved identity and rejected collisions,
+   but later NAS/removable-disk evidence showed that optional operation was not portable;
 8. a native saved HTTP session block contained the URI plus `gid`, `pause=true`, `dir`,
    `allow-overwrite=false`, `auto-file-renaming=false`,
    `remove-control-file=false`, and `follow-torrent=false`, confirming that managed
@@ -1019,9 +1006,8 @@ phase/artifact combination:
 - one reusable local atomic-write primitive crash suite rather than per-caller duplication;
 - same-GID descriptor promotion and unknown RPC outcome reconciliation;
 - file and multi-file payload-root validation with no-follow path checks;
-- representative macOS SMB, Linux SMB, and NFS probes for no-replace rename, identity
-  reliability, storage replacement, directory sync, and disconnect behavior;
-- StorageScope capability caching plus per-target ACL/no-replace permission probes;
+- representative macOS SMB, Linux SMB, and NFS checks for ordinary file/directory rename,
+  identity reliability, storage replacement, directory sync, and disconnect behavior;
 - one unavailable storage alongside one healthy storage;
 - managed-GID `tellStatus` completion, nested not-found faults, complete unmanaged census,
   seven-status/action/count invariants, and last-known-good Dashboard behavior;
@@ -1040,9 +1026,9 @@ change one of the core boundary outcomes.
 | Slice | Owners | Outcome | Exit gate |
 | --- | --- | --- | --- |
 | 0. Mechanism proof | disposable spikes only | Session fidelity and hook execution mode are known before durable architecture work. | Redirect/`Content-Disposition`, magnet/torrent/seed, session-kill, and direct-or-worker hook scenarios preserve one path/allocation/GID. |
-| A. Durable core | `jobs`, `publication`, `aria2`, `app` | Reduced manifest/storage schemas, full scans, no-replace operations, strict session parsing, and the pure overlay planner exist behind an inactive schema. | Persistence primitive, parser/planner, path, and filesystem tests pass. |
+| A. Durable core | `jobs`, `publication`, `aria2`, `app` | Reduced manifest/storage schemas, full scans, guarded portable move, strict session parsing, and the pure overlay planner exist behind an inactive schema. | Persistence primitive, parser/planner, path, and filesystem tests pass. |
 | B. Lifecycle runtime | `app`, `runtime`, `service`, `aria2` | Add, same-GID promotion, session overlay, activity intent, hooks, publication, rehydration, and cleanup work in isolated integration tests. | Restart and four publication crash cuts converge without overwrite, duplicate allocation, or new GID. |
-| C. Product activation | `app`, `doctor`, `cmd`, `tui` | Canonical status/actions, simple weak-identity recovery/abandon UX, hard upgrade gate, and managed service switch ship together. | Storage, complete native joins/census, Dashboard, unmanaged-loss guard, and upgrade scenarios pass. |
+| C. Product activation | `app`, `doctor`, `cmd`, `tui` | Canonical status/actions, path-based weak-identity recovery, hard upgrade gate, and managed service switch ship together. | Storage, complete native joins/census, Dashboard, unmanaged-loss guard, and upgrade scenarios pass. |
 | D. Discovery and full inspection | `doctor`, `aria2`, `service` | Managed dual-stack DHT and the full runtime Inspector follow without changing lifecycle state. | Opt-in network and diagnosis matrices pass. |
 
 Before Slice 0 passes, no durable implementation slice begins. Before Slice C, production
@@ -1056,7 +1042,7 @@ update `AGENTS.md` only when the implemented component ownership actually change
 
 ## Resolved Review Decisions
 
-- The detach/no-replace-move/rehydrate transaction is irreducible because it alone satisfies
+- The detach/move/rehydrate transaction is irreducible because it alone satisfies
   clean target, one allocation, and post-move seeding.
 - aria2's native session returns as the common transport restart representation, while the
   manifest overlays product intent/publication facts, generates torrent forms that cannot
@@ -1065,9 +1051,8 @@ update `AGENTS.md` only when the implemented component ownership actually change
 - Persistent catalog generation/journal metadata is removed; Dashboard scans manifests.
 - Legacy compatibility mode and session archive transaction are removed; upgrade is a hard
   boundary onto a new versioned managed session path.
-- Weak-identity destination-only recovery is fail-closed and manual; MVP has no publication
-  confirmation/adoption API. Move-back plus Retry preserves managed recovery; metadata-only
-  abandon preserves the payload but deliberately gives up managed reseeding.
+- Weak-identity destination-only recovery uses the durable `Publishing` record plus path
+  presence; no publication confirmation/adoption API is needed.
 - Upgrade disables/unloads legacy supervision before writing v2 artifacts, and v2 schema is
   committed only after the inactive artifact and versioned session are ready.
 - Session grammar belongs to `internal/aria2`; app owns overlay policy, runtime owns only
@@ -1084,7 +1069,7 @@ update `AGENTS.md` only when the implemented component ownership actually change
   stable zero-length session.
 - The crash guarantee is process-scoped on providers without directory sync. Real sync
   errors keep `Publishing`; explicit lack of sync support is a visible power-loss warning.
-- Per-storage staging, single GID, `follow-torrent=false`, kernel no-replace rename, and
+- Per-storage staging, single GID, `follow-torrent=false`, portable guarded rename, and
   app-owned seven-status classification remain unchanged.
 
 ## Remaining Open Decisions

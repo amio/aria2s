@@ -73,3 +73,30 @@ func TestRepositoryLockHonorsContext(t *testing.T) {
 		t.Fatalf("lock error = %v", err)
 	}
 }
+
+func TestLoadStorageIgnoresLegacyPublicationCapability(t *testing.T) {
+	root := t.TempDir()
+	repository := New(root)
+	id := "fedcba9876543210"
+	if err := os.MkdirAll(filepath.Join(root, "storages"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := []byte(`{
+  "version": 1,
+  "id": "fedcba9876543210",
+  "mountPoint": "/mnt/storage",
+  "stagingAnchor": "/mnt/storage",
+  "marker": {"mountId": 1, "objectId": 2, "reliableAcrossRename": false},
+  "capability": {"noReplace": false, "identityReliable": false, "directorySync": false}
+}`)
+	if err := os.WriteFile(filepath.Join(root, "storages", id+".json"), legacy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scope, err := repository.LoadStorage(id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope.ID != id || scope.Marker.ObjectID != 2 {
+		t.Fatalf("legacy storage decoded incorrectly: %+v", scope)
+	}
+}
