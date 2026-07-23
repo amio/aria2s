@@ -14,9 +14,8 @@ import (
 const (
 	defaultViewportWidth  = 120
 	defaultViewportHeight = 28
-	minTableWidth         = 58 // below this even the 4-column minimal layout won't fit
 	minBodyHeight         = 3
-	minNameWidth          = 18
+	minNameWidth          = 25
 	columnGap             = "  "
 	framePaddingX         = 2
 	bodyTopPaddingLines   = 1
@@ -31,6 +30,18 @@ const (
 	upBaseWidth         = 10
 	seedsBaseWidth      = 5
 	peersBaseWidth      = 5
+
+	// Column priority 0 is required. Higher values are hidden first.
+	requiredColumnPriority   = 0
+	downloadedColumnPriority = 1
+	downColumnPriority       = 2
+	upColumnPriority         = 3
+	seedsColumnPriority      = 4
+	peersColumnPriority      = 4
+
+	// Required columns are Status, Name, Size, and Progress.
+	minTableWidth = statusBaseWidth + minNameWidth + sizeBaseWidth +
+		progressBaseWidth + 3*len(columnGap)
 )
 
 type rgb struct {
@@ -540,8 +551,7 @@ type tableLayout struct {
 }
 
 // computeLayout determines which columns are visible and their widths.
-// Columns are hidden in this order as width shrinks:
-// Seeds, Peers, Downloaded, Size, Up Speed.
+// Columns with the same non-zero priority hide together; priority 0 never hides.
 func computeLayout(width int) tableLayout {
 	l := tableLayout{
 		statusWidth:     statusBaseWidth,
@@ -553,7 +563,7 @@ func computeLayout(width int) tableLayout {
 		seedsWidth:      seedsBaseWidth,
 		peersWidth:      peersBaseWidth,
 	}
-	for l.fixed()+minNameWidth > width && l.hideNext() {
+	for l.fixed()+minNameWidth > width && l.hideLowestPriorityColumns() {
 	}
 	l.nameWidth = max(width-l.fixed(), minNameWidth)
 	return l
@@ -596,29 +606,39 @@ func (l tableLayout) visible() int {
 	return n
 }
 
-// hideNext removes the next optional column; returns false when none remain.
-func (l *tableLayout) hideNext() bool {
-	if l.seedsWidth > 0 {
-		l.seedsWidth = 0
-		return true
+type prioritizedColumn struct {
+	width    *int
+	priority int
+}
+
+// hideLowestPriorityColumns hides every visible column at the highest numeric
+// priority so equal-priority columns behave as one responsive group.
+func (l *tableLayout) hideLowestPriorityColumns() bool {
+	columns := []prioritizedColumn{
+		{width: &l.statusWidth, priority: requiredColumnPriority},
+		{width: &l.sizeWidth, priority: requiredColumnPriority},
+		{width: &l.downloadedWidth, priority: downloadedColumnPriority},
+		{width: &l.progressWidth, priority: requiredColumnPriority},
+		{width: &l.downWidth, priority: downColumnPriority},
+		{width: &l.upWidth, priority: upColumnPriority},
+		{width: &l.seedsWidth, priority: seedsColumnPriority},
+		{width: &l.peersWidth, priority: peersColumnPriority},
 	}
-	if l.peersWidth > 0 {
-		l.peersWidth = 0
-		return true
+	priority := requiredColumnPriority
+	for _, column := range columns {
+		if *column.width > 0 && column.priority > priority {
+			priority = column.priority
+		}
 	}
-	if l.downloadedWidth > 0 {
-		l.downloadedWidth = 0
-		return true
+	if priority == requiredColumnPriority {
+		return false
 	}
-	if l.sizeWidth > 0 {
-		l.sizeWidth = 0
-		return true
+	for _, column := range columns {
+		if *column.width > 0 && column.priority == priority {
+			*column.width = 0
+		}
 	}
-	if l.upWidth > 0 {
-		l.upWidth = 0
-		return true
-	}
-	return false
+	return true
 }
 
 func tableStart(selected int, total int, visible int) int {
