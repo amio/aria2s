@@ -224,13 +224,13 @@ func TestPrepareDashboardRepairsAndStartsWithoutWaitingForRPC(t *testing.T) {
 	}
 }
 
-func TestPrepareDashboardExplainsHowToReplaceLegacyRuntime(t *testing.T) {
+func TestPrepareDashboardReportsStoppedLegacyRuntimeReadyToInstall(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	if err := state.Save(servicePaths.StateFile, state.State{RuntimeSchemaVersion: 1}); err != nil {
 		t.Fatalf("save legacy state: %v", err)
 	}
-	application := app.New(app.Options{Paths: servicePaths})
+	application := app.New(app.Options{Paths: servicePaths, Service: &recordingService{}})
 
 	_, err := application.PrepareDashboard(context.Background())
 
@@ -238,13 +238,60 @@ func TestPrepareDashboardExplainsHowToReplaceLegacyRuntime(t *testing.T) {
 		t.Fatal("expected legacy runtime to block Dashboard")
 	}
 	message := err.Error()
-	assertContains(t, message, "managed runtime v1 is still installed; this binary cannot manage its tasks\n\n")
-	assertContains(t, message, "\n\nOption 1 — Keep existing tasks\n\nInstall the last v1 release:\n")
+	assertContains(t, message, "managed runtime v1 is stopped and has no saved tasks; v2 is ready to install\n\n")
+	assertContains(t, message, "The v1 service is stopped and its saved session is empty.\n")
+	assertContains(t, message, "\nInstall and start the latest version:\n")
+	assertContains(t, message, "curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | sh")
+	if strings.Contains(message, "--discard-legacy-tasks") {
+		t.Fatalf("ready legacy runtime offered discard path: %s", message)
+	}
+}
+
+func TestPrepareDashboardReportsSavedLegacyTasksAfterStop(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	if err := state.Save(servicePaths.StateFile, state.State{RuntimeSchemaVersion: 1}); err != nil {
+		t.Fatalf("save legacy state: %v", err)
+	}
+	if err := os.WriteFile(servicePaths.LegacySessionFile, []byte("legacy task\n"), 0o600); err != nil {
+		t.Fatalf("save legacy session: %v", err)
+	}
+	application := app.New(app.Options{Paths: servicePaths, Service: &recordingService{}})
+
+	_, err := application.PrepareDashboard(context.Background())
+
+	if err == nil {
+		t.Fatal("expected saved legacy tasks to block Dashboard")
+	}
+	message := err.Error()
+	assertContains(t, message, "LegacySessionPresent: managed runtime v1 is stopped, but aria2 retained saved restart entries\n\n")
+	assertContains(t, message, "The stopped v1 service still has saved restart entries. V2 cannot determine\nwhether they are unfinished tasks or stale entries retained by aria2 after\nDashboard cleanup.\n")
+	assertContains(t, message, "\nOption 1 — The v1 Dashboard was empty before stop\n")
+	assertContains(t, message, "\nUsing the v2 binary that printed this message, run:\n  aria2s install --discard-legacy-tasks\n")
+	assertContains(t, message, "\nThis confirms that the legacy restart entries can be ignored. It does not\ndelete legacy files or downloaded payloads.\n")
+	assertContains(t, message, "\nOption 2 — Inspect or keep existing tasks\n\nInstall the last v1 release:\n")
 	assertContains(t, message, "curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | sh -s -- --version v0.4.0\n")
-	assertContains(t, message, "\nFinish the tasks, then stop v1:\n  aria2s dashboard\n  aria2s stop\n")
-	assertContains(t, message, "\nReinstall the latest version:\n")
-	assertContains(t, message, "\nOption 2 — Discard existing tasks\n\nRun:\n  aria2s install --discard-legacy-tasks\n")
-	assertContains(t, message, "\nDiscard stops the v1 service and installs v2 without importing its tasks.")
+	assertContains(t, message, "\nInspect or finish the tasks, then stop v1:\n  aria2s dashboard\n  aria2s stop\n")
+	assertContains(t, message, "\nIf the Dashboard was empty but aria2 retained restart entries, use Option 1.")
+}
+
+func TestPrepareDashboardReportsRunningLegacyRuntime(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	if err := state.Save(servicePaths.StateFile, state.State{RuntimeSchemaVersion: 1}); err != nil {
+		t.Fatalf("save legacy state: %v", err)
+	}
+	application := app.New(app.Options{
+		Paths:   servicePaths,
+		Service: &recordingService{loaded: true, running: true},
+	})
+
+	_, err := application.PrepareDashboard(context.Background())
+
+	if err == nil {
+		t.Fatal("expected running legacy runtime to block Dashboard")
+	}
+	assertContains(t, err.Error(), "UpgradeRequired: managed runtime v1 is still running\n\n")
 }
 
 func TestStopSavesSessionBeforeStoppingService(t *testing.T) {

@@ -785,7 +785,7 @@ The lifecycle release evolves `internal/doctor` to stable problem codes with sev
 summary, explanation, evidence, and recovery steps. It includes only lifecycle-required
 problems such as:
 
-- `UpgradeRequired` / `LegacyTasksPresent`;
+- `UpgradeRequired` / `LegacySessionPresent`;
 - `StorageOffline` / `StorageMismatch`;
 - `PublicationConflict` / `PublicationRecoveryRequired`;
 - `RestartStateMissing` / `CorruptManifest`;

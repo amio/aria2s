@@ -376,12 +376,12 @@ func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State
 	return current, nil
 }
 
-const legacyV1Recovery = `Option 1 — Keep existing tasks
+const legacyV1RunningRecovery = `Option 1 — Keep existing tasks
 
 Install the last v1 release:
   curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | sh -s -- --version v0.4.0
 
-Finish the tasks, then stop v1:
+Finish or remove every task, then stop v1:
   aria2s dashboard
   aria2s stop
 
@@ -395,8 +395,40 @@ Run:
 
 Discard stops the v1 service and installs v2 without importing its tasks.`
 
-func legacyRuntimeError(code, summary string) error {
-	return fmt.Errorf("%s: %s\n\n%s", code, summary, legacyV1Recovery)
+const legacyV1SessionRecovery = `The stopped v1 service still has saved restart entries. V2 cannot determine
+whether they are unfinished tasks or stale entries retained by aria2 after
+Dashboard cleanup.
+
+Option 1 — The v1 Dashboard was empty before stop
+
+Using the v2 binary that printed this message, run:
+  aria2s install --discard-legacy-tasks
+
+This confirms that the legacy restart entries can be ignored. It does not
+delete legacy files or downloaded payloads.
+
+Option 2 — Inspect or keep existing tasks
+
+Install the last v1 release:
+  curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | sh -s -- --version v0.4.0
+
+Inspect or finish the tasks, then stop v1:
+  aria2s dashboard
+  aria2s stop
+
+If the Dashboard was empty but aria2 retained restart entries, use Option 1.`
+
+const legacyV1ReadyRecovery = `The v1 service is stopped and its saved session is empty.
+
+Install and start the latest version:
+  curl -fsSL https://raw.githubusercontent.com/amio/aria2s/main/install.sh | sh`
+
+func legacyRuntimeError(code, summary, recovery string) error {
+	return fmt.Errorf("%s: %s\n\n%s", code, summary, recovery)
+}
+
+func legacyReadyToInstallError() error {
+	return fmt.Errorf("UpgradeRequired: managed runtime v1 is stopped and has no saved tasks; v2 is ready to install\n\n%s", legacyV1ReadyRecovery)
 }
 
 func (app *App) legacyInstallGate(ctx context.Context, discard bool) error {
@@ -408,12 +440,12 @@ func (app *App) legacyInstallGate(ctx context.Context, discard bool) error {
 		return fmt.Errorf("load legacy state: %w", err)
 	}
 	if !discard && app.options.Service != nil && app.options.Service.IsRunning(ctx) {
-		return legacyRuntimeError("UpgradeRequired", "managed runtime v1 is still running")
+		return legacyRuntimeError("UpgradeRequired", "managed runtime v1 is still running", legacyV1RunningRecovery)
 	}
 	if !discard {
 		empty, proofErr := stableEmptyFile(app.options.Paths.LegacySessionFile)
 		if proofErr != nil || !empty {
-			return legacyRuntimeError("LegacyTasksPresent", "the v1 session is not provably empty")
+			return legacyRuntimeError("LegacySessionPresent", "the stopped v1 runtime still has saved restart entries", legacyV1SessionRecovery)
 		}
 	}
 	if app.options.Service != nil {
@@ -421,7 +453,7 @@ func (app *App) legacyInstallGate(ctx context.Context, discard bool) error {
 		loaded := app.options.Service.IsLoaded(ctx)
 		running := app.options.Service.IsRunning(ctx)
 		if running && !discard {
-			return legacyRuntimeError("UpgradeRequired", "managed runtime v1 started while upgrading")
+			return legacyRuntimeError("UpgradeRequired", "managed runtime v1 started while upgrading", legacyV1RunningRecovery)
 		}
 		if running && !loaded {
 			if err := app.options.Service.Stop(ctx); err != nil {
@@ -440,7 +472,7 @@ func (app *App) legacyInstallGate(ctx context.Context, discard bool) error {
 	if !discard {
 		empty, proofErr := stableEmptyFile(app.options.Paths.LegacySessionFile)
 		if proofErr != nil || !empty {
-			return legacyRuntimeError("LegacyTasksPresent", "the v1 session changed while disabling its service")
+			return legacyRuntimeError("LegacySessionPresent", "the v1 session changed while disabling its service", legacyV1SessionRecovery)
 		}
 	}
 	return nil
@@ -494,7 +526,14 @@ func (app *App) inspectDashboard(ctx context.Context) (state.State, bool, error)
 		return state.State{}, false, fmt.Errorf("load state: %w", err)
 	}
 	if current.RuntimeSchemaVersion != 2 {
-		return current, false, legacyRuntimeError("UpgradeRequired", "managed runtime v1 is still installed; this binary cannot manage its tasks")
+		if app.options.Service != nil && app.options.Service.IsRunning(ctx) {
+			return current, false, legacyRuntimeError("UpgradeRequired", "managed runtime v1 is still running", legacyV1RunningRecovery)
+		}
+		empty, proofErr := stableEmptyFile(app.options.Paths.LegacySessionFile)
+		if proofErr != nil || !empty {
+			return current, false, legacyRuntimeError("LegacySessionPresent", "managed runtime v1 is stopped, but aria2 retained saved restart entries", legacyV1SessionRecovery)
+		}
+		return current, false, legacyReadyToInstallError()
 	}
 	if !isExecutable(current.Aria2cPath) {
 		return current, true, nil
