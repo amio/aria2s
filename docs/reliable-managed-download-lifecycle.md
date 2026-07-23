@@ -103,8 +103,9 @@ copy there. The viable mechanism is detach, rename, and rehydrate.
 - “Target stays clean” means no partial payload, `.aria2` control file, or saved `.torrent`
   metadata or capability probe is created below `TargetDir`.
 - The target already exists and belongs to a filesystem that can host one private staging
-  namespace outside the target. A target equal to the mount root is unsupported because no
-  same-mount staging anchor can then remain outside it.
+  namespace outside the target. New jobs use a mount-root staging scope when that root is
+  writable, otherwise they reuse or create a same-mount scope beside the target. A target
+  equal to the mount root is unsupported because no staging anchor can then remain outside it.
 - macOS and Linux are in scope. Publication requires ordinary same-filesystem rename, not
   optional no-replace syscall support; there is no copy fallback.
 - Job counts are expected to remain in the low hundreds for MVP. A full local manifest scan
@@ -155,7 +156,8 @@ copy there. The viable mechanism is detach, rename, and rehydrate.
 ### Publication
 
 1. `WorkDir` is one isolated job directory in a registered same-filesystem staging scope
-   outside `TargetDir`.
+   outside `TargetDir`. `StorageID` permanently pins a job to that scope; Add selects the
+   writable mount-root scope as canonical without relocating existing jobs.
 2. Publication moves one payload root, never its children individually.
 3. Publication checks that the destination is absent immediately before ordinary rename.
    Existing content observed by aria2s is untouched; concurrent external writers are not a
@@ -391,8 +393,9 @@ publication problem and rejects Remove rather than discarding the only recovery 
 
 ### Add
 
-1. Resolve the physical target, reject a mount-root target, and reuse or register one
-   `StorageScope` for that mount.
+1. Resolve the physical target and reject a mount-root target. If the mount root is writable,
+   reuse or register its canonical `StorageScope`; otherwise reuse the mount's registered
+   scope or register one beside the target.
 2. Create one private `WorkDir` directly under
    `.aria2s_staging/<storage-id>/`. aria2 receives that directory as `dir`; there is no
    target-name, `work`, `control`, or per-job marker layer.
@@ -821,6 +824,12 @@ Rejected. Hard links are unavailable on important macOS SMB paths; clones are no
 to NAS; copies double space and write traffic. Ordinary same-filesystem rename is the only
 supported one-allocation publication primitive.
 
+### Migrate Registered Staging Scopes to the Mount Root
+
+Rejected. Moving active work would couple this layout change to native session rewriting and
+storage-marker replacement. Jobs already resolve their scope through `StorageID`, so new Add
+operations can select the canonical mount-root scope while existing jobs finish in place.
+
 ### Path Convention Without Manifests
 
 Rejected. Paths do not encode user activity intent, publication commit state, retained
@@ -1069,8 +1078,9 @@ update `AGENTS.md` only when the implemented component ownership actually change
   stable zero-length session.
 - The crash guarantee is process-scoped on providers without directory sync. Real sync
   errors keep `Publishing`; explicit lack of sync support is a visible power-loss warning.
-- Per-storage staging, single GID, `follow-torrent=false`, portable guarded rename, and
-  app-owned seven-status classification remain unchanged.
+- Canonical writable mount-root staging for new jobs, `StorageID`-pinned existing scopes,
+  single GID, `follow-torrent=false`, portable guarded rename, and app-owned seven-status
+  classification are the retained lifecycle contracts.
 
 ## Remaining Open Decisions
 

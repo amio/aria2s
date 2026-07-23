@@ -16,6 +16,7 @@ import (
 	"github.com/amio/aria2s/internal/publication"
 	managedruntime "github.com/amio/aria2s/internal/runtime"
 	"github.com/amio/aria2s/internal/state"
+	"golang.org/x/sys/unix"
 )
 
 type managedRPC interface {
@@ -594,24 +595,35 @@ func ensureStorageScope(repository *jobs.Repository, target publication.Target) 
 	if err != nil {
 		return jobs.StorageScope{}, err
 	}
+	mountPoint := filepath.Clean(target.MountPoint)
+	anchor := mountPoint
+	rootWritable := unix.Access(mountPoint, unix.W_OK) == nil
 	for _, scope := range scopes {
-		if filepath.Clean(scope.MountPoint) == filepath.Clean(target.MountPoint) {
-			stagingRoot := filepath.Join(scope.StagingAnchor, ".aria2s_staging", scope.ID)
-			if pathsOverlap(target.Path, stagingRoot) {
-				return jobs.StorageScope{}, errors.New("managed target overlaps the registered staging namespace")
-			}
-			marker, identifyErr := publication.Identify(stagingRoot)
-			if identifyErr != nil || !publication.SameObject(marker, publication.Identity{MountID: scope.Marker.MountID, ObjectID: scope.Marker.ObjectID, ReliableAcrossRename: scope.Marker.ReliableAcrossRename}) {
-				return jobs.StorageScope{}, errors.New("StorageMismatch: registered staging marker changed")
-			}
-			return scope, nil
+		if filepath.Clean(scope.MountPoint) != mountPoint {
+			continue
 		}
+		if rootWritable && filepath.Clean(scope.StagingAnchor) != anchor {
+			continue
+		}
+		stagingRoot := filepath.Join(scope.StagingAnchor, ".aria2s_staging", scope.ID)
+		if pathsOverlap(target.Path, stagingRoot) {
+			return jobs.StorageScope{}, errors.New("managed target overlaps the registered staging namespace")
+		}
+		marker, identifyErr := publication.Identify(stagingRoot)
+		if identifyErr != nil || !publication.SameObject(marker, publication.Identity{MountID: scope.Marker.MountID, ObjectID: scope.Marker.ObjectID, ReliableAcrossRename: scope.Marker.ReliableAcrossRename}) {
+			return jobs.StorageScope{}, errors.New("StorageMismatch: registered staging marker changed")
+		}
+		return scope, nil
+	}
+	// New jobs use one canonical mount-root scope when the user can write there.
+	// Existing jobs remain pinned to their registered scope through StorageID.
+	if !rootWritable {
+		anchor = filepath.Dir(target.Path)
 	}
 	id, err := randomID()
 	if err != nil {
 		return jobs.StorageScope{}, err
 	}
-	anchor := filepath.Dir(target.Path)
 	root := filepath.Join(anchor, ".aria2s_staging", id)
 	if pathsOverlap(target.Path, root) {
 		return jobs.StorageScope{}, errors.New("managed target overlaps the staging namespace")

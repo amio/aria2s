@@ -43,6 +43,7 @@
 - Reconciliation may repair missing or stale managed artifacts, but installation must not overwrite an existing user aria2 configuration.
 - The managed RPC listener stays local-only and uses the generated secret persisted in aria2s state.
 - Session state is saved periodically and before controlled stop or restart so managed downloads survive service lifecycle changes.
+- Each job remains pinned to its registered staging scope by `StorageID`; new jobs share a canonical mount-root scope when the mount root is writable, otherwise they reuse or create a same-mount scope beside the target.
 - Dashboard reads are bounded and batched; refresh failures retain the last successful snapshot, and uncertain mutations are reconciled without blind resubmission.
 - macOS and Linux supervisors must express equivalent aria2 arguments and lifecycle semantics.
 - The supervisor runs `aria2s managed-exec`, which validates committed schema/artifact identity, holds an inherited instance lease through aria2c, and installs short-lived idempotent completion hooks.
