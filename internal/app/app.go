@@ -384,7 +384,7 @@ func (app *App) legacyInstallGate(ctx context.Context, discard bool) error {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("load legacy state: %w", err)
 	}
-	if app.options.Service != nil && app.options.Service.IsRunning(ctx) {
+	if !discard && app.options.Service != nil && app.options.Service.IsRunning(ctx) {
 		return errors.New("UpgradeRequired: stop the old service with the old aria2s binary before installing v2")
 	}
 	if !discard {
@@ -393,9 +393,22 @@ func (app *App) legacyInstallGate(ctx context.Context, discard bool) error {
 			return errors.New("LegacyTasksPresent: legacy session is not provably empty; finish it with the old binary or pass --discard-legacy-tasks")
 		}
 	}
-	if app.options.Service != nil && app.options.Service.IsLoaded(ctx) {
-		if err := app.options.Service.Uninstall(ctx); err != nil {
-			return err
+	if app.options.Service != nil {
+		// Re-read after the session proof so a late legacy start cannot escape the gate.
+		loaded := app.options.Service.IsLoaded(ctx)
+		running := app.options.Service.IsRunning(ctx)
+		if running && !discard {
+			return errors.New("UpgradeRequired: stop the old service with the old aria2s binary before installing v2")
+		}
+		if running && !loaded {
+			if err := app.options.Service.Stop(ctx); err != nil {
+				return fmt.Errorf("stop legacy supervisor: %w", err)
+			}
+		}
+		if loaded {
+			if err := app.options.Service.Uninstall(ctx); err != nil {
+				return fmt.Errorf("disable legacy supervisor: %w", err)
+			}
 		}
 		if app.options.Service.IsLoaded(ctx) || app.options.Service.IsRunning(ctx) {
 			return errors.New("InstallIncomplete: legacy supervisor could not be disabled")
@@ -458,9 +471,19 @@ func (app *App) inspectDashboard(ctx context.Context) (state.State, bool, error)
 		return state.State{}, false, fmt.Errorf("load state: %w", err)
 	}
 	if current.RuntimeSchemaVersion != 2 {
-		return current, false, errors.New("UpgradeRequired: this Dashboard cannot manage the installed v1 runtime. " +
-			"To keep its tasks, finish them with the old aria2s binary, stop the v1 service, then run `aria2s install`. " +
-			"To abandon them, stop the v1 service with the old binary, then run `aria2s install --discard-legacy-tasks`")
+		return current, false, errors.New(`UpgradeRequired: managed runtime v1 is still installed
+
+This aria2s version cannot manage v1 tasks.
+
+To keep existing tasks:
+  1. Finish them with the old aria2s binary.
+  2. Stop the v1 service with the old binary.
+  3. Run: aria2s install
+
+To discard existing tasks:
+  Run: aria2s install --discard-legacy-tasks
+
+This stops the v1 service and installs v2 without importing its tasks.`)
 	}
 	if !isExecutable(current.Aria2cPath) {
 		return current, true, nil

@@ -212,16 +212,16 @@ copy there. The viable mechanism is detach, rename, and rehydrate.
 
 ### Upgrade
 
-1. `install` checks schema, supervisor loaded/enabled/running facts, and whether the legacy
-   session is provably empty before mutating current service/state artifacts. Only an absent
-   path or a stable, regular, zero-length file counts as empty; non-empty, unreadable,
-   non-regular, or concurrently changing state blocks conservatively without parsing it.
-   Because an enabled supervisor could race the first read, install repeats the same proof
-   after disable/unload verification and before writing v2 artifacts.
-2. A running old service always blocks the new installer. The user stops it with the old
-   binary before retrying. Once upgrade is acknowledged, the installer disables/unloads the
-   stopped old service and verifies it cannot auto-start before changing schema or service
-   files.
+1. `install` checks schema and supervisor loaded/enabled/running facts before mutating current
+   service/state artifacts. Unless discard is explicit, it also requires the legacy session
+   to be provably empty: only an absent path or a stable, regular, zero-length file counts;
+   non-empty, unreadable, non-regular, or concurrently changing state blocks conservatively
+   without parsing it. Because an enabled supervisor could race the first read, install
+   repeats the same proof after disable/unload verification and before writing v2 artifacts.
+2. A running old service blocks the new installer by default so legacy tasks remain under
+   the old runtime's control. With `--discard-legacy-tasks`, the installer instead stops and
+   disables/unloads the old service itself, then verifies it cannot auto-start before
+   changing schema or service files.
 3. A stopped old schema with a non-empty legacy session blocks by default. Only
    `--discard-legacy-tasks` acknowledges that the new runtime will ignore it.
 4. Managed v2 uses a new, fixed versioned session path. The old session and all legacy
@@ -657,17 +657,19 @@ There is no compatibility runtime in the new binary.
 For an old schema:
 
 1. `install` checks whether the known old supervisor is loaded/enabled or running. If it is
-   running, installation changes nothing and tells the user to finish/stop it with the old
-   aria2s binary.
-2. Once the old supervisor is confirmed stopped, install opens the known legacy session as
-   a no-follow regular file and verifies stable identity/size before and after the read.
-   Only an absent path or a stable zero-length file is empty; whitespace, comments, any
-   other byte, unreadable/non-regular state, or concurrent change is conservatively not
-   empty. This check precedes every service/state mutation and needs no legacy grammar.
+   running, plain installation changes nothing and tells the user to finish/stop it with the
+   old aria2s binary; explicit discard authorizes the installer to stop it directly.
+2. Without explicit discard, once the old supervisor is confirmed stopped, install opens
+   the known legacy session as a no-follow regular file and verifies stable identity/size
+   before and after the read. Only an absent path or a stable zero-length file is empty;
+   whitespace, comments, any other byte, unreadable/non-regular state, or concurrent change
+   is conservatively not empty. This check precedes every service/state mutation and needs
+   no legacy grammar.
 3. If the old session is not provably empty, plain install changes nothing. The user
    either resumes with the old binary or supplies `--discard-legacy-tasks`.
-4. Explicit discard means only “do not load old restart state into managed v2.” It does not
-   delete, move, parse, validate, or archive that session or any payload/control file.
+4. Explicit discard authorizes stopping the old supervisor and means “do not load old
+   restart state into managed v2.” It does not delete, move, parse, validate, or archive that
+   session or any payload/control file.
 5. Once continuation/discard is resolved, Linux performs `disable --now` and verifies the
    unit disabled/inactive; macOS performs `bootout` and verifies the job unloaded. Merely
    stopping an enabled systemd unit is insufficient because it may auto-start after login

@@ -588,6 +588,7 @@ func TestStableEmptyLegacyProofRejectsContentAndSymlink(t *testing.T) {
 type gateService struct {
 	loaded, running bool
 	uninstallCalls  int
+	stopCalls       int
 }
 
 func (*gateService) Install(context.Context) error { return nil }
@@ -597,7 +598,11 @@ func (service *gateService) Uninstall(context.Context) error {
 	return nil
 }
 func (*gateService) Start(context.Context) error { return nil }
-func (*gateService) Stop(context.Context) error  { return nil }
+func (service *gateService) Stop(context.Context) error {
+	service.stopCalls++
+	service.running = false
+	return nil
+}
 func (service *gateService) IsLoaded(context.Context) bool {
 	return service.loaded
 }
@@ -632,6 +637,34 @@ func TestLegacyInstallGateRefusesRunningOrNonemptyStateAndRequiresExplicitDiscar
 	data, err := os.ReadFile(servicePaths.LegacySessionFile)
 	if err != nil || string(data) != "legacy task\n" {
 		t.Fatalf("legacy session was modified: %q err=%v", data, err)
+	}
+}
+
+func TestLegacyInstallGateDiscardStopsRunningSupervisor(t *testing.T) {
+	for _, test := range []struct {
+		name               string
+		loaded             bool
+		wantStopCalls      int
+		wantUninstallCalls int
+	}{
+		{name: "loaded", loaded: true, wantUninstallCalls: 1},
+		{name: "disabled but active", wantStopCalls: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			servicePaths := paths.NewDarwin(filepath.Join(t.TempDir(), "home"))
+			backend := &gateService{loaded: test.loaded, running: true}
+			application := New(Options{Paths: servicePaths, Service: backend})
+
+			if err := application.legacyInstallGate(context.Background(), true); err != nil {
+				t.Fatalf("discard running legacy service: %v", err)
+			}
+			if backend.loaded || backend.running {
+				t.Fatalf("legacy service still active: loaded=%v running=%v", backend.loaded, backend.running)
+			}
+			if backend.stopCalls != test.wantStopCalls || backend.uninstallCalls != test.wantUninstallCalls {
+				t.Fatalf("stop calls=%d uninstall calls=%d", backend.stopCalls, backend.uninstallCalls)
+			}
+		})
 	}
 }
 

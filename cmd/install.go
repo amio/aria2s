@@ -28,6 +28,6 @@ func newInstallCommand(application *app.App) *cobra.Command {
 		},
 	}
 	command.Flags().BoolVar(&start, "start", false, "start the service after installing")
-	command.Flags().BoolVar(&discardLegacyTasks, "discard-legacy-tasks", false, "ignore legacy restart state without deleting legacy files")
+	command.Flags().BoolVar(&discardLegacyTasks, "discard-legacy-tasks", false, "stop the legacy service and ignore its tasks without deleting legacy files")
 	return command
 }

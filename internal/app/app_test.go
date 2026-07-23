@@ -238,11 +238,11 @@ func TestPrepareDashboardExplainsHowToReplaceLegacyRuntime(t *testing.T) {
 		t.Fatal("expected legacy runtime to block Dashboard")
 	}
 	message := err.Error()
-	assertContains(t, message, "cannot manage the installed v1 runtime")
-	assertContains(t, message, "finish them with the old aria2s binary")
-	assertContains(t, message, "stop the v1 service")
-	assertContains(t, message, "`aria2s install`")
-	assertContains(t, message, "`aria2s install --discard-legacy-tasks`")
+	assertContains(t, message, "managed runtime v1 is still installed\n\n")
+	assertContains(t, message, "\n\nTo keep existing tasks:\n  1. Finish them with the old aria2s binary.\n")
+	assertContains(t, message, "  2. Stop the v1 service with the old binary.\n  3. Run: aria2s install\n")
+	assertContains(t, message, "\nTo discard existing tasks:\n  Run: aria2s install --discard-legacy-tasks\n")
+	assertContains(t, message, "\nThis stops the v1 service and installs v2 without importing its tasks.")
 }
 
 func TestStopSavesSessionBeforeStoppingService(t *testing.T) {
