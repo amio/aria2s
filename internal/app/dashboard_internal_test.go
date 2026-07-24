@@ -15,17 +15,19 @@ import (
 )
 
 type dashboardRPCStub struct {
-	calls      []string
-	identities []state.State
-	source     aria2.RetrySource
-	addGID     string
-	addErr     error
-	cleanupErr error
+	calls       []string
+	identities  []state.State
+	snapshot    aria2.DashboardRead
+	snapshotErr error
+	source      aria2.RetrySource
+	addGID      string
+	addErr      error
+	cleanupErr  error
 }
 
 func (rpc *dashboardRPCStub) DashboardSnapshot(_ context.Context, current state.State, _ aria2.DashboardQuery) (aria2.DashboardRead, error) {
 	rpc.identities = append(rpc.identities, current)
-	return aria2.DashboardRead{}, nil
+	return rpc.snapshot, rpc.snapshotErr
 }
 func (*dashboardRPCStub) TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error) {
 	return aria2.DownloadDetail{}, nil
@@ -103,6 +105,65 @@ func TestDashboardSessionBindsRPCIdentityButReadsFreshRecentDirs(t *testing.T) {
 	}
 	if rpc.identities[0].RPCSecret != "bound" || !reflect.DeepEqual(dirs, []string{"/new"}) {
 		t.Fatalf("identity/metadata ownership mismatch: identity=%q dirs=%v", rpc.identities[0].RPCSecret, dirs)
+	}
+}
+
+func TestDashboardSnapshotDecoratesDetailWhenListFails(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	detail := aria2.DownloadDetail{
+		GID:        "a",
+		Status:     "active",
+		Name:       "example.iso",
+		IsMetadata: true,
+	}
+	rpc := &dashboardRPCStub{snapshot: aria2.DashboardRead{
+		ListErr: errors.New("list unavailable"),
+		Detail:  &detail,
+	}}
+	application := New(Options{Paths: servicePaths, DashboardReadTimeout: time.Second})
+	session := &DashboardSession{app: application, rpc: rpc}
+
+	read, err := session.Snapshot(context.Background(), aria2.DashboardQuery{DetailGID: "a"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if read.ListErr == nil {
+		t.Fatal("nested list failure was lost")
+	}
+	if read.Detail == nil || read.Detail.CanonicalStatus != string(StatusMetadata) ||
+		read.Detail.Ownership != string(OwnershipUnmanaged) ||
+		!reflect.DeepEqual(read.Detail.Actions, []string{"pause", "remove"}) {
+		t.Fatalf("detail classification = %#v", read.Detail)
+	}
+}
+
+func TestDashboardDecoratesManagedDetail(t *testing.T) {
+	const gid = "928cecc78f5f8415"
+	job := jobs.Job{
+		ID:             gid,
+		TargetDir:      "/downloads",
+		Phase:          jobs.PhasePublished,
+		ActivityIntent: jobs.ActivityRunning,
+	}
+	detail := aria2.DownloadDetail{
+		GID:         gid,
+		Status:      "active",
+		DownloadDir: job.TargetDir,
+	}
+	session := &DashboardSession{}
+
+	got := session.decorateSnapshot(
+		aria2.DashboardRead{Detail: &detail},
+		[]jobs.ScannedJob{{ID: gid, Job: job}},
+		aria2.DashboardQuery{DetailGID: gid},
+	)
+
+	if got.Detail == nil || got.Detail.CanonicalStatus != string(StatusDownloading) ||
+		got.Detail.Ownership != string(OwnershipManaged) ||
+		got.Detail.Phase != string(jobs.PhasePublished) ||
+		!reflect.DeepEqual(got.Detail.Actions, []string{"pause", "remove"}) {
+		t.Fatalf("managed detail classification = %#v", got.Detail)
 	}
 }
 

@@ -47,11 +47,9 @@ func (session *DashboardSession) Snapshot(ctx context.Context, query aria2.Dashb
 	if err != nil {
 		return read, err
 	}
-	// ListErr stays nested so the TUI can retain its last complete list while
-	// still applying an independently valid detail result from the same call.
-	if read.ListErr != nil {
-		return read, nil
-	}
+	// ListErr stays nested so the TUI can retain its last complete list. The
+	// independently valid detail result must still receive app-owned status
+	// classification before it is applied.
 	return session.decorateSnapshot(read, scanned, query), nil
 }
 
@@ -104,6 +102,10 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 	decorate(read.Downloads.Active)
 	decorate(read.Downloads.Waiting)
 	decorate(read.Downloads.Stopped)
+	if read.Detail != nil {
+		job, owned := managed[read.Detail.GID]
+		session.decorateDetail(read.Detail, job, owned)
+	}
 	for gid, job := range managed {
 		if _, ok := seen[gid]; ok {
 			continue
@@ -133,6 +135,27 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 	}
 	read.Downloads.Stopped = pageManagedHistory(read.Downloads.Stopped, managed, query.List)
 	return read
+}
+
+func (session *DashboardSession) decorateDetail(detail *aria2.DownloadDetail, job jobs.Job, managed bool) {
+	fact := ClassificationFact{
+		Managed:        managed,
+		NativeStatus:   detail.Status,
+		NativeSeeder:   detail.Seeder,
+		NativeMetadata: detail.IsMetadata,
+	}
+	if managed {
+		fact.Phase = job.Phase
+		fact.Intent = job.ActivityIntent
+		fact.ProblemCode = job.ProblemCode
+		fact.IdentityConflict = session.nativeDirConflict(job, detail.DownloadDir)
+	}
+	classification := ClassifyTask(fact)
+	detail.CanonicalStatus = string(classification.Status)
+	detail.Ownership = string(classification.Ownership)
+	detail.Phase = classification.Phase
+	detail.ProblemCode = job.ProblemCode
+	detail.Actions = session.availableActions(classification, managed, job)
 }
 
 func projectedProblemCode(job jobs.Job, nativeAbsent bool) string {
@@ -242,14 +265,9 @@ func (session *DashboardSession) TaskDetail(ctx context.Context, gid string) (ar
 		return detail, err
 	}
 	if job, _, loadErr := jobs.New(session.app.options.Paths.StateDir).Load(gid); loadErr == nil {
-		classification := ClassifyTask(ClassificationFact{Managed: true, Phase: job.Phase, Intent: job.ActivityIntent, ProblemCode: job.ProblemCode, NativeStatus: detail.Status, NativeSeeder: detail.Seeder, NativeMetadata: detail.IsMetadata, IdentityConflict: session.nativeDirConflict(job, detail.DownloadDir)})
-		detail.CanonicalStatus, detail.Ownership, detail.Phase = string(classification.Status), string(classification.Ownership), classification.Phase
-		detail.ProblemCode = job.ProblemCode
-		detail.Actions = session.availableActions(classification, true, job)
+		session.decorateDetail(&detail, job, true)
 	} else {
-		classification := ClassifyTask(ClassificationFact{NativeStatus: detail.Status, NativeSeeder: detail.Seeder, NativeMetadata: detail.IsMetadata})
-		detail.CanonicalStatus, detail.Ownership = string(classification.Status), string(classification.Ownership)
-		detail.Actions = session.availableActions(classification, false, jobs.Job{})
+		session.decorateDetail(&detail, jobs.Job{}, false)
 	}
 	return detail, nil
 }
