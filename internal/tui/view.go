@@ -682,7 +682,7 @@ func statusTone(status string) rgb {
 	case "downloading":
 		return rgb{125, 215, 160}
 	case "seeding":
-		return rgb{100, 215, 208}
+		return rgb{230, 150, 225}
 	case "metadata":
 		return rgb{165, 180, 228}
 	case "waiting":
@@ -694,7 +694,7 @@ func statusTone(status string) rgb {
 	case "error":
 		return rgb{250, 140, 140}
 	case "removed":
-		return rgb{210, 150, 210}
+		return rgb{175, 170, 185}
 	default:
 		return bodyTextColor
 	}
