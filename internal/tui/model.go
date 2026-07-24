@@ -61,6 +61,8 @@ type DetailState struct {
 	Detail         aria2.DownloadDetail
 	HasDetail      bool
 	SourceResolved bool
+	LoadingVisible bool
+	LoadingToken   uint64
 	LastError      error
 	SourceError    error
 }
@@ -120,6 +122,10 @@ type snapshotResultMsg struct {
 	err        error
 }
 type refreshTimerMsg struct{ token uint64 }
+type detailLoadingMsg struct {
+	gid   string
+	token uint64
+}
 type loadingTickMsg struct{}
 type recentDirsMsg struct {
 	dirs []string
@@ -177,6 +183,13 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return model, nil
 		}
 		return model.requestRefresh(false)
+	case detailLoadingMsg:
+		if msg.token != model.detailState.LoadingToken ||
+			msg.gid != model.detailState.RequestedGID ||
+			model.detailState.AppliedGID == msg.gid && model.detailState.HasDetail {
+			return model, nil
+		}
+		model.detailState.LoadingVisible = true
 	case loadingTickMsg:
 		if model.loaded {
 			return model, nil
@@ -302,6 +315,7 @@ func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 			model.list.LastError = msg.err
 			if msg.query.DetailGID != "" {
 				model.detailState.LastError = msg.err
+				model.detailState.LoadingVisible = true
 			}
 		} else {
 			if msg.read.ListErr != nil {
@@ -326,6 +340,9 @@ func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 					}
 					model.detailState.Detail, model.detail = *msg.read.Detail, *msg.read.Detail
 					model.detailState.AppliedGID, model.detailState.HasDetail = msg.query.DetailGID, true
+					model.detailState.LoadingVisible = false
+				} else if msg.read.DetailErr != nil {
+					model.detailState.LoadingVisible = true
 				}
 				// getUris is a one-shot fallback while resolving PrimaryURI. tellStatus may
 				// already carry files/magnet; completed downloads often permanently answer
@@ -541,15 +558,52 @@ func (model Model) openDetailAt(index int) (tea.Model, tea.Cmd) {
 		return model, nil
 	}
 	model.selected, model.mode, model.detailScroll = index, ModeDetail, 0
-	gid := items[index].GID
+	selected := items[index]
+	gid := selected.GID
 	if model.detailState.RequestedGID != gid {
 		model.detailState.RequestedGID, model.detailState.SourceResolved, model.detailState.LastError, model.detailState.SourceError = gid, false, nil, nil
+		model.detailState.LoadingVisible = false
+		model.detailState.LoadingToken++
 		model.refreshState.Generation++
-		if model.detailState.AppliedGID != gid {
-			model.detail = aria2.DownloadDetail{}
+		if model.detailState.AppliedGID == gid && model.detailState.HasDetail {
+			model.detail = model.detailState.Detail
+		} else {
+			model.detail = projectDownloadDetail(selected)
 		}
+		token := model.detailState.LoadingToken
+		updated, refreshCmd := model.requestRefresh(true)
+		model = updated.(Model)
+		return model, tea.Batch(refreshCmd, detailLoadingTick(gid, token))
 	}
 	return model.requestRefresh(true)
+}
+
+// projectDownloadDetail keeps detail navigation visually stable while the
+// selected task's on-demand fields are still loading. AppliedGID and HasDetail
+// continue to describe only authoritative RPC detail, so consumers that need
+// file-level data still wait for or fetch the full payload.
+func projectDownloadDetail(download aria2.Download) aria2.DownloadDetail {
+	return aria2.DownloadDetail{
+		GID:             download.GID,
+		Status:          download.Status,
+		Name:            download.Name,
+		IsMetadata:      download.IsMetadata,
+		CompletedLength: download.CompletedLength,
+		TotalLength:     download.TotalLength,
+		LengthKnown:     download.LengthKnown,
+		DownloadSpeed:   download.DownloadSpeed,
+		UploadSpeed:     download.UploadSpeed,
+		InfoHash:        download.InfoHash,
+		NumSeeders:      download.NumSeeders,
+		Seeder:          download.Seeder,
+		DownloadDir:     download.Dir,
+		Connections:     download.Connections,
+		CanonicalStatus: download.CanonicalStatus,
+		Ownership:       download.Ownership,
+		Phase:           download.Phase,
+		ProblemCode:     download.ProblemCode,
+		Actions:         download.Actions,
+	}
 }
 
 func (model Model) startAction(kind actionKind) (tea.Model, tea.Cmd) {
@@ -780,10 +834,16 @@ func outcomeMessage(err error) error {
 }
 
 const loadingTickInterval = 80 * time.Millisecond
+const detailLoadingDelay = 200 * time.Millisecond
 const localHelperTimeout = 5 * time.Second
 
 func loadingTick() tea.Cmd {
 	return tea.Tick(loadingTickInterval, func(time.Time) tea.Msg { return loadingTickMsg{} })
+}
+func detailLoadingTick(gid string, token uint64) tea.Cmd {
+	return tea.Tick(detailLoadingDelay, func(time.Time) tea.Msg {
+		return detailLoadingMsg{gid: gid, token: token}
+	})
 }
 func loadRecentDirs(ctx context.Context, service DashboardService) tea.Cmd {
 	return func() tea.Msg { dirs, err := service.RecentDirs(ctx); return recentDirsMsg{dirs: dirs, err: err} }

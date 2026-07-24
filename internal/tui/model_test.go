@@ -251,6 +251,73 @@ func TestNavigationAndQuitRemainAvailableDuringRead(t *testing.T) {
 	}
 }
 
+func TestDetailNavigationProjectsSelectedItemUntilDetailArrives(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.mode = ModeDetail
+	model.loaded = true
+	model.snapshot.Active = []aria2.Download{
+		{GID: "a", Name: "task-a", CanonicalStatus: "downloading"},
+		{GID: "b", Name: "task-b", CanonicalStatus: "waiting", CompletedLength: 25, TotalLength: 100, LengthKnown: true},
+	}
+	model.detailState = DetailState{
+		RequestedGID: "a",
+		AppliedGID:   "a",
+		Detail:       aria2.DownloadDetail{GID: "a", Name: "task-a", CanonicalStatus: "downloading"},
+		HasDetail:    true,
+	}
+	model.detail = model.detailState.Detail
+	model.refreshState.InFlight = false
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = updated.(Model)
+
+	if model.detail.GID != "b" || model.detail.Name != "task-b" {
+		t.Fatalf("selected row was not projected into detail: %#v", model.detail)
+	}
+	view := ansi.Strip(model.View().Content)
+	if strings.Contains(view, "Loading details") || !strings.Contains(view, "task-b") {
+		t.Fatalf("detail navigation rendered a loading shell instead of the selected item:\n%s", view)
+	}
+	if model.detailState.AppliedGID != "a" || !model.detailState.HasDetail {
+		t.Fatalf("projection changed authoritative detail state: %#v", model.detailState)
+	}
+
+	updated, _ = model.Update(detailLoadingMsg{gid: "b", token: model.detailState.LoadingToken})
+	model = updated.(Model)
+	if !strings.Contains(ansi.Strip(model.View().Content), "Loading details") {
+		t.Fatal("slow detail read did not show loading after the grace period")
+	}
+}
+
+func TestDetailNavigationRestoresAppliedDetailDuringQueuedRead(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.mode = ModeDetail
+	model.snapshot.Active = []aria2.Download{{GID: "a", Name: "task-a"}, {GID: "b", Name: "task-b"}}
+	model.detailState = DetailState{
+		RequestedGID: "a",
+		AppliedGID:   "a",
+		Detail:       aria2.DownloadDetail{GID: "a", Name: "full-task-a", PrimaryURI: "magnet:?a"},
+		HasDetail:    true,
+	}
+	model.detail = model.detailState.Detail
+	model.refreshState.InFlight = true
+
+	updated, _ := model.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = updated.(Model)
+	staleLoading := detailLoadingMsg{gid: "b", token: model.detailState.LoadingToken}
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'k', Text: "k"})
+	model = updated.(Model)
+	updated, _ = model.Update(staleLoading)
+	model = updated.(Model)
+
+	if model.detail.Name != "full-task-a" || model.detail.PrimaryURI != "magnet:?a" {
+		t.Fatalf("applied detail was not restored when navigating back: %#v", model.detail)
+	}
+	if strings.Contains(ansi.Strip(model.View().Content), "Loading details") {
+		t.Fatal("navigating back to applied detail rendered a loading shell")
+	}
+}
+
 func TestBackClearsDetailTargetAndQueuesLatestRead(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.mode = ModeDetail

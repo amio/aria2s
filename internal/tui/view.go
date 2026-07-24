@@ -156,7 +156,8 @@ func (model Model) detailView() string {
 	width, height := model.viewport()
 	detail := model.detail
 	contentWidth := contentInner(width)
-	if model.detailState.AppliedGID != model.detailState.RequestedGID || !model.detailState.HasDetail {
+	detailReady := model.detailState.AppliedGID == model.detailState.RequestedGID && model.detailState.HasDetail
+	if !detailReady && (model.detailState.LoadingVisible || detail.GID == "" || detail.GID != model.detailState.RequestedGID) {
 		message := "Loading details..."
 		if model.detailState.LastError != nil {
 			message = "Details unavailable: " + model.detailState.LastError.Error()
