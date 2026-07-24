@@ -141,8 +141,8 @@ func TestItemsGroupByCanonicalStatusAndSortDownloadingByProgress(t *testing.T) {
 	}
 	want := []string{
 		"download-high", "download-low",
-		"metadata",
 		"seed",
+		"metadata",
 		"waiting-first", "waiting-second",
 		"paused",
 		"error",

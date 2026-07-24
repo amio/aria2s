@@ -53,6 +53,28 @@ func TestStatusLabelsRenderCanonicalStatusWithoutAttributeOverrides(t *testing.T
 	}
 }
 
+func TestKnownStatusTonesAreDistinct(t *testing.T) {
+	statuses := []string{
+		"active",
+		"downloading",
+		"seeding",
+		"metadata",
+		"waiting",
+		"paused",
+		"complete",
+		"error",
+		"removed",
+	}
+	seen := make(map[rgb]string, len(statuses))
+	for _, status := range statuses {
+		tone := statusTone(status)
+		if other, exists := seen[tone]; exists {
+			t.Fatalf("statuses %q and %q share tone %#v", other, status, tone)
+		}
+		seen[tone] = status
+	}
+}
+
 func TestTableColumnsHideByPriority(t *testing.T) {
 	full := computeLayout(118)
 	if full.seedsWidth == 0 || full.peersWidth == 0 {

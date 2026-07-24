@@ -669,9 +669,9 @@ func downloadStatusRank(download aria2.Download) int {
 	switch app.TaskStatus(download.CanonicalStatus) {
 	case app.StatusDownloading:
 		return downloadingStatusRank
-	case app.StatusMetadata:
-		return 1
 	case app.StatusSeeding:
+		return 1
+	case app.StatusMetadata:
 		return 2
 	case app.StatusWaiting:
 		return 3
