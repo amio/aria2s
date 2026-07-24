@@ -678,23 +678,23 @@ func statusLabel(status string) string {
 func statusTone(status string) rgb {
 	switch status {
 	case "active":
-		return rgb{145, 200, 155}
+		return rgb{155, 190, 168}
 	case "downloading":
 		return rgb{125, 215, 160}
 	case "seeding":
-		return rgb{230, 150, 225}
-	case "metadata":
-		return rgb{165, 180, 228}
-	case "waiting":
-		return rgb{240, 210, 120}
-	case "paused":
-		return rgb{240, 182, 120}
-	case "complete":
 		return rgb{125, 210, 242}
+	case "metadata":
+		return rgb{168, 180, 224}
+	case "waiting":
+		return rgb{225, 194, 105}
+	case "paused":
+		return rgb{225, 151, 100}
+	case "complete":
+		return rgb{198, 207, 218}
 	case "error":
-		return rgb{250, 140, 140}
+		return rgb{242, 124, 124}
 	case "removed":
-		return rgb{175, 170, 185}
+		return rgb{145, 150, 160}
 	default:
 		return bodyTextColor
 	}
