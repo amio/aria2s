@@ -52,10 +52,10 @@ func (session *DashboardSession) Snapshot(ctx context.Context, query aria2.Dashb
 	if read.ListErr != nil {
 		return read, nil
 	}
-	return session.decorateSnapshot(read, scanned, query.List), nil
+	return session.decorateSnapshot(read, scanned, query), nil
 }
 
-func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scanned []jobs.ScannedJob, page aria2.ListQuery) aria2.DashboardRead {
+func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scanned []jobs.ScannedJob, query aria2.DashboardQuery) aria2.DashboardRead {
 	managed := make(map[string]jobs.Job)
 	for _, item := range scanned {
 		if item.Err == nil {
@@ -108,11 +108,41 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 		if _, ok := seen[gid]; ok {
 			continue
 		}
-		classification := ClassifyTask(ClassificationFact{Managed: true, Phase: job.Phase, Intent: job.ActivityIntent, ProblemCode: job.ProblemCode})
-		read.Downloads.Stopped = append(read.Downloads.Stopped, aria2.Download{GID: gid, Status: "absent", Name: firstNonempty(job.PayloadRoot, job.Source), CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), Phase: classification.Phase, ProblemCode: job.ProblemCode, Actions: session.availableActions(classification, true, job)})
+		classification := ClassifyTask(ClassificationFact{Managed: true, Phase: job.Phase, Intent: job.ActivityIntent, ProblemCode: job.ProblemCode, NativeAbsent: true})
+		read.Downloads.Stopped = append(read.Downloads.Stopped, aria2.Download{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.PayloadRoot, job.Source), CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), Phase: classification.Phase, ProblemCode: projectedProblemCode(job, true), Actions: session.availableActions(classification, true, job)})
 	}
-	read.Downloads.Stopped = pageManagedHistory(read.Downloads.Stopped, managed, page)
+	if query.DetailGID != "" && read.Detail == nil && aria2.IsNotFound(read.DetailErr) {
+		managedRow, absenceKnown := read.Managed[query.DetailGID]
+		if job, ok := managed[query.DetailGID]; ok && absenceKnown && managedRow == nil {
+			classification := ClassifyTask(ClassificationFact{Managed: true, Phase: job.Phase, Intent: job.ActivityIntent, ProblemCode: job.ProblemCode, NativeAbsent: true})
+			read.Detail = &aria2.DownloadDetail{
+				GID:             job.ID,
+				Status:          "absent",
+				Name:            firstNonempty(job.PayloadRoot, job.Source),
+				PrimaryURI:      job.Source,
+				DownloadDir:     job.TargetDir,
+				CanonicalStatus: string(classification.Status),
+				Ownership:       string(classification.Ownership),
+				Phase:           classification.Phase,
+				ProblemCode:     projectedProblemCode(job, true),
+				Actions:         session.availableActions(classification, true, job),
+			}
+			read.DetailErr = nil
+			read.DetailSourceErr = nil
+		}
+	}
+	read.Downloads.Stopped = pageManagedHistory(read.Downloads.Stopped, managed, query.List)
 	return read
+}
+
+func projectedProblemCode(job jobs.Job, nativeAbsent bool) string {
+	if job.ProblemCode != "" {
+		return job.ProblemCode
+	}
+	if nativeAbsent && job.Phase == jobs.PhasePublishing {
+		return "PublicationRecoveryRequired"
+	}
+	return ""
 }
 
 func pageManagedHistory(rows []aria2.Download, managed map[string]jobs.Job, page aria2.ListQuery) []aria2.Download {
@@ -146,7 +176,7 @@ func pageManagedHistory(rows []aria2.Download, managed map[string]jobs.Job, page
 
 func (session *DashboardSession) availableActions(classification TaskClassification, managed bool, job jobs.Job) []string {
 	if managed && job.Phase == jobs.PhasePublishing {
-		if job.ProblemCode == "" {
+		if classification.Status != StatusError {
 			return nil
 		}
 		return []string{"retry"}

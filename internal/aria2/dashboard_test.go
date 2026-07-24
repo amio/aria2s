@@ -143,6 +143,23 @@ func TestMutationConfirmedRPCErrorIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestMutationHTTP400JSONRPCErrorIsDeterministic(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","error":{"code":1,"message":"GID e1 is not found"}}`)
+	}))
+	defer server.Close()
+	client := aria2.NewRPCClient(server.URL, "", server.Client())
+	err := client.RemoveDownloadResult(context.Background(), "e1")
+	var rpcErr *aria2.RPCError
+	if !errors.As(err, &rpcErr) || rpcErr.Method != "aria2.removeDownloadResult" || !aria2.IsNotFound(err) {
+		t.Fatalf("HTTP 400 JSON-RPC fault was not preserved: %v", err)
+	}
+	if errors.Is(err, aria2.ErrOutcomeUnknown) {
+		t.Fatalf("confirmed not-found was classified as unknown: %v", err)
+	}
+}
+
 func TestMutationMalformedResponseIsOutcomeUnknown(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, `not-json`) }))
 	defer server.Close()
@@ -150,5 +167,21 @@ func TestMutationMalformedResponseIsOutcomeUnknown(t *testing.T) {
 	_, err := client.AddURI(context.Background(), "https://example.com/a", aria2.AddOptions{})
 	if !errors.Is(err, aria2.ErrOutcomeUnknown) {
 		t.Fatalf("malformed mutation response was retryable: %v", err)
+	}
+}
+
+func TestMutationMalformedHTTP400RemainsOutcomeUnknown(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `not-json`)
+	}))
+	defer server.Close()
+	client := aria2.NewRPCClient(server.URL, "", server.Client())
+	err := client.RemoveDownloadResult(context.Background(), "e1")
+	if !errors.Is(err, aria2.ErrOutcomeUnknown) || !errors.Is(err, aria2.ErrTransportUnavailable) {
+		t.Fatalf("unconfirmed HTTP failure lost unknown/transport identity: %v", err)
+	}
+	if !strings.Contains(err.Error(), "aria2.removeDownloadResult") {
+		t.Fatalf("unknown mutation diagnostic lost method: %v", err)
 	}
 }

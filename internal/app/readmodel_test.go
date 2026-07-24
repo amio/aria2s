@@ -21,6 +21,7 @@ func TestCanonicalStatusUsesNativeVocabularyAndActiveSubstates(t *testing.T) {
 		{name: "error", fact: ClassificationFact{NativeStatus: "error"}, want: StatusError},
 		{name: "removed", fact: ClassificationFact{NativeStatus: "removed"}, want: StatusRemoved},
 		{name: "managed publishing fallback", fact: ClassificationFact{Managed: true, Phase: jobs.PhasePublishing}, want: StatusDownloading},
+		{name: "detached managed publishing recovery", fact: ClassificationFact{Managed: true, Phase: jobs.PhasePublishing, NativeAbsent: true}, want: StatusError},
 		{name: "managed staged stop fallback", fact: ClassificationFact{Managed: true, Phase: jobs.PhaseStaged, Intent: jobs.ActivityStopped}, want: StatusPaused},
 		{name: "managed published stop fallback", fact: ClassificationFact{Managed: true, Phase: jobs.PhasePublished, Intent: jobs.ActivityStopped}, want: StatusComplete},
 		{name: "managed removal override", fact: ClassificationFact{Managed: true, Phase: jobs.PhaseRemoved, NativeStatus: "active"}, want: StatusRemoved},

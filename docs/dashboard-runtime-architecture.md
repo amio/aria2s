@@ -414,9 +414,11 @@ task.
 ### Mutation Outcome
 
 The RPC boundary uses a mutation-specific call path. Client validation/request encoding
-failure and a completely decoded `RPCError` are deterministic. Once a request is handed to
-HTTP, any failure without valid JSON-RPC success/error confirmation is conservatively unknown:
-transport error, timeout, non-2xx status, EOF, response JSON failure, or result-shape failure.
+failure and a completely decoded `RPCError` are deterministic. aria2 carries some valid
+JSON-RPC faults in HTTP 400 responses, so the body is decoded before applying HTTP status
+policy. Once a request is handed to HTTP, any failure without valid JSON-RPC success/error
+confirmation is conservatively unknown: transport error, timeout, non-2xx status without a
+decodable RPC fault, EOF, response JSON failure, or result-shape failure.
 
 `OutcomeUnknownError` identifies `ErrOutcomeUnknown` and unwraps its cause, so both
 `errors.Is(err, ErrOutcomeUnknown)` and checks such as

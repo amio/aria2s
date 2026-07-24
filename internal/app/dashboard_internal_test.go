@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/amio/aria2s/internal/aria2"
+	"github.com/amio/aria2s/internal/jobs"
 	"github.com/amio/aria2s/internal/paths"
 	"github.com/amio/aria2s/internal/state"
 )
@@ -102,5 +103,38 @@ func TestDashboardSessionBindsRPCIdentityButReadsFreshRecentDirs(t *testing.T) {
 	}
 	if rpc.identities[0].RPCSecret != "bound" || !reflect.DeepEqual(dirs, []string{"/new"}) {
 		t.Fatalf("identity/metadata ownership mismatch: identity=%q dirs=%v", rpc.identities[0].RPCSecret, dirs)
+	}
+}
+
+func TestDashboardProjectsDetachedPublishingAsRecoverableManifestDetail(t *testing.T) {
+	const gid = "928cecc78f5f8415"
+	job := jobs.Job{
+		ID:             gid,
+		Source:         "magnet:?xt=urn:btih:example",
+		TargetDir:      "/downloads",
+		Phase:          jobs.PhasePublishing,
+		ActivityIntent: jobs.ActivityRunning,
+		PayloadRoot:    "payload.cbr",
+	}
+	session := &DashboardSession{}
+	read := aria2.DashboardRead{
+		Managed:         map[string]*aria2.Download{gid: nil},
+		DetailErr:       &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "GID is not found"},
+		DetailSourceErr: &aria2.RPCError{Method: "aria2.getUris", Code: 1, Message: "GID is not found"},
+	}
+	got := session.decorateSnapshot(read, []jobs.ScannedJob{{ID: gid, Job: job}}, aria2.DashboardQuery{DetailGID: gid})
+	if len(got.Downloads.Stopped) != 1 {
+		t.Fatalf("manifest row count = %d", len(got.Downloads.Stopped))
+	}
+	row := got.Downloads.Stopped[0]
+	if row.CanonicalStatus != string(StatusError) || row.ProblemCode != "PublicationRecoveryRequired" || !reflect.DeepEqual(row.Actions, []string{"retry"}) {
+		t.Fatalf("manifest recovery row = %#v", row)
+	}
+	if got.Detail == nil || got.Detail.GID != gid || got.Detail.CanonicalStatus != string(StatusError) ||
+		got.Detail.ProblemCode != "PublicationRecoveryRequired" ||
+		got.Detail.PrimaryURI != job.Source || got.Detail.DownloadDir != job.TargetDir ||
+		!reflect.DeepEqual(got.Detail.Actions, []string{"retry"}) ||
+		got.DetailErr != nil || got.DetailSourceErr != nil {
+		t.Fatalf("manifest recovery detail = %#v detailErr=%v sourceErr=%v", got.Detail, got.DetailErr, got.DetailSourceErr)
 	}
 }

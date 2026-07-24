@@ -30,6 +30,7 @@ type ClassificationFact struct {
 	NativeStatus     string
 	NativeSeeder     bool
 	NativeMetadata   bool
+	NativeAbsent     bool
 	IdentityConflict bool
 }
 
@@ -54,6 +55,8 @@ func ClassifyTask(fact ClassificationFact) TaskClassification {
 	case fact.Managed && fact.Phase == jobs.PhaseRemoved:
 		result.Status = StatusRemoved
 	case fact.Managed && fact.ProblemCode != "" && fact.ProblemCode != "PowerLossDurabilityUnavailable":
+		result.Status = StatusError
+	case fact.Managed && fact.Phase == jobs.PhasePublishing && fact.NativeAbsent:
 		result.Status = StatusError
 	case fact.NativeStatus == "active" && fact.NativeMetadata:
 		result.Status = StatusMetadata

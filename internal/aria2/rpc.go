@@ -35,7 +35,7 @@ type OutcomeUnknownError struct {
 }
 
 func (err *OutcomeUnknownError) Error() string {
-	return fmt.Sprintf("%s: %v", ErrOutcomeUnknown, err.Cause)
+	return fmt.Sprintf("%s (%s): %v", ErrOutcomeUnknown, err.Method, err.Cause)
 }
 
 func (err *OutcomeUnknownError) Unwrap() []error { return []error{ErrOutcomeUnknown, err.Cause} }
@@ -179,15 +179,22 @@ func (client *RPCClient) dispatch(ctx context.Context, method string, payload rp
 		return classifyDispatched(method, err, mutation)
 	}
 	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return classifyDispatched(method, err, mutation)
+	}
+	var decoded rpcResponse
+	decodeErr := json.Unmarshal(body, &decoded)
+	// aria2 uses HTTP 400 for some valid JSON-RPC faults, including an unknown
+	// GID. A decoded error is authoritative regardless of that transport status.
+	if decodeErr == nil && decoded.Error != nil {
+		return &RPCError{Method: method, Code: decoded.Error.Code, Message: decoded.Error.Message}
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return classifyDispatched(method, fmt.Errorf("%w: aria2 RPC returned HTTP %d", ErrTransportUnavailable, resp.StatusCode), mutation)
 	}
-	var decoded rpcResponse
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
-		return classifyDispatched(method, err, mutation)
-	}
-	if decoded.Error != nil {
-		return &RPCError{Method: method, Code: decoded.Error.Code, Message: decoded.Error.Message}
+	if decodeErr != nil {
+		return classifyDispatched(method, decodeErr, mutation)
 	}
 	if result == nil {
 		return nil
