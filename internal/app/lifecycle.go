@@ -1000,7 +1000,7 @@ func cleanupPublishedWorkDir(workDir, root string) error {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || (entry.Name() != root+".aria2" && !strings.HasSuffix(entry.Name(), ".torrent")) {
+		if entry.IsDir() || !isPublishedCleanupArtifact(entry.Name(), root) {
 			return fmt.Errorf("unexpected staging artifact remains after publication: %s", entry.Name())
 		}
 		if err := os.Remove(filepath.Join(workDir, entry.Name())); err != nil {
@@ -1011,6 +1011,17 @@ func cleanupPublishedWorkDir(workDir, root string) error {
 		return err
 	}
 	return atomicfile.SyncDirectory(filepath.Dir(workDir))
+}
+
+func isPublishedCleanupArtifact(name, root string) bool {
+	if name == root+".aria2" || strings.HasSuffix(name, ".torrent") {
+		return true
+	}
+	// macOS stores extended attributes in AppleDouble companions on filesystems
+	// such as exFAT. Only companions of already-managed transients are safe to
+	// remove; unrelated sidecars must retain the same cleanup guard as user data.
+	companion, found := strings.CutPrefix(name, "._")
+	return found && (companion == root+".aria2" || strings.HasSuffix(companion, ".torrent"))
 }
 
 func removeWorkDir(workDir string) error {

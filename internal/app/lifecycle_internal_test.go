@@ -486,6 +486,44 @@ func TestRemovedPublishedCleanupMustConvergeBeforeClear(t *testing.T) {
 	}
 }
 
+func TestPublishedCleanupRemovesAppleDoubleTransientCompanions(t *testing.T) {
+	parent := t.TempDir()
+	workDir := filepath.Join(parent, "work")
+	if err := os.Mkdir(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{
+		"payload.aria2",
+		"._payload.aria2",
+		"descriptor.torrent",
+		"._descriptor.torrent",
+	} {
+		if err := os.WriteFile(filepath.Join(workDir, name), []byte("transient"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := cleanupPublishedWorkDir(workDir, "payload"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(workDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("published staging directory survived cleanup: %v", err)
+	}
+}
+
+func TestPublishedCleanupRejectsUnrelatedAppleDoubleArtifact(t *testing.T) {
+	workDir := t.TempDir()
+	unexpected := filepath.Join(workDir, "._notes.txt")
+	if err := os.WriteFile(unexpected, []byte("unknown"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := cleanupPublishedWorkDir(workDir, "payload"); err == nil {
+		t.Fatal("cleanup accepted an unrelated AppleDouble artifact")
+	}
+	if _, err := os.Stat(unexpected); err != nil {
+		t.Fatalf("cleanup removed an unrelated AppleDouble artifact: %v", err)
+	}
+}
+
 func TestPublishingActionsMatchLifecycleMutations(t *testing.T) {
 	session := &DashboardSession{}
 	job := jobs.Job{Phase: jobs.PhasePublishing}
