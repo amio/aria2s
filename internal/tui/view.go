@@ -175,7 +175,7 @@ func (model Model) detailView() string {
 	// Top bar: name on left, [status] + progress on right.
 	rightParts := []string{
 		fmt.Sprintf("[%s]", detailStatusLabel(detail)),
-		fmt.Sprintf("%s of %s (%s)", formatBytes(detail.CompletedLength), formatBytes(detail.TotalLength), formatTaskProgress(detail.CompletedLength, detail.TotalLength, detail.CanonicalStatus)),
+		fmt.Sprintf("%s of %s (%s)", formatTaskBytes(detail.CompletedLength, detail.LengthKnown), formatTaskBytes(detail.TotalLength, detail.LengthKnown), formatTaskProgress(detail.CompletedLength, detail.TotalLength, detail.CanonicalStatus)),
 	}
 	fcw := frameContentWidth(width)
 	const minGap = 5
@@ -468,8 +468,8 @@ func (model Model) downloadRow(width int, download aria2.Download, selected bool
 		name += " [" + download.ProblemCode + "]"
 	}
 	add(name, l.nameWidth, false)
-	add(formatBytes(download.TotalLength), l.sizeWidth, true)
-	add(formatBytes(download.CompletedLength), l.downloadedWidth, true)
+	add(formatTaskBytes(download.TotalLength, download.LengthKnown), l.sizeWidth, true)
+	add(formatTaskBytes(download.CompletedLength, download.LengthKnown), l.downloadedWidth, true)
 	add(formatTaskProgress(download.CompletedLength, download.TotalLength, download.CanonicalStatus), l.progressWidth, true)
 	add(formatSpeed(download.DownloadSpeed), l.downWidth, true)
 	add(formatSpeed(download.UploadSpeed), l.upWidth, true)
@@ -738,6 +738,13 @@ func formatProgress(completed int64, total int64) string {
 		return "0.0%"
 	}
 	return fmt.Sprintf("%.1f%%", float64(completed)/float64(total)*100)
+}
+
+func formatTaskBytes(value int64, known bool) string {
+	if !known && value == 0 {
+		return "—"
+	}
+	return formatBytes(value)
 }
 
 func formatTaskProgress(completed int64, total int64, status string) string {

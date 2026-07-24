@@ -112,7 +112,7 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 		}
 		classification := ClassifyTask(ClassificationFact{Managed: true, Phase: job.Phase, Intent: job.ActivityIntent, ProblemCode: job.ProblemCode, NativeAbsent: true})
 		row := aria2.Download{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.PayloadRoot, job.Source), CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), Phase: classification.Phase, ProblemCode: projectedProblemCode(job, true), Actions: session.availableActions(classification, true, job)}
-		applyPublishedMetrics(&row.CompletedLength, &row.TotalLength, job)
+		applyPublishedMetrics(&row.CompletedLength, &row.TotalLength, &row.LengthKnown, job)
 		read.Downloads.Stopped = append(read.Downloads.Stopped, row)
 	}
 	if query.DetailGID != "" && read.Detail == nil && aria2.IsNotFound(read.DetailErr) {
@@ -131,7 +131,7 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 				ProblemCode:     projectedProblemCode(job, true),
 				Actions:         session.availableActions(classification, true, job),
 			}
-			applyPublishedMetrics(&read.Detail.CompletedLength, &read.Detail.TotalLength, job)
+			applyPublishedMetrics(&read.Detail.CompletedLength, &read.Detail.TotalLength, &read.Detail.LengthKnown, job)
 			read.DetailErr = nil
 			read.DetailSourceErr = nil
 		}
@@ -140,12 +140,13 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 	return read
 }
 
-func applyPublishedMetrics(completed, total *int64, job jobs.Job) {
+func applyPublishedMetrics(completed, total *int64, known *bool, job jobs.Job) {
 	if job.Phase != jobs.PhasePublished || job.PayloadLength == nil {
 		return
 	}
 	*completed = *job.PayloadLength
 	*total = *job.PayloadLength
+	*known = true
 }
 
 func (session *DashboardSession) decorateDetail(detail *aria2.DownloadDetail, job jobs.Job, managed bool) {

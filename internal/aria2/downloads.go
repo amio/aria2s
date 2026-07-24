@@ -54,6 +54,7 @@ type Download struct {
 	IsMetadata      bool
 	CompletedLength int64
 	TotalLength     int64
+	LengthKnown     bool
 	DownloadSpeed   int64
 	UploadSpeed     int64
 	NumSeeders      int64
@@ -75,6 +76,7 @@ type DownloadDetail struct {
 	IsMetadata             bool
 	CompletedLength        int64
 	TotalLength            int64
+	LengthKnown            bool
 	DownloadSpeed          int64
 	UploadSpeed            int64
 	UploadLength           int64
@@ -361,6 +363,7 @@ func (raw rawDownload) toDownload() Download {
 		IsMetadata:      raw.isMetadata(),
 		CompletedLength: parseInt(raw.CompletedLength),
 		TotalLength:     parseInt(raw.TotalLength),
+		LengthKnown:     raw.TotalLength != "",
 		DownloadSpeed:   parseInt(raw.DownloadSpeed),
 		UploadSpeed:     parseInt(raw.UploadSpeed),
 		NumSeeders:      parseInt(raw.NumSeeders),
@@ -372,7 +375,7 @@ func (raw rawDownload) toDownload() Download {
 
 func (raw rawDownload) toDetail() DownloadDetail {
 	download := raw.toDownload()
-	detail := DownloadDetail{GID: download.GID, Status: download.Status, Name: download.Name, IsMetadata: download.IsMetadata, CompletedLength: download.CompletedLength, TotalLength: download.TotalLength, DownloadSpeed: download.DownloadSpeed, UploadSpeed: download.UploadSpeed, UploadLength: parseInt(raw.UploadLength), VerifiedLength: parseInt(raw.VerifiedLength), VerifyIntegrityPending: raw.VerifyIntegrityPending == "true", InfoHash: raw.InfoHash, NumSeeders: parseInt(raw.NumSeeders), Seeder: raw.Seeder == "true", PieceLength: parseInt(raw.PieceLength), NumPieces: parseInt(raw.NumPieces), PrimaryURI: raw.primaryURI(), DownloadDir: raw.Dir, Connections: parseInt(raw.Connections), ErrorCode: raw.ErrorCode, ErrorMessage: raw.ErrorMessage}
+	detail := DownloadDetail{GID: download.GID, Status: download.Status, Name: download.Name, IsMetadata: download.IsMetadata, CompletedLength: download.CompletedLength, TotalLength: download.TotalLength, LengthKnown: download.LengthKnown, DownloadSpeed: download.DownloadSpeed, UploadSpeed: download.UploadSpeed, UploadLength: parseInt(raw.UploadLength), VerifiedLength: parseInt(raw.VerifiedLength), VerifyIntegrityPending: raw.VerifyIntegrityPending == "true", InfoHash: raw.InfoHash, NumSeeders: parseInt(raw.NumSeeders), Seeder: raw.Seeder == "true", PieceLength: parseInt(raw.PieceLength), NumPieces: parseInt(raw.NumPieces), PrimaryURI: raw.primaryURI(), DownloadDir: raw.Dir, Connections: parseInt(raw.Connections), ErrorCode: raw.ErrorCode, ErrorMessage: raw.ErrorMessage}
 	if detail.PrimaryURI == "" && raw.InfoHash != "" {
 		detail.PrimaryURI = magnetURI(raw.InfoHash)
 	}

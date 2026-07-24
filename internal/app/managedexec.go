@@ -90,7 +90,7 @@ func (app *App) ManagedExec(ctx context.Context) error {
 			}
 		}
 		if available && job.Phase == jobs.PhasePublished && job.PayloadLength == nil {
-			job, scannedJob.Token, err = backfillPayloadLength(repository, job, scannedJob.Token)
+			job, scannedJob.Token, err = backfillTorrentPayloadLength(repository, job, scannedJob.Token)
 			if err != nil {
 				return err
 			}
@@ -238,12 +238,10 @@ func reconcilePublishing(repository *jobs.Repository, job jobs.Job, token jobs.T
 	return job, next, saveErr
 }
 
-func backfillPayloadLength(repository *jobs.Repository, job jobs.Job, token jobs.Token) (jobs.Job, jobs.Token, error) {
-	length, err := publication.LogicalSize(filepath.Join(job.TargetDir, job.PayloadRoot))
-	if err != nil {
+func backfillTorrentPayloadLength(repository *jobs.Repository, job jobs.Job, token jobs.Token) (jobs.Job, jobs.Token, error) {
+	if !recoverTorrentPayloadLength(repository, &job) {
 		return job, token, nil
 	}
-	job.PayloadLength = &length
 	next, err := repository.SaveCAS(job, token)
 	return job, next, err
 }
@@ -251,11 +249,7 @@ func backfillPayloadLength(repository *jobs.Repository, job jobs.Job, token jobs
 func finalizeReconciledPublication(repository *jobs.Repository, job *jobs.Job) {
 	job.Phase = jobs.PhasePublished
 	job.ProblemCode = ""
-	if job.PayloadLength == nil {
-		if length, err := publication.LogicalSize(filepath.Join(job.TargetDir, job.PayloadRoot)); err == nil {
-			job.PayloadLength = &length
-		}
-	}
+	recoverTorrentPayloadLength(repository, job)
 	if _, err := readValidatedMetainfo(repository, job.ID); err == nil {
 		return
 	} else if errors.Is(err, os.ErrNotExist) {
@@ -268,6 +262,22 @@ func finalizeReconciledPublication(repository *jobs.Repository, job *jobs.Job) {
 		// and surface the corruption rather than silently treating it as HTTP.
 		job.ProblemCode = "RestartStateMissing"
 	}
+}
+
+func recoverTorrentPayloadLength(repository *jobs.Repository, job *jobs.Job) bool {
+	if job.PayloadLength != nil {
+		return false
+	}
+	metainfo, err := repository.ReadMetainfo(job.ID)
+	if err != nil {
+		return false
+	}
+	length, err := aria2.MetainfoTotalLength(metainfo)
+	if err != nil {
+		return false
+	}
+	job.PayloadLength = &length
+	return true
 }
 
 func pathPresence(path string, identifyErr error) (exists, uncertain bool) {

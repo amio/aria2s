@@ -34,22 +34,26 @@ the manifest enters `publishing`. The hook already proves
 `completedLength == totalLength`, so this value describes the payload accepted
 for publication rather than an arbitrary progress sample.
 
-When startup encounters a legacy `publishing` or `published` manifest, it
-measures the one payload root and saves the recovered logical byte count. A
-small publication helper performs this one-time recursive measurement without
-following symlinks.
+When startup encounters a legacy `publishing` or `published` torrent manifest,
+it derives the exact logical byte count from the already-retained metainfo and
+saves that value. It does not infer historical download facts from the mutable
+published filesystem. Legacy HTTP jobs without an exact source remain unknown.
 
 Dashboard projection uses `payloadLength` only for native-absent,
-manifest-backed `published` tasks. Native rows are never overwritten. The TUI
-renders any semantically complete row as `100.0%`, including a valid zero-byte
-payload or a legacy manifest whose size cannot be recovered without an
-unbounded Dashboard read.
+manifest-backed `published` tasks. Native rows are never overwritten, even when
+their values disagree with a manifest. The read model carries explicit length
+knowledge so the TUI can distinguish a known zero-byte payload from missing
+history. Unknown byte columns render as `—`; every semantically complete task
+still renders as `100.0%`.
 
 ## Alternatives Considered
 
 - Recursively measure every published payload on every Dashboard refresh:
   rejected because it makes a bounded interactive read proportional to the
   entire payload tree and can repeatedly hit slow or offline storage.
+- Persist a one-time filesystem measurement for legacy jobs: rejected because
+  published payloads are user-owned and mutable. Their current size is not
+  reliable evidence of the historical download length.
 - Keep aria2's stopped result forever: rejected because managed publication and
   final seeding intentionally replace or remove native results, and aria2
   history is not the durable ownership boundary.
@@ -59,19 +63,22 @@ unbounded Dashboard read.
 
 ## Trade-offs & Risks
 
-Legacy jobs are backfilled once during the next managed service startup while
-their published payload is available. If it is unavailable, the task still
-renders as complete at `100.0%`, but its byte columns remain unknown. Newly
-completed jobs preserve aria2's guarded final logical length directly.
+Legacy torrent jobs are backfilled once during the next managed service startup
+when retained metainfo can prove their original size. Legacy HTTP jobs remain
+unknown rather than receiving a potentially false value. Newly completed jobs
+preserve aria2's guarded final logical length directly.
 
-Logical byte count sums regular file sizes. It intentionally does not represent
-allocated disk blocks or follow symbolic links.
+Metainfo recovery must support the v1 single-file and multi-file layouts used by
+aria2. Unsupported or malformed metainfo leaves the length unknown and must not
+block service startup.
 
 ## Validation & Rollout
 
 - Test manifest JSON compatibility with and without `payloadLength`.
 - Test completion publication persists the guarded total length.
-- Test publication recovery measures and persists a legacy payload length.
+- Test metainfo length extraction and exact legacy torrent recovery.
 - Test list and detail projection of a native-absent published manifest.
-- Test zero-length complete progress rendering.
+- Test that native aria2 metrics win when a manifest contains a different
+  length.
+- Test known-zero and unknown complete rendering separately.
 - Run the full Go test suite.

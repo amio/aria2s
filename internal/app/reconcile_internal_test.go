@@ -52,9 +52,6 @@ func TestReconcilePublishingConvergesMoveAndReliablePostMoveCrash(t *testing.T) 
 			if job.Phase != jobs.PhasePublished || job.ProblemCode != "" {
 				t.Fatalf("job=%+v token=%x", job, token)
 			}
-			if job.PayloadLength == nil || *job.PayloadLength != 7 {
-				t.Fatalf("recovered payload length = %v, want 7", job.PayloadLength)
-			}
 			if job.ActivityIntent != jobs.ActivityStopped {
 				t.Fatalf("HTTP publication recovery retained seed intent: %+v", job)
 			}
@@ -107,14 +104,14 @@ func TestReconcilePublishingConvergesWeakIdentityPostMoveCrash(t *testing.T) {
 	}
 }
 
-func TestBackfillPublishedPayloadLengthForLegacyManifest(t *testing.T) {
+func TestBackfillPublishedTorrentLengthFromRetainedMetainfo(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")
 	if err := os.Mkdir(target, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	payload := filepath.Join(target, "payload.bin")
-	if err := os.WriteFile(payload, []byte("legacy"), 0o600); err != nil {
+	if err := os.WriteFile(payload, []byte("mutable-payload-is-not-six-bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	payloadIdentity, err := publication.Identify(payload)
@@ -141,7 +138,11 @@ func TestBackfillPublishedPayloadLengthForLegacyManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, _, err = backfillPayloadLength(repository, job, token)
+	metainfo := []byte("d4:infod6:lengthi6e4:name1:x12:piece lengthi1e6:pieces20:01234567890123456789ee")
+	if err := repository.WriteMetainfo(job.ID, metainfo); err != nil {
+		t.Fatal(err)
+	}
+	job, _, err = backfillTorrentPayloadLength(repository, job, token)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -154,6 +155,28 @@ func TestBackfillPublishedPayloadLengthForLegacyManifest(t *testing.T) {
 	}
 	if loaded.PayloadLength == nil || *loaded.PayloadLength != 6 {
 		t.Fatalf("persisted payload length = %v, want 6", loaded.PayloadLength)
+	}
+}
+
+func TestPayloadLengthRecoveryDoesNotInferFromPublishedFilesystem(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "payload.bin"), []byte("mutable"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	job := jobs.Job{
+		ID:          "0123456789abcdef",
+		TargetDir:   target,
+		PayloadRoot: "payload.bin",
+	}
+	if recoverTorrentPayloadLength(jobs.New(filepath.Join(root, "state")), &job) {
+		t.Fatal("published filesystem was accepted as historical download evidence")
+	}
+	if job.PayloadLength != nil {
+		t.Fatalf("filesystem-derived payload length = %v", job.PayloadLength)
 	}
 }
 
@@ -225,5 +248,8 @@ func TestReconcileHTTPDescriptorPreservesRunningSeedIntent(t *testing.T) {
 	}
 	if job.Phase != jobs.PhasePublished || job.ActivityIntent != jobs.ActivityRunning || job.ProblemCode != "" {
 		t.Fatalf("descriptor publication recovery lost seed intent: %+v", job)
+	}
+	if job.PayloadLength == nil || *job.PayloadLength != 1 {
+		t.Fatalf("descriptor publication length = %v, want 1", job.PayloadLength)
 	}
 }

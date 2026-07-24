@@ -227,11 +227,73 @@ func TestDashboardProjectsPublishedPayloadMetricsInRowAndDetail(t *testing.T) {
 	}
 	row := got.Downloads.Stopped[0]
 	if row.CanonicalStatus != string(StatusComplete) ||
-		row.CompletedLength != length || row.TotalLength != length {
+		row.CompletedLength != length || row.TotalLength != length || !row.LengthKnown {
 		t.Fatalf("published row = %#v", row)
 	}
 	if got.Detail == nil || got.Detail.CanonicalStatus != string(StatusComplete) ||
-		got.Detail.CompletedLength != length || got.Detail.TotalLength != length {
+		got.Detail.CompletedLength != length || got.Detail.TotalLength != length ||
+		!got.Detail.LengthKnown {
 		t.Fatalf("published detail = %#v", got.Detail)
+	}
+
+	job.PayloadLength = nil
+	unknown := session.decorateSnapshot(
+		aria2.DashboardRead{Managed: map[string]*aria2.Download{gid: nil}},
+		[]jobs.ScannedJob{{ID: gid, Job: job}},
+		aria2.DashboardQuery{},
+	)
+	if len(unknown.Downloads.Stopped) != 1 ||
+		unknown.Downloads.Stopped[0].CanonicalStatus != string(StatusComplete) ||
+		unknown.Downloads.Stopped[0].LengthKnown {
+		t.Fatalf("unknown legacy row = %#v", unknown.Downloads.Stopped)
+	}
+}
+
+func TestDashboardKeepsNativeMetricsAuthoritativeForManagedTask(t *testing.T) {
+	const gid = "928cecc78f5f8415"
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	manifestLength := int64(1234)
+	job := jobs.Job{
+		ID:             gid,
+		TargetDir:      filepath.Join(root, "downloads"),
+		Phase:          jobs.PhasePublished,
+		ActivityIntent: jobs.ActivityStopped,
+		PayloadLength:  &manifestLength,
+	}
+	row := aria2.Download{
+		GID:             gid,
+		Status:          "complete",
+		Dir:             job.TargetDir,
+		CompletedLength: 99,
+		TotalLength:     100,
+		LengthKnown:     true,
+	}
+	detail := aria2.DownloadDetail{
+		GID:             gid,
+		Status:          "complete",
+		DownloadDir:     job.TargetDir,
+		CompletedLength: 99,
+		TotalLength:     100,
+		LengthKnown:     true,
+	}
+	session := &DashboardSession{app: New(Options{Paths: servicePaths})}
+	got := session.decorateSnapshot(
+		aria2.DashboardRead{
+			Downloads: aria2.DownloadSnapshot{Stopped: []aria2.Download{row}},
+			Detail:    &detail,
+			Managed:   map[string]*aria2.Download{gid: &row},
+		},
+		[]jobs.ScannedJob{{ID: gid, Job: job}},
+		aria2.DashboardQuery{DetailGID: gid},
+	)
+
+	if len(got.Downloads.Stopped) != 1 ||
+		got.Downloads.Stopped[0].CompletedLength != 99 ||
+		got.Downloads.Stopped[0].TotalLength != 100 {
+		t.Fatalf("native row metrics were overwritten: %#v", got.Downloads.Stopped)
+	}
+	if got.Detail == nil || got.Detail.CompletedLength != 99 || got.Detail.TotalLength != 100 {
+		t.Fatalf("native detail metrics were overwritten: %#v", got.Detail)
 	}
 }

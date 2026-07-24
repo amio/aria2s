@@ -57,6 +57,12 @@ func TestCompleteTaskProgressIsSemanticForUnknownOrZeroLength(t *testing.T) {
 	if got := formatTaskProgress(0, 0, "complete"); got != "100.0%" {
 		t.Fatalf("complete zero-length progress = %q", got)
 	}
+	if got := formatTaskBytes(0, false); got != "—" {
+		t.Fatalf("unknown task length = %q", got)
+	}
+	if got := formatTaskBytes(0, true); got != "0" {
+		t.Fatalf("known zero task length = %q", got)
+	}
 	if got := formatTaskProgress(0, 0, "metadata"); got != "0.0%" {
 		t.Fatalf("metadata unknown-length progress = %q", got)
 	}

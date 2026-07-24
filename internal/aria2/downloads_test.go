@@ -43,7 +43,8 @@ func TestListDownloadsFetchesActiveWaitingAndStoppedWindows(t *testing.T) {
 	if len(snapshot.Waiting) != 1 || snapshot.Waiting[0].GID != "w1" || snapshot.Waiting[0].Status != "waiting" {
 		t.Fatalf("unexpected waiting downloads: %#v", snapshot.Waiting)
 	}
-	if len(snapshot.Stopped) != 1 || snapshot.Stopped[0].GID != "s1" || snapshot.Stopped[0].CompletedLength != 300 {
+	if len(snapshot.Stopped) != 1 || snapshot.Stopped[0].GID != "s1" ||
+		snapshot.Stopped[0].CompletedLength != 300 || !snapshot.Stopped[0].LengthKnown {
 		t.Fatalf("unexpected stopped downloads: %#v", snapshot.Stopped)
 	}
 	assertRPCRequest(t, requests[0], "aria2.tellActive", "token:secret-token")
