@@ -89,6 +89,12 @@ func (app *App) ManagedExec(ctx context.Context) error {
 				return err
 			}
 		}
+		if available && job.Phase == jobs.PhasePublished && job.PayloadLength == nil {
+			job, scannedJob.Token, err = backfillPayloadLength(repository, job, scannedJob.Token)
+			if err != nil {
+				return err
+			}
+		}
 		fact := inspectStartupFact(repository, job, scope, available)
 		if available && job.PayloadRoot == "" && fact.InferredRoot != "" {
 			job.PayloadRoot = fact.InferredRoot
@@ -232,9 +238,24 @@ func reconcilePublishing(repository *jobs.Repository, job jobs.Job, token jobs.T
 	return job, next, saveErr
 }
 
+func backfillPayloadLength(repository *jobs.Repository, job jobs.Job, token jobs.Token) (jobs.Job, jobs.Token, error) {
+	length, err := publication.LogicalSize(filepath.Join(job.TargetDir, job.PayloadRoot))
+	if err != nil {
+		return job, token, nil
+	}
+	job.PayloadLength = &length
+	next, err := repository.SaveCAS(job, token)
+	return job, next, err
+}
+
 func finalizeReconciledPublication(repository *jobs.Repository, job *jobs.Job) {
 	job.Phase = jobs.PhasePublished
 	job.ProblemCode = ""
+	if job.PayloadLength == nil {
+		if length, err := publication.LogicalSize(filepath.Join(job.TargetDir, job.PayloadRoot)); err == nil {
+			job.PayloadLength = &length
+		}
+	}
 	if _, err := readValidatedMetainfo(repository, job.ID); err == nil {
 		return
 	} else if errors.Is(err, os.ErrNotExist) {

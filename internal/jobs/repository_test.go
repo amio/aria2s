@@ -100,3 +100,36 @@ func TestLoadStorageIgnoresLegacyPublicationCapability(t *testing.T) {
 		t.Fatalf("legacy storage decoded incorrectly: %+v", scope)
 	}
 }
+
+func TestJobPayloadLengthIsOptionalAndRoundTripsZero(t *testing.T) {
+	repository := New(t.TempDir())
+	job := validJob(t.TempDir())
+	job.Phase = PhasePublished
+	job.PayloadRoot = "empty.bin"
+	job.PayloadIdentity = ObjectIdentity{MountID: 1, ObjectID: 2}
+	length := int64(0)
+	job.PayloadLength = &length
+	if _, err := repository.Create(job); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.PayloadLength == nil || *loaded.PayloadLength != 0 {
+		t.Fatalf("payload length = %v, want known zero", loaded.PayloadLength)
+	}
+
+	legacy := validJob(t.TempDir())
+	legacy.ID = "1111111111111111"
+	if _, err := repository.Create(legacy); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err = repository.Load(legacy.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.PayloadLength != nil {
+		t.Fatalf("legacy payload length = %v, want unknown", loaded.PayloadLength)
+	}
+}

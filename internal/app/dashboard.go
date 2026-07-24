@@ -111,7 +111,9 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 			continue
 		}
 		classification := ClassifyTask(ClassificationFact{Managed: true, Phase: job.Phase, Intent: job.ActivityIntent, ProblemCode: job.ProblemCode, NativeAbsent: true})
-		read.Downloads.Stopped = append(read.Downloads.Stopped, aria2.Download{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.PayloadRoot, job.Source), CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), Phase: classification.Phase, ProblemCode: projectedProblemCode(job, true), Actions: session.availableActions(classification, true, job)})
+		row := aria2.Download{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.PayloadRoot, job.Source), CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), Phase: classification.Phase, ProblemCode: projectedProblemCode(job, true), Actions: session.availableActions(classification, true, job)}
+		applyPublishedMetrics(&row.CompletedLength, &row.TotalLength, job)
+		read.Downloads.Stopped = append(read.Downloads.Stopped, row)
 	}
 	if query.DetailGID != "" && read.Detail == nil && aria2.IsNotFound(read.DetailErr) {
 		managedRow, absenceKnown := read.Managed[query.DetailGID]
@@ -129,12 +131,21 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 				ProblemCode:     projectedProblemCode(job, true),
 				Actions:         session.availableActions(classification, true, job),
 			}
+			applyPublishedMetrics(&read.Detail.CompletedLength, &read.Detail.TotalLength, job)
 			read.DetailErr = nil
 			read.DetailSourceErr = nil
 		}
 	}
 	read.Downloads.Stopped = pageManagedHistory(read.Downloads.Stopped, managed, query.List)
 	return read
+}
+
+func applyPublishedMetrics(completed, total *int64, job jobs.Job) {
+	if job.Phase != jobs.PhasePublished || job.PayloadLength == nil {
+		return
+	}
+	*completed = *job.PayloadLength
+	*total = *job.PayloadLength
 }
 
 func (session *DashboardSession) decorateDetail(detail *aria2.DownloadDetail, job jobs.Job, managed bool) {

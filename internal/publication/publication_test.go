@@ -55,3 +55,27 @@ func TestValidatePayloadRootRejectsSymlink(t *testing.T) {
 		t.Fatal("nested payload root accepted")
 	}
 }
+
+func TestLogicalSizeSumsRegularFilesWithoutFollowingSymlinks(t *testing.T) {
+	root := t.TempDir()
+	payload := filepath.Join(root, "payload")
+	if err := os.MkdirAll(filepath.Join(payload, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(payload, "one.bin"), []byte("1234"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(payload, "nested", "two.bin"), []byte("56789"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(payload, "one.bin"), filepath.Join(payload, "link")); err != nil {
+		t.Fatal(err)
+	}
+	size, err := LogicalSize(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if size != 9 {
+		t.Fatalf("logical size = %d, want 9", size)
+	}
+}

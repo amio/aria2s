@@ -787,6 +787,8 @@ func (app *App) ManagedHook(ctx context.Context, event, gid string) error {
 	job.Phase = jobs.PhasePublishing
 	job.PayloadRoot = root
 	job.PayloadIdentity = jobIdentity(identity)
+	payloadLength := native.TotalLength
+	job.PayloadLength = &payloadLength
 	token, err = repository.SaveCAS(job, token)
 	if err != nil {
 		return err

@@ -168,6 +168,40 @@ func MoveExpected(source, destination string, sourceIdentity, destinationParentI
 	return result, nil
 }
 
+// LogicalSize returns the payload's logical byte count without following
+// symbolic links. It is used once at publication recovery, never on Dashboard
+// refresh.
+func LogicalSize(path string) (int64, error) {
+	root, err := os.Lstat(path)
+	if err != nil {
+		return 0, err
+	}
+	if root.Mode()&os.ModeSymlink != 0 {
+		return 0, errors.New("payload root is a symlink")
+	}
+	if root.Mode().IsRegular() {
+		return root.Size(), nil
+	}
+	if !root.IsDir() {
+		return 0, errors.New("payload root is not a regular file or directory")
+	}
+	var total int64
+	err = filepath.WalkDir(path, func(_ string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type().IsRegular() {
+			info, infoErr := entry.Info()
+			if infoErr != nil {
+				return infoErr
+			}
+			total += info.Size()
+		}
+		return nil
+	})
+	return total, err
+}
+
 func findMountPoint(path string, device uint64) (string, error) {
 	current := path
 	for {

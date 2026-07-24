@@ -52,6 +52,9 @@ func TestReconcilePublishingConvergesMoveAndReliablePostMoveCrash(t *testing.T) 
 			if job.Phase != jobs.PhasePublished || job.ProblemCode != "" {
 				t.Fatalf("job=%+v token=%x", job, token)
 			}
+			if job.PayloadLength == nil || *job.PayloadLength != 7 {
+				t.Fatalf("recovered payload length = %v, want 7", job.PayloadLength)
+			}
 			if job.ActivityIntent != jobs.ActivityStopped {
 				t.Fatalf("HTTP publication recovery retained seed intent: %+v", job)
 			}
@@ -101,6 +104,56 @@ func TestReconcilePublishingConvergesWeakIdentityPostMoveCrash(t *testing.T) {
 	}
 	if job.Phase != jobs.PhasePublished || job.ProblemCode != "" || job.ActivityIntent != jobs.ActivityStopped {
 		t.Fatalf("weak-identity publication did not converge: %+v", job)
+	}
+}
+
+func TestBackfillPublishedPayloadLengthForLegacyManifest(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	payload := filepath.Join(target, "payload.bin")
+	if err := os.WriteFile(payload, []byte("legacy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	payloadIdentity, err := publication.Identify(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetIdentity, err := publication.Identify(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := jobs.New(filepath.Join(root, "state"))
+	job := jobs.Job{
+		ID:              "0123456789abcdef",
+		Source:          "https://example.test/payload",
+		TargetDir:       target,
+		TargetIdentity:  jobIdentity(targetIdentity),
+		StorageID:       "fedcba9876543210",
+		Phase:           jobs.PhasePublished,
+		ActivityIntent:  jobs.ActivityStopped,
+		PayloadRoot:     "payload.bin",
+		PayloadIdentity: jobIdentity(payloadIdentity),
+	}
+	token, err := repository.Create(job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, err = backfillPayloadLength(repository, job, token)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.PayloadLength == nil || *job.PayloadLength != 6 {
+		t.Fatalf("backfilled payload length = %v, want 6", job.PayloadLength)
+	}
+	loaded, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.PayloadLength == nil || *loaded.PayloadLength != 6 {
+		t.Fatalf("persisted payload length = %v, want 6", loaded.PayloadLength)
 	}
 }
 

@@ -118,7 +118,8 @@ func TestManagedHTTPAddAndPublicationKeepTargetCleanUntilAtomicRoot(t *testing.T
 		t.Fatalf("published data=%q err=%v", data, err)
 	}
 	job, _, err = repository.Load(job.ID)
-	if err != nil || job.Phase != jobs.PhasePublished || job.ActivityIntent != jobs.ActivityStopped {
+	if err != nil || job.Phase != jobs.PhasePublished || job.ActivityIntent != jobs.ActivityStopped ||
+		job.PayloadLength == nil || *job.PayloadLength != 8 {
 		t.Fatalf("published job=%+v err=%v", job, err)
 	}
 	if err := application.ManagedHook(context.Background(), "on-download-complete", job.ID); err != nil {

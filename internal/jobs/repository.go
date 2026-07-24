@@ -1,6 +1,7 @@
 // Package jobs owns durable managed-download control facts. Manifests are the
-// authority for ownership, activity intent, and publication phase; native aria2
-// status and transport progress never become repository state.
+// authority for ownership, activity intent, publication phase, and the final
+// logical payload length; live aria2 status and transport progress never become
+// repository state.
 package jobs
 
 import (
@@ -64,6 +65,7 @@ type Job struct {
 	ActivityIntent  ActivityIntent `json:"activityIntent"`
 	PayloadRoot     string         `json:"payloadRoot,omitempty"`
 	PayloadIdentity ObjectIdentity `json:"payloadIdentity,omitempty"`
+	PayloadLength   *int64         `json:"payloadLength,omitempty"`
 	ProblemCode     string         `json:"problemCode,omitempty"`
 	CreatedAt       time.Time      `json:"createdAt"`
 	UpdatedAt       time.Time      `json:"updatedAt"`
@@ -431,6 +433,9 @@ func validateJob(job Job) error {
 	}
 	if (job.Phase == PhasePublishing || job.Phase == PhasePublished) && (job.PayloadRoot == "" || job.PayloadIdentity.MountID == 0 || job.PayloadIdentity.ObjectID == 0) {
 		return errors.New("publication phase requires payload identity")
+	}
+	if job.PayloadLength != nil && *job.PayloadLength < 0 {
+		return errors.New("invalid payload length")
 	}
 	return nil
 }

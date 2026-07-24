@@ -53,6 +53,15 @@ func TestStatusLabelsRenderCanonicalStatusWithoutAttributeOverrides(t *testing.T
 	}
 }
 
+func TestCompleteTaskProgressIsSemanticForUnknownOrZeroLength(t *testing.T) {
+	if got := formatTaskProgress(0, 0, "complete"); got != "100.0%" {
+		t.Fatalf("complete zero-length progress = %q", got)
+	}
+	if got := formatTaskProgress(0, 0, "metadata"); got != "0.0%" {
+		t.Fatalf("metadata unknown-length progress = %q", got)
+	}
+}
+
 func TestKnownStatusTonesAreDistinct(t *testing.T) {
 	statuses := []string{
 		"active",
