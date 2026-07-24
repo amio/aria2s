@@ -57,7 +57,7 @@ var (
 	contentBgColor    = rgb{28, 28, 28}
 	bgColor           = rgb{16, 16, 16}
 	bodyTextColor     = rgb{210, 217, 225}
-	selectedColor     = rgb{35, 58, 80}
+	selectedColor     = rgb{52, 52, 52}
 	errorTextColor    = rgb{255, 125, 125}
 )
 
@@ -683,15 +683,15 @@ func statusTone(status string) rgb {
 	case "downloading":
 		return rgb{125, 215, 160}
 	case "seeding":
-		return rgb{125, 210, 242}
+		return rgb{99, 215, 222}
 	case "metadata":
 		return rgb{168, 180, 224}
 	case "waiting":
 		return rgb{225, 194, 105}
 	case "paused":
-		return rgb{225, 151, 100}
+		return rgb{240, 160, 100}
 	case "complete":
-		return rgb{198, 207, 218}
+		return rgb{115, 145, 245}
 	case "error":
 		return rgb{242, 124, 124}
 	case "removed":
