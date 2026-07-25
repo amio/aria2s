@@ -43,6 +43,7 @@
 - Reconciliation may repair missing or stale managed artifacts, but installation must not overwrite an existing user aria2 configuration.
 - The managed RPC listener stays local-only and uses the generated secret persisted in aria2s state.
 - Session state is saved periodically and before controlled stop or restart so managed downloads survive service lifecycle changes.
+- Managed staged torrents explicitly disable unverified seeding even when the user config enables it; only a published final seed may skip a repeated piece-hash pass.
 - Each job remains pinned to its registered staging scope by `StorageID`; new jobs share a canonical mount-root scope when the mount root is writable, otherwise they reuse or create a same-mount scope beside the target.
 - Dashboard reads are bounded and batched; refresh failures retain the last successful snapshot, and uncertain mutations are reconciled without blind resubmission.
 - Valid aria2 JSON-RPC faults remain authoritative even when carried by HTTP 400; only responses without a decodable success or error are transport failures or mutation-unknown outcomes.

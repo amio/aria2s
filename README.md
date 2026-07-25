@@ -63,7 +63,7 @@ aria2s                     # ensure install/start, open the terminal dashboard
 
 `aria2s` is a thin wrapper around `aria2c`: user-tuned download settings live in `~/.aria2/aria2.conf`, while the managed RPC and session flags are passed to `aria2c` through the service definition.
 
-The default config also enables `bt-save-metadata`, `bt-load-saved-metadata`, and `bt-seed-unverified` so BitTorrent downloads survive restarts without re-fetching magnet metadata or re-verifying already-completed payloads. Since `install` never overwrites an existing `aria2.conf`, add these three lines manually if your config predates them.
+The default config enables `bt-save-metadata` and `bt-load-saved-metadata` so BitTorrent downloads survive restarts without re-fetching magnet metadata. Managed staged torrents explicitly verify existing bytes when native resume proof is unavailable; only already-published final seeds use `bt-seed-unverified`. Since `install` never overwrites an existing `aria2.conf`, add the two metadata lines manually if your config predates them.
 
 Dashboard reads are bounded, batched RPC requests. Slow or unavailable RPC never blocks
 navigation or quit, failed refreshes keep last-known-good rows visible, and mutations with an

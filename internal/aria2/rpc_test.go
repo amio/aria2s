@@ -77,6 +77,41 @@ func TestAddURIRejectsUnsupportedSchemes(t *testing.T) {
 	}
 }
 
+func TestManagedTorrentOverridesUnverifiedSeedingByPublicationPhase(t *testing.T) {
+	var bodies [][]byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read body: %v", err)
+		}
+		bodies = append(bodies, body)
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":"0123456789abcdef"}`)
+	}))
+	defer server.Close()
+
+	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
+	if _, err := client.AddTorrent(
+		context.Background(),
+		[]byte("metainfo"),
+		aria2.AddOptions{Managed: true},
+	); err != nil {
+		t.Fatalf("add staged torrent: %v", err)
+	}
+	if _, err := client.AddTorrent(
+		context.Background(),
+		[]byte("metainfo"),
+		aria2.AddOptions{Managed: true, SeedUnverified: true},
+	); err != nil {
+		t.Fatalf("add final seed: %v", err)
+	}
+
+	if len(bodies) != 2 {
+		t.Fatalf("request count = %d, want 2", len(bodies))
+	}
+	assertContains(t, string(bodies[0]), `"bt-seed-unverified":"false"`)
+	assertContains(t, string(bodies[1]), `"bt-seed-unverified":"true"`)
+}
+
 func TestWrapTransportErrorMarksEOFAsTransportUnavailable(t *testing.T) {
 	err := aria2.WrapTransportError(io.EOF)
 

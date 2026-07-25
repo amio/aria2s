@@ -114,6 +114,10 @@ func (opts AddOptions) values() map[string]string {
 		values["auto-file-renaming"] = "false"
 		values["remove-control-file"] = "false"
 		values["follow-torrent"] = "false"
+		// Staged payloads must not inherit a user-wide trust policy. A failed
+		// allocation can leave full-length files without any verified pieces.
+		// Final seeds explicitly override this below after publication.
+		values["bt-seed-unverified"] = "false"
 	}
 	if opts.MetadataOnly {
 		values["bt-metadata-only"] = "true"

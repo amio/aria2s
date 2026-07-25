@@ -123,6 +123,9 @@ func applyManagedOptions(block *aria2.SessionBlock, job jobs.Job, dir string) {
 	block.SetOption("auto-file-renaming", "false")
 	block.SetOption("remove-control-file", "false")
 	block.SetOption("follow-torrent", "false")
+	// Managed staged jobs may inherit a legacy global true value otherwise.
+	// Only generated final-seed blocks override this after publication.
+	block.SetOption("bt-seed-unverified", "false")
 	block.SetOption("pause", fmt.Sprintf("%t", job.ActivityIntent == jobs.ActivityStopped))
 }
 

@@ -51,6 +51,74 @@ func TestPlanStartupRejectsDuplicateAndGeneratesFinalSeed(t *testing.T) {
 	}
 }
 
+func TestPlanStartupOverridesUnverifiedSeedingByPublicationPhase(t *testing.T) {
+	root := t.TempDir()
+	scope := jobs.StorageScope{ID: "fedcba9876543210", StagingAnchor: root}
+	staged := jobs.Job{
+		ID:             "0123456789abcdef",
+		Source:         "magnet:?xt=urn:btih:test",
+		TargetDir:      filepath.Join(root, "target"),
+		StorageID:      scope.ID,
+		Phase:          jobs.PhaseStaged,
+		ActivityIntent: jobs.ActivityRunning,
+	}
+	fact := StartupFact{
+		StorageAvailable: true,
+		Torrent:          true,
+		HasMetainfo:      true,
+		MetainfoPath:     filepath.Join(root, "meta.torrent"),
+	}
+
+	unsafeNative := aria2.SessionBlock{
+		URI: fact.MetainfoPath,
+		Options: []aria2.SessionOption{
+			{Key: "gid", Value: staged.ID},
+			{Key: "dir", Value: jobs.WorkDir(scope, staged.ID)},
+			{Key: "bt-seed-unverified", Value: "true"},
+		},
+	}
+	normalized := PlanStartup(
+		[]jobs.Job{staged},
+		map[string]jobs.StorageScope{scope.ID: scope},
+		map[string]StartupFact{staged.ID: fact},
+		[]aria2.SessionBlock{unsafeNative},
+	)
+	if len(normalized.Blocks) != 1 {
+		t.Fatalf("normalized staged plan = %+v", normalized)
+	}
+	if value, _ := normalized.Blocks[0].Option("bt-seed-unverified"); value != "false" {
+		t.Fatalf("normalized staged options = %+v", normalized.Blocks[0].Options)
+	}
+
+	generated := PlanStartup(
+		[]jobs.Job{staged},
+		map[string]jobs.StorageScope{scope.ID: scope},
+		map[string]StartupFact{staged.ID: fact},
+		nil,
+	)
+	if len(generated.Blocks) != 1 {
+		t.Fatalf("generated staged plan = %+v", generated)
+	}
+	if value, _ := generated.Blocks[0].Option("bt-seed-unverified"); value != "false" {
+		t.Fatalf("generated staged options = %+v", generated.Blocks[0].Options)
+	}
+
+	published := staged
+	published.Phase = jobs.PhasePublished
+	finalSeed := PlanStartup(
+		[]jobs.Job{published},
+		map[string]jobs.StorageScope{scope.ID: scope},
+		map[string]StartupFact{published.ID: fact},
+		nil,
+	)
+	if len(finalSeed.Blocks) != 1 {
+		t.Fatalf("final seed plan = %+v", finalSeed)
+	}
+	if value, _ := finalSeed.Blocks[0].Option("bt-seed-unverified"); value != "true" {
+		t.Fatalf("final seed options = %+v", finalSeed.Blocks[0].Options)
+	}
+}
+
 func TestPlanStartupIsolatesOfflineStorage(t *testing.T) {
 	root := t.TempDir()
 	healthyScope := jobs.StorageScope{ID: "1111111111111111", StagingAnchor: filepath.Join(root, "healthy")}

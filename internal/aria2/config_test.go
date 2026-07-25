@@ -21,7 +21,7 @@ func TestDefaultConfigIncludesFriendlyDefaults(t *testing.T) {
 	assertContains(t, rendered, "min-split-size=10M")
 	assertContains(t, rendered, "bt-save-metadata=true")
 	assertContains(t, rendered, "bt-load-saved-metadata=true")
-	assertContains(t, rendered, "bt-seed-unverified=true")
+	assertNotContains(t, rendered, "bt-seed-unverified")
 	assertNotContains(t, rendered, "rpc-listen-port")
 	assertNotContains(t, rendered, "rpc-secret")
 	assertNotContains(t, rendered, "save-session")
