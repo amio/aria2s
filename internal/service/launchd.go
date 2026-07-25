@@ -5,6 +5,7 @@ import (
 	"encoding/xml"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"github.com/amio/aria2s/internal/aria2"
@@ -120,6 +121,7 @@ func RenderLaunchAgent(current state.State) (string, error) {
 	builder.WriteString("  </dict>\n")
 	writePlistString(&builder, "StandardOutPath", current.LogPath)
 	writePlistString(&builder, "StandardErrorPath", current.ErrorLogPath)
+	writePlistResourceLimits(&builder, MaxOpenFiles)
 	builder.WriteString("</dict>\n</plist>\n")
 	return builder.String(), nil
 }
@@ -136,4 +138,21 @@ func writePlistArrayString(builder *strings.Builder, value string) {
 	builder.WriteString("    <string>")
 	xml.EscapeText(builder, []byte(value))
 	builder.WriteString("</string>\n")
+}
+
+func writePlistResourceLimits(builder *strings.Builder, numberOfFiles int) {
+	builder.WriteString("  <key>SoftResourceLimits</key>\n  <dict>\n")
+	writePlistInteger(builder, "NumberOfFiles", numberOfFiles)
+	builder.WriteString("  </dict>\n")
+	builder.WriteString("  <key>HardResourceLimits</key>\n  <dict>\n")
+	writePlistInteger(builder, "NumberOfFiles", numberOfFiles)
+	builder.WriteString("  </dict>\n")
+}
+
+func writePlistInteger(builder *strings.Builder, key string, value int) {
+	builder.WriteString("    <key>")
+	xml.EscapeText(builder, []byte(key))
+	builder.WriteString("</key>\n    <integer>")
+	builder.WriteString(strconv.Itoa(value))
+	builder.WriteString("</integer>\n")
 }

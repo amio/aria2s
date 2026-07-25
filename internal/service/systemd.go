@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/amio/aria2s/internal/aria2"
@@ -124,6 +125,7 @@ func RenderSystemdUnit(current state.State) (string, error) {
 	builder.WriteString("\n")
 	builder.WriteString("Restart=on-failure\n")
 	builder.WriteString("RestartSec=3\n")
+	builder.WriteString("LimitNOFILE=" + strconv.Itoa(MaxOpenFiles) + "\n")
 	if current.LogPath != "" {
 		builder.WriteString("StandardOutput=append:")
 		builder.WriteString(current.LogPath)
