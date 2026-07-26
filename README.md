@@ -46,6 +46,12 @@ or simply:
 aria2s                     # ensure install/start, open the terminal dashboard
 ```
 
+## How it works
+
+- `aria2s install` registers `aria2c` as a background service; use `install --start` or `aria2s start` to run it.
+- The dashboard is only a task viewer and manager. Quitting it does not stop downloads; use `aria2s stop` to do that.
+- Control download-service behavior through the standard `~/.aria2/aria2.conf`; after editing it, run `aria2s restart` for the changes to take effect.
+
 ## Commands
 
 | Command | What it does |
