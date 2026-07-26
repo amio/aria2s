@@ -82,6 +82,28 @@ func TestStatusLabelsRenderCanonicalStatusWithoutAttributeOverrides(t *testing.T
 	}
 }
 
+func TestListStatsSummarizesOnlyPresentCanonicalStatuses(t *testing.T) {
+	model := Model{}
+	model.snapshot.Active = []aria2.Download{
+		{GID: "downloading", CanonicalStatus: "downloading"},
+		{GID: "seeding", CanonicalStatus: "seeding"},
+		{GID: "metadata", CanonicalStatus: "metadata"},
+	}
+	model.snapshot.Stopped = []aria2.Download{
+		{GID: "complete-first", CanonicalStatus: "complete"},
+		{GID: "complete-second", CanonicalStatus: "complete"},
+	}
+
+	got := model.listStats()
+	want := "Total 5 (D1 S1 M1 C2) Down 0/s  Up 0/s"
+	if got != want {
+		t.Fatalf("listStats() = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "P0") {
+		t.Fatalf("listStats() included an absent status: %q", got)
+	}
+}
+
 func TestCompleteTaskProgressIsSemanticForUnknownOrZeroLength(t *testing.T) {
 	if got := formatTaskProgress(0, 0, "complete"); got != "100.0%" {
 		t.Fatalf("complete zero-length progress = %q", got)
