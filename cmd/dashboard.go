@@ -2,6 +2,9 @@ package cmd
 
 import (
 	"context"
+	"fmt"
+	"os"
+	"sync"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -13,11 +16,61 @@ import (
 
 type dashboardRunner func(context.Context, *app.DashboardSession) error
 
+type terminalOutput struct {
+	file   *os.File
+	cancel context.CancelFunc
+
+	mu  sync.Mutex
+	err error
+}
+
+func newTerminalOutput(file *os.File, cancel context.CancelFunc) *terminalOutput {
+	return &terminalOutput{file: file, cancel: cancel}
+}
+
+func (output *terminalOutput) Write(data []byte) (int, error) {
+	written, err := output.file.Write(data)
+	if err == nil {
+		return written, nil
+	}
+
+	output.mu.Lock()
+	firstFailure := output.err == nil
+	if firstFailure {
+		output.err = err
+	}
+	output.mu.Unlock()
+	if firstFailure {
+		// Bubble Tea v2.0.8 drops renderer flush errors. Cancelling here prevents
+		// its frame ticker from repeatedly redrawing after the terminal is revoked.
+		output.cancel()
+	}
+	return written, err
+}
+
+func (output *terminalOutput) Fd() uintptr {
+	return output.file.Fd()
+}
+
+func (output *terminalOutput) Err() error {
+	output.mu.Lock()
+	defer output.mu.Unlock()
+	return output.err
+}
+
 func defaultDashboardRunner(ctx context.Context, session *app.DashboardSession) error {
 	sessionCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	program := tea.NewProgram(tui.NewModel(sessionCtx, session, time.Second, Version), tea.WithContext(sessionCtx))
+	output := newTerminalOutput(os.Stdout, cancel)
+	program := tea.NewProgram(
+		tui.NewModel(sessionCtx, session, time.Second, Version),
+		tea.WithContext(sessionCtx),
+		tea.WithOutput(output),
+	)
 	_, err := program.Run()
+	if outputErr := output.Err(); outputErr != nil {
+		return fmt.Errorf("dashboard terminal output failed: %w", outputErr)
+	}
 	return err
 }
 
