@@ -84,7 +84,7 @@ func (app *App) ManagedExec(ctx context.Context) error {
 		}
 		available := storageMatches(scope, job)
 		if available && job.Phase == jobs.PhasePublishing {
-			job, scannedJob.Token, err = reconcilePublishing(repository, job, scannedJob.Token, scope)
+			job, scannedJob.Token, err = reconcilePublishing(ctx, repository, job, scannedJob.Token, scope)
 			if err != nil {
 				return err
 			}
@@ -182,17 +182,35 @@ func storageIdentityMatches(scope jobs.StorageScope, job jobs.Job) bool {
 	return err == nil && target.MountID == job.TargetIdentity.MountID && target.ObjectID == job.TargetIdentity.ObjectID
 }
 
-func reconcilePublishing(repository *jobs.Repository, job jobs.Job, token jobs.Token, scope jobs.StorageScope) (jobs.Job, jobs.Token, error) {
+func reconcilePublishing(ctx context.Context, repository *jobs.Repository, job jobs.Job, token jobs.Token, scope jobs.StorageScope) (jobs.Job, jobs.Token, error) {
+	unlock, err := repository.LockPublication(ctx)
+	if err != nil {
+		return job, token, err
+	}
+	defer unlock()
+
 	source := filepath.Join(jobs.WorkDir(scope, job.ID), job.PayloadRoot)
-	destination := filepath.Join(job.TargetDir, job.PayloadRoot)
+	destination := filepath.Join(job.TargetDir, job.FinalRoot())
 	sourceIdentity, sourceErr := publication.Identify(source)
 	destinationIdentity, destinationErr := publication.Identify(destination)
 	sourceExists, sourceUncertain := pathPresence(source, sourceErr)
 	destinationExists, destinationUncertain := pathPresence(destination, destinationErr)
 	if sourceExists && destinationExists {
-		job.ProblemCode = "PublicationConflict"
+		root, allocationErr := publication.AvailableRoot(source, job.TargetDir, job.PayloadRoot)
+		if allocationErr != nil {
+			job.ProblemCode = publicationProblem(allocationErr)
+			next, saveErr := repository.SaveCAS(job, token)
+			return job, next, saveErr
+		}
+		job.DestinationRoot = root
 		next, saveErr := repository.SaveCAS(job, token)
-		return job, next, saveErr
+		if saveErr != nil {
+			return job, token, saveErr
+		}
+		token = next
+		destination = filepath.Join(job.TargetDir, job.FinalRoot())
+		destinationIdentity, destinationErr = publication.Identify(destination)
+		destinationExists, destinationUncertain = pathPresence(destination, destinationErr)
 	}
 	if sourceUncertain || destinationUncertain {
 		job.ProblemCode = "PublicationStateUncertain"
@@ -250,6 +268,10 @@ func finalizeReconciledPublication(repository *jobs.Repository, job *jobs.Job) {
 	job.Phase = jobs.PhasePublished
 	job.ProblemCode = ""
 	recoverTorrentPayloadLength(repository, job)
+	if job.PublicationRenamed() {
+		job.ActivityIntent = jobs.ActivityStopped
+		return
+	}
 	if _, err := readValidatedMetainfo(repository, job.ID); err == nil {
 		return
 	} else if errors.Is(err, os.ErrNotExist) {

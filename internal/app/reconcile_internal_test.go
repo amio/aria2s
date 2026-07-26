@@ -10,8 +10,18 @@ import (
 )
 
 func TestReconcilePublishingConvergesMoveAndReliablePostMoveCrash(t *testing.T) {
-	for _, afterRename := range []bool{false, true} {
-		t.Run(map[bool]string{false: "detached-before-rename", true: "renamed-before-commit"}[afterRename], func(t *testing.T) {
+	tests := []struct {
+		name            string
+		afterRename     bool
+		destinationRoot string
+		torrent         bool
+	}{
+		{name: "detached-before-rename"},
+		{name: "renamed-before-commit", afterRename: true},
+		{name: "renamed-torrent-before-commit", afterRename: true, destinationRoot: "payload (1).bin", torrent: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
 			root := t.TempDir()
 			target := filepath.Join(root, "target")
 			if err := os.Mkdir(target, 0o700); err != nil {
@@ -35,17 +45,23 @@ func TestReconcilePublishingConvergesMoveAndReliablePostMoveCrash(t *testing.T) 
 			if err != nil {
 				t.Fatal(err)
 			}
-			job := jobs.Job{ID: "0123456789abcdef", Source: "https://example.test/payload", TargetDir: target, TargetIdentity: jobIdentity(targetIdentity), StorageID: scope.ID, Phase: jobs.PhasePublishing, ActivityIntent: jobs.ActivityRunning, PayloadRoot: "payload.bin", PayloadIdentity: jobIdentity(identity)}
+			job := jobs.Job{ID: "0123456789abcdef", Source: "https://example.test/payload", TargetDir: target, TargetIdentity: jobIdentity(targetIdentity), StorageID: scope.ID, Phase: jobs.PhasePublishing, ActivityIntent: jobs.ActivityRunning, PayloadRoot: "payload.bin", DestinationRoot: test.destinationRoot, PayloadIdentity: jobIdentity(identity)}
 			token, err := repository.Create(job)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if afterRename {
-				if _, err := publication.Move(source, filepath.Join(target, "payload.bin")); err != nil {
+			if test.torrent {
+				metainfo := []byte("d4:infod6:lengthi7e4:name7:payload12:piece lengthi7e6:pieces20:01234567890123456789ee")
+				if err := repository.WriteMetainfo(job.ID, metainfo); err != nil {
 					t.Fatal(err)
 				}
 			}
-			job, token, err = reconcilePublishing(repository, job, token, scope)
+			if test.afterRename {
+				if _, err := publication.Move(source, filepath.Join(target, job.FinalRoot())); err != nil {
+					t.Fatal(err)
+				}
+			}
+			job, token, err = reconcilePublishing(t.Context(), repository, job, token, scope)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -55,7 +71,7 @@ func TestReconcilePublishingConvergesMoveAndReliablePostMoveCrash(t *testing.T) 
 			if job.ActivityIntent != jobs.ActivityStopped {
 				t.Fatalf("HTTP publication recovery retained seed intent: %+v", job)
 			}
-			if data, err := os.ReadFile(filepath.Join(target, "payload.bin")); err != nil || string(data) != "payload" {
+			if data, err := os.ReadFile(filepath.Join(target, job.FinalRoot())); err != nil || string(data) != "payload" {
 				t.Fatalf("data=%q err=%v", data, err)
 			}
 		})
@@ -95,7 +111,7 @@ func TestReconcilePublishingConvergesWeakIdentityPostMoveCrash(t *testing.T) {
 	if _, err := publication.Move(source, filepath.Join(target, "payload.bin")); err != nil {
 		t.Fatal(err)
 	}
-	job, _, err = reconcilePublishing(repository, job, token, scope)
+	job, _, err = reconcilePublishing(t.Context(), repository, job, token, scope)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +196,7 @@ func TestPayloadLengthRecoveryDoesNotInferFromPublishedFilesystem(t *testing.T) 
 	}
 }
 
-func TestReconcilePublishingFailsClosedOnConflict(t *testing.T) {
+func TestReconcilePublishingAutoSuffixesConflict(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "target")
 	os.Mkdir(target, 0o700)
@@ -194,15 +210,19 @@ func TestReconcilePublishingFailsClosedOnConflict(t *testing.T) {
 	targetIdentity, _ := publication.Identify(target)
 	job := jobs.Job{ID: "0123456789abcdef", Source: "https://example.test/payload", TargetDir: target, TargetIdentity: jobIdentity(targetIdentity), StorageID: scope.ID, Phase: jobs.PhasePublishing, ActivityIntent: jobs.ActivityRunning, PayloadRoot: "payload.bin", PayloadIdentity: jobIdentity(identity)}
 	token, _ := repository.Create(job)
-	job, _, err := reconcilePublishing(repository, job, token, scope)
+	job, _, err := reconcilePublishing(t.Context(), repository, job, token, scope)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if job.Phase != jobs.PhasePublishing || job.ProblemCode != "PublicationConflict" {
+	if job.Phase != jobs.PhasePublished || job.ProblemCode != "" ||
+		job.DestinationRoot != "payload (1).bin" || job.ActivityIntent != jobs.ActivityStopped {
 		t.Fatalf("job=%+v", job)
 	}
 	if data, _ := os.ReadFile(filepath.Join(target, "payload.bin")); string(data) != "external" {
 		t.Fatalf("destination overwritten: %q", data)
+	}
+	if data, _ := os.ReadFile(filepath.Join(target, "payload (1).bin")); string(data) != "managed" {
+		t.Fatalf("suffixed payload=%q", data)
 	}
 }
 
@@ -242,7 +262,7 @@ func TestReconcileHTTPDescriptorPreservesRunningSeedIntent(t *testing.T) {
 	if _, err := publication.Move(source, filepath.Join(target, "payload.bin")); err != nil {
 		t.Fatal(err)
 	}
-	job, _, err = reconcilePublishing(repository, job, token, scope)
+	job, _, err = reconcilePublishing(t.Context(), repository, job, token, scope)
 	if err != nil {
 		t.Fatal(err)
 	}

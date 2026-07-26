@@ -1,7 +1,7 @@
 // Package jobs owns durable managed-download control facts. Manifests are the
-// authority for ownership, activity intent, publication phase, and the final
-// logical payload length; live aria2 status and transport progress never become
-// repository state.
+// authority for ownership, activity intent, publication phase, staging/final
+// payload roots, and final logical payload length; live aria2 status and
+// transport progress never become repository state.
 package jobs
 
 import (
@@ -64,6 +64,7 @@ type Job struct {
 	Phase           JobPhase       `json:"phase"`
 	ActivityIntent  ActivityIntent `json:"activityIntent"`
 	PayloadRoot     string         `json:"payloadRoot,omitempty"`
+	DestinationRoot string         `json:"destinationRoot,omitempty"`
 	PayloadIdentity ObjectIdentity `json:"payloadIdentity,omitempty"`
 	PayloadLength   *int64         `json:"payloadLength,omitempty"`
 	ProblemCode     string         `json:"problemCode,omitempty"`
@@ -341,14 +342,39 @@ func WorkDir(scope StorageScope, jobID string) string {
 	return filepath.Join(scope.StagingAnchor, ".aria2s_staging", scope.ID, jobID)
 }
 
+// FinalRoot returns the durable publication destination. Empty
+// DestinationRoot is the backward-compatible representation used by manifests
+// created before conflict-free publication naming.
+func (job Job) FinalRoot() string {
+	if job.DestinationRoot != "" {
+		return job.DestinationRoot
+	}
+	return job.PayloadRoot
+}
+
+func (job Job) PublicationRenamed() bool {
+	return job.PayloadRoot != "" && job.FinalRoot() != job.PayloadRoot
+}
+
 func (repository *Repository) Lock(ctx context.Context, id string) (func() error, error) {
 	if !ValidID(id) {
 		return nil, errors.New("invalid job id")
 	}
+	return repository.lockFile(ctx, id+".lock")
+}
+
+// LockPublication serializes the short allocation-and-rename transaction
+// across hook processes. Publication is an atomic same-filesystem rename, so a
+// single lock keeps the no-overwrite invariant without durable reservations.
+func (repository *Repository) LockPublication(ctx context.Context) (func() error, error) {
+	return repository.lockFile(ctx, "publication.lock")
+}
+
+func (repository *Repository) lockFile(ctx context.Context, name string) (func() error, error) {
 	if err := os.MkdirAll(repository.locksDir, 0o700); err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(filepath.Join(repository.locksDir, id+".lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := os.OpenFile(filepath.Join(repository.locksDir, name), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -430,6 +456,16 @@ func validateJob(job Job) error {
 	}
 	if job.PayloadRoot != "" && (filepath.IsAbs(job.PayloadRoot) || strings.HasPrefix(filepath.Clean(job.PayloadRoot), "..")) {
 		return errors.New("invalid payload root")
+	}
+	if job.DestinationRoot != "" {
+		clean := filepath.Clean(job.DestinationRoot)
+		if filepath.IsAbs(job.DestinationRoot) || clean == "." || clean == ".." ||
+			strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.Base(clean) != clean {
+			return errors.New("invalid destination root")
+		}
+	}
+	if job.Phase == PhasePublished && job.PublicationRenamed() && job.ActivityIntent != ActivityStopped {
+		return errors.New("renamed published task must be stopped")
 	}
 	if (job.Phase == PhasePublishing || job.Phase == PhasePublished) && (job.PayloadRoot == "" || job.PayloadIdentity.MountID == 0 || job.PayloadIdentity.ObjectID == 0) {
 		return errors.New("publication phase requires payload identity")

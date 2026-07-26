@@ -111,7 +111,7 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 			continue
 		}
 		classification := ClassifyTask(ClassificationFact{Managed: true, Phase: job.Phase, Intent: job.ActivityIntent, ProblemCode: job.ProblemCode, NativeAbsent: true})
-		row := aria2.Download{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.PayloadRoot, job.Source), CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), Phase: classification.Phase, ProblemCode: projectedProblemCode(job, true), Actions: session.availableActions(classification, true, job)}
+		row := aria2.Download{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.FinalRoot(), job.Source), CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), Phase: classification.Phase, ProblemCode: projectedProblemCode(job, true), Actions: session.availableActions(classification, true, job)}
 		applyPublishedMetrics(&row.CompletedLength, &row.TotalLength, &row.LengthKnown, job)
 		read.Downloads.Stopped = append(read.Downloads.Stopped, row)
 	}
@@ -122,7 +122,7 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 			read.Detail = &aria2.DownloadDetail{
 				GID:             job.ID,
 				Status:          "absent",
-				Name:            firstNonempty(job.PayloadRoot, job.Source),
+				Name:            firstNonempty(job.FinalRoot(), job.Source),
 				PrimaryURI:      job.Source,
 				DownloadDir:     job.TargetDir,
 				CanonicalStatus: string(classification.Status),
@@ -230,7 +230,7 @@ func (session *DashboardSession) availableActions(classification TaskClassificat
 			actions = append(actions, "remove")
 		}
 	case StatusComplete:
-		if managed && session.hasMetainfo(job.ID) {
+		if managed && !job.PublicationRenamed() && session.hasMetainfo(job.ID) {
 			actions = append(actions, "start-seeding")
 		}
 		actions = append(actions, "clear")

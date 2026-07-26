@@ -38,6 +38,48 @@ type MoveResult struct {
 	DirectorySyncUnsupported bool
 }
 
+// AvailableRoot selects the first absent destination name. The caller owns
+// publication serialization while using the returned name.
+func AvailableRoot(source, targetDir, requested string) (string, error) {
+	clean := filepath.Clean(requested)
+	if requested == "" || filepath.IsAbs(requested) || clean == "." || clean == ".." ||
+		filepath.Base(clean) != clean {
+		return "", errors.New("publication root must be one relative path component")
+	}
+	info, err := os.Lstat(source)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("publication source is a symlink")
+	}
+	for suffix := 0; suffix < 100000; suffix++ {
+		candidate := suffixedRoot(requested, suffix, info.IsDir())
+		if _, err := os.Lstat(filepath.Join(targetDir, candidate)); errors.Is(err, os.ErrNotExist) {
+			return candidate, nil
+		} else if err != nil {
+			return "", err
+		}
+	}
+	return "", errors.New("publication suffix space exhausted")
+}
+
+func suffixedRoot(root string, suffix int, directory bool) string {
+	if suffix == 0 {
+		return root
+	}
+	base, extension := root, ""
+	if !directory {
+		extension = filepath.Ext(root)
+		if extension == root {
+			extension = ""
+		} else {
+			base = strings.TrimSuffix(root, extension)
+		}
+	}
+	return fmt.Sprintf("%s (%d)%s", base, suffix, extension)
+}
+
 func InspectTarget(path string) (Target, error) {
 	physical, err := filepath.EvalSymlinks(path)
 	if err != nil {

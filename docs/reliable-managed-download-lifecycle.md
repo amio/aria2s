@@ -122,8 +122,9 @@ copy there. The viable mechanism is detach, rename, and rehydrate.
 ## Goals
 
 - Keep partial artifacts out of the target and publish exactly one complete root atomically.
-- Reject a target entry that already exists before publication. Concurrent external writes
-  during the narrow preflight/rename interval are outside the guarantee.
+- Preserve an existing target entry and publish the later payload under the first available
+  numeric suffix. Concurrent external writes during the narrow preflight/rename interval
+  are outside the guarantee.
 - Never copy, clone, hard-link, or redownload a complete payload as part of publication.
 - Resume normal unfinished transfers and requested final seeds after graceful restart and
   representative abrupt process death.
@@ -140,7 +141,6 @@ copy there. The viable mechanism is detach, rename, and rehydrate.
 - Adopt tasks created by another RPC client into managed durability. They remain visible and
   receive bounded native controls only.
 - Make cross-filesystem publication atomic or fall back to copying.
-- Auto-suffix a conflicting final name.
 - Provide a strong no-overwrite guarantee against concurrent external target writers.
 - Make every corrupt or missing native session automatically reconstructible. If safe input
   cannot be derived without risking a second payload, aria2s retains the bytes and asks for
@@ -159,14 +159,15 @@ copy there. The viable mechanism is detach, rename, and rehydrate.
    outside `TargetDir`. `StorageID` permanently pins a job to that scope; Add selects the
    writable mount-root scope as canonical without relocating existing jobs.
 2. Publication moves one payload root, never its children individually.
-3. Publication checks that the destination is absent immediately before ordinary rename.
-   Existing content observed by aria2s is untouched; concurrent external writers are not a
-   supported synchronization boundary.
-4. `Publishing` plus the relative payload root and observed identity is durable before aria2
-   is detached. `Published` is durable against the stated process-crash model after the
-   rename and every supported directory sync; an actual sync I/O error or unknown outcome
-   keeps `Publishing`. Explicitly unsupported directory sync records a power-loss durability
-   warning but does not pretend the atomic rename failed.
+3. Publication serializes managed name selection and rename under one short cross-process
+   lock, then selects the first available numeric suffix. Existing content observed by
+   aria2s is untouched; concurrent external writers are not a supported synchronization
+   boundary.
+4. `Publishing` plus the staging payload root, selected destination root, and observed
+   identity is durable before aria2 is detached. `Published` is durable against the stated
+   process-crash model after the rename and every supported directory sync; an actual sync
+   I/O error or unknown outcome keeps `Publishing`. Explicitly unsupported directory sync
+   records a power-loss durability warning but does not pretend the atomic rename failed.
 5. Native detach is status-aware. An active torrent seed is paused and removed; a completed
    HTTP result is already inactive and is cleared directly. Result-not-found after removal
    proves the GID is free and is idempotent success. A live aria2 task never points at an
@@ -346,8 +347,10 @@ type Job struct {
     StorageID         string
     Phase             JobPhase
     ActivityIntent    ActivityIntent
-    PayloadRoot       string // validated relative root when known
+    PayloadRoot       string // validated staging source root when known
+    DestinationRoot   string // optional durable final root; empty means PayloadRoot
     PayloadIdentity   ObjectIdentity
+    PayloadLength     *int64
     ProblemCode       string
     CreatedAt         time.Time
     UpdatedAt         time.Time
@@ -379,7 +382,7 @@ Derived paths are deterministic:
 ```text
 StorageRoot = StagingAnchor/.aria2s_staging/StorageID
 WorkDir     = StorageRoot/JobID
-FinalPath   = TargetDir/PayloadRoot
+FinalPath   = TargetDir/(DestinationRoot or PayloadRoot)
 ```
 
 `ActivityIntent` is only `Running` or `Stopped`. It is persisted before the corresponding
@@ -465,19 +468,21 @@ explicit recovery for a task whose latest transport block was never saved.
 Once aria2 reports one complete payload root:
 
 1. validate and durably retain metainfo for BitTorrent;
-2. persist `Publishing`, `PayloadRoot`, and the observed payload identity;
+2. under the publication lock, allocate a conflict-free `DestinationRoot` and
+   persist it with `Publishing`, `PayloadRoot`, and the observed payload identity;
 3. detach according to observed native status: force-pause and force-remove an active
    torrent seed, but skip those invalid calls for an already complete HTTP result;
 4. clear a completed/error/removed result when present and confirm the GID is free;
    `removeDownloadResult` not-found after force-remove is idempotent success;
 5. reopen source parent, target directory, storage marker, and payload root without
    following symlinks; revalidate mount and identities;
-6. reject an observed destination conflict, then move the root once using ordinary
-   same-filesystem rename;
-7. sync supported source/destination parents and persist `Published`; for HTTP also persist
-   `Stopped` in the same manifest write;
-8. if this is a running torrent, re-add retained metainfo at `TargetDir` under the same GID
-   and confirm every native file path is below the final root.
+6. move the root once using ordinary same-filesystem rename; an observed late destination
+   conflict keeps `Publishing`, and Retry allocates and persists the next suffix;
+7. sync supported source/destination parents and persist `Published`; for HTTP and any
+   renamed torrent also persist `Stopped` in the same manifest write;
+8. if this is a running torrent published under its original metainfo root, re-add retained
+   metainfo at `TargetDir` under the same GID and confirm every native file path is below
+   the final root.
 
 Both platforms use Go's portable `os.Rename` after source, destination-parent, mount, and
 destination-absence validation. Cross-device results are errors. There is no hard-link,
@@ -485,9 +490,9 @@ clone, or copy fallback. POSIX rename may replace a destination created by anoth
 between the absence check and the syscall; aria2s deliberately does not claim synchronization
 with concurrent external target writers.
 
-The seed interruption is intentional. A conflict retains the complete staging root but does
-not re-add a staging seed; Retry performs one publication attempt and creates only the final
-seed after success.
+The seed interruption is intentional. A torrent that needs a suffixed final root cannot be
+re-added from unchanged metainfo without path remapping, so it commits as stopped and does
+not advertise Start seeding. A non-conflicting torrent preserves normal final seeding.
 
 ### Crash Reconciliation
 
@@ -499,7 +504,7 @@ The state table is deliberately limited to the publication boundary:
 | GID absent, matching source exists, final absent | Retry the guarded portable move. |
 | Source absent, final reliable identity matches | Treat rename as committed, sync, persist `Published`. |
 | Source absent, final exists, identity is weak/unreliable | Treat the durable move as committed and persist `Published`. |
-| Source and final both exist | Keep both, report conflict/external mutation, never overwrite. |
+| Source and selected final both exist | Keep both, allocate and persist the next available suffix, then retry the guarded move. |
 | Source absent, final differs or both are absent | Retain manifest/metainfo and report payload state error. |
 | `Published`, running torrent lacks seed | Re-add final seed from retained metainfo. |
 | `Published`, stopped | Remove any stale native row and emit no startup entry. |

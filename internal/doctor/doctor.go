@@ -90,7 +90,7 @@ func lifecycleProblem(code, gid, evidence string) Issue {
 		recovery = "Reconnect the original storage, verify the target, then use Retry."
 	case "PublicationConflict":
 		summary = "publication destination already exists"
-		recovery = "Move the conflicting destination aside without deleting staging, then use Retry."
+		recovery = "Use Retry to publish the retained staging payload under the next available suffixed name."
 	case "PublicationRecoveryRequired", "PublicationPayloadMismatch", "PublicationPayloadMissing", "PublicationStateUncertain":
 		summary = "publication outcome requires manual reconciliation"
 		recovery = "Inspect staging and target, preserve the only payload, then use Retry or explicit Clear."

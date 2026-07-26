@@ -78,7 +78,7 @@ func (rpc *lifecycleRPC) CompleteCensus(context.Context, state.State) ([]aria2.L
 	return rpc.census, nil
 }
 
-func TestManagedHTTPAddAndPublicationKeepTargetCleanUntilAtomicRoot(t *testing.T) {
+func TestManagedHTTPPublicationAutoSuffixesConflictAtomically(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	target := filepath.Join(root, "downloads")
@@ -102,6 +102,9 @@ func TestManagedHTTPAddAndPublicationKeepTargetCleanUntilAtomicRoot(t *testing.T
 	if err != nil || len(entries) != 0 {
 		t.Fatalf("target before completion = %v err=%v", entries, err)
 	}
+	if err := os.WriteFile(filepath.Join(target, "payload.bin"), []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	repository := jobs.New(servicePaths.StateDir)
 	job, _, err := repository.Load(result.Task.GID)
 	if err != nil || job.Phase != jobs.PhaseStaged {
@@ -120,20 +123,97 @@ func TestManagedHTTPAddAndPublicationKeepTargetCleanUntilAtomicRoot(t *testing.T
 	if err := application.ManagedHook(context.Background(), "on-download-complete", job.ID); err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(target, "payload.bin"))
+	data, err := os.ReadFile(filepath.Join(target, "payload (1).bin"))
 	if err != nil || string(data) != "complete" {
 		t.Fatalf("published data=%q err=%v", data, err)
 	}
+	if data, err := os.ReadFile(filepath.Join(target, "payload.bin")); err != nil || string(data) != "existing" {
+		t.Fatalf("existing destination=%q err=%v", data, err)
+	}
 	job, _, err = repository.Load(job.ID)
 	if err != nil || job.Phase != jobs.PhasePublished || job.ActivityIntent != jobs.ActivityStopped ||
-		job.PayloadLength == nil || *job.PayloadLength != 8 {
+		job.DestinationRoot != "payload (1).bin" || job.PayloadLength == nil || *job.PayloadLength != 8 {
 		t.Fatalf("published job=%+v err=%v", job, err)
 	}
 	if err := application.ManagedHook(context.Background(), "on-download-complete", job.ID); err != nil {
 		t.Fatalf("duplicate completion hook was not idempotent: %v", err)
 	}
-	if data, err := os.ReadFile(filepath.Join(target, "payload.bin")); err != nil || string(data) != "complete" {
+	if data, err := os.ReadFile(filepath.Join(target, "payload (1).bin")); err != nil || string(data) != "complete" {
 		t.Fatalf("duplicate hook changed published payload: %q err=%v", data, err)
+	}
+}
+
+func TestManagedTorrentConflictPublishesSuffixedDirectoryAndStopsSeeding(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	target := filepath.Join(root, "downloads")
+	if err := os.MkdirAll(filepath.Join(target, "Comics"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, "Comics", "existing.txt"), []byte("existing"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current := state.State{RuntimeSchemaVersion: 2, RPCPort: 6800, RPCSecret: "secret", SessionPath: servicePaths.SessionFile, StartupInputPath: servicePaths.StartupInputFile}
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatal(err)
+	}
+	rpc := &lifecycleRPC{clearMakesAbsent: true}
+	application := New(Options{Paths: servicePaths, RPC: rpc, DownloadDir: target})
+	result, err := application.AddManaged(context.Background(), AddRequest{
+		Source:    "magnet:?xt=urn:btih:0123456789012345678901234567890123456789",
+		TargetDir: target,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository := jobs.New(servicePaths.StateDir)
+	job, _, err := repository.Load(result.Task.GID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := repository.LoadStorage(job.StorageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	work := jobs.WorkDir(scope, job.ID)
+	payload := filepath.Join(work, "Comics")
+	if err := os.Mkdir(payload, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	issue := filepath.Join(payload, "issue.cbz")
+	if err := os.WriteFile(issue, []byte("torrent"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metainfo := []byte("d4:infod6:lengthi7e4:name6:Comics12:piece lengthi7e6:pieces20:01234567890123456789ee")
+	if err := repository.WriteMetainfo(job.ID, metainfo); err != nil {
+		t.Fatal(err)
+	}
+	rpc.status = aria2.LifecycleStatus{
+		GID:             job.ID,
+		Status:          "active",
+		Dir:             work,
+		InfoHash:        "0123456789012345678901234567890123456789",
+		Seeder:          true,
+		CompletedLength: 7,
+		TotalLength:     7,
+		Files:           []aria2.DownloadFile{{Path: issue, Length: 7, CompletedLength: 7}},
+	}
+	if err := application.ManagedHook(context.Background(), "on-bt-download-complete", job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(filepath.Join(target, "Comics", "existing.txt")); err != nil || string(data) != "existing" {
+		t.Fatalf("existing directory changed: %q err=%v", data, err)
+	}
+	if data, err := os.ReadFile(filepath.Join(target, "Comics (1)", "issue.cbz")); err != nil || string(data) != "torrent" {
+		t.Fatalf("suffixed torrent payload=%q err=%v", data, err)
+	}
+	job, _, err = repository.Load(job.ID)
+	if err != nil || job.Phase != jobs.PhasePublished || job.DestinationRoot != "Comics (1)" ||
+		job.ActivityIntent != jobs.ActivityStopped || job.ProblemCode != "" {
+		t.Fatalf("published torrent job=%+v err=%v", job, err)
+	}
+	if rpc.torrentCalls != 0 {
+		t.Fatalf("renamed torrent unexpectedly restarted seeding: %d AddTorrent call(s)", rpc.torrentCalls)
 	}
 }
 
@@ -570,6 +650,10 @@ func TestPublishingActionsMatchLifecycleMutations(t *testing.T) {
 	job.ProblemCode = "PublicationStateUncertain"
 	if actions := session.availableActions(TaskClassification{Status: StatusError}, true, job); len(actions) != 1 || actions[0] != "retry" {
 		t.Fatalf("uncertain Publishing actions = %v", actions)
+	}
+	job = jobs.Job{Phase: jobs.PhasePublished, ActivityIntent: jobs.ActivityStopped, PayloadRoot: "Comics", DestinationRoot: "Comics (1)"}
+	if actions := session.availableActions(TaskClassification{Status: StatusComplete}, true, job); len(actions) != 1 || actions[0] != "clear" {
+		t.Fatalf("renamed published torrent actions = %v", actions)
 	}
 }
 

@@ -206,13 +206,14 @@ func TestDashboardProjectsPublishedPayloadMetricsInRowAndDetail(t *testing.T) {
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	length := int64(1234)
 	job := jobs.Job{
-		ID:             gid,
-		Source:         "https://example.test/payload.bin",
-		TargetDir:      filepath.Join(root, "downloads"),
-		Phase:          jobs.PhasePublished,
-		ActivityIntent: jobs.ActivityStopped,
-		PayloadRoot:    "payload.bin",
-		PayloadLength:  &length,
+		ID:              gid,
+		Source:          "https://example.test/payload.bin",
+		TargetDir:       filepath.Join(root, "downloads"),
+		Phase:           jobs.PhasePublished,
+		ActivityIntent:  jobs.ActivityStopped,
+		PayloadRoot:     "payload.bin",
+		DestinationRoot: "payload (1).bin",
+		PayloadLength:   &length,
 	}
 	session := &DashboardSession{app: New(Options{Paths: servicePaths})}
 	notFound := &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "GID is not found"}
@@ -227,10 +228,12 @@ func TestDashboardProjectsPublishedPayloadMetricsInRowAndDetail(t *testing.T) {
 	}
 	row := got.Downloads.Stopped[0]
 	if row.CanonicalStatus != string(StatusComplete) ||
+		row.Name != job.DestinationRoot ||
 		row.CompletedLength != length || row.TotalLength != length || !row.LengthKnown {
 		t.Fatalf("published row = %#v", row)
 	}
 	if got.Detail == nil || got.Detail.CanonicalStatus != string(StatusComplete) ||
+		got.Detail.Name != job.DestinationRoot ||
 		got.Detail.CompletedLength != length || got.Detail.TotalLength != length ||
 		!got.Detail.LengthKnown {
 		t.Fatalf("published detail = %#v", got.Detail)

@@ -47,6 +47,9 @@ func (app *App) SetActivity(ctx context.Context, gid string, running bool) error
 	if job.Phase == jobs.PhaseRemoved || job.Phase == jobs.PhasePublishing {
 		return errors.New("activity cannot change in the current publication phase")
 	}
+	if running && job.Phase == jobs.PhasePublished && job.PublicationRenamed() {
+		return errors.New("renamed published torrents cannot restart seeding")
+	}
 	intent := jobs.ActivityStopped
 	if running {
 		intent = jobs.ActivityRunning
@@ -248,6 +251,11 @@ func (app *App) RetryManaged(ctx context.Context, gid string) error {
 		job.ProblemCode = ""
 		if job.PayloadRoot != "" {
 			job.Phase = jobs.PhasePublished
+			if job.PublicationRenamed() {
+				job.ActivityIntent = jobs.ActivityStopped
+				_, err = repository.SaveCAS(job, token)
+				return err
+			}
 			if _, err = repository.SaveCAS(job, token); err != nil {
 				return err
 			}
@@ -277,7 +285,7 @@ func (app *App) RetryManaged(ctx context.Context, gid string) error {
 				return errors.New("configured RPC does not support final-seed Retry")
 			}
 			native, statusErr := rpc.LifecycleStatus(ctx, current, gid)
-			destination := filepath.Join(job.TargetDir, job.PayloadRoot)
+			destination := filepath.Join(job.TargetDir, job.FinalRoot())
 			switch {
 			case statusErr == nil:
 				if native.GID != gid || filepath.Clean(native.Dir) != filepath.Clean(job.TargetDir) || !publishedFilesMatch(native.Files, destination) {
@@ -318,7 +326,7 @@ func (app *App) RetryManaged(ctx context.Context, gid string) error {
 		} else if statusErr != nil && !aria2.IsNotFound(statusErr) {
 			return statusErr
 		}
-		job, token, err = reconcilePublishing(repository, job, token, scope)
+		job, token, err = reconcilePublishing(ctx, repository, job, token, scope)
 		if err != nil {
 			return err
 		}
@@ -496,6 +504,9 @@ func (app *App) setActivityWithoutLock(ctx context.Context, repository *jobs.Rep
 }
 
 func (app *App) startFinalSeedWithoutLock(ctx context.Context, repository *jobs.Repository, job jobs.Job) error {
+	if job.PublicationRenamed() {
+		return errors.New("renamed published torrents cannot restart seeding")
+	}
 	current, err := state.Load(app.options.Paths.StateFile)
 	if err != nil {
 		return err
@@ -504,7 +515,7 @@ func (app *App) startFinalSeedWithoutLock(ctx context.Context, repository *jobs.
 	if !ok {
 		return errors.New("configured RPC does not support managed activity")
 	}
-	destination, identity, err := publication.ValidatePayloadRoot(job.TargetDir, job.PayloadRoot)
+	destination, identity, err := publication.ValidatePayloadRoot(job.TargetDir, job.FinalRoot())
 	if err != nil || identity.MountID != job.PayloadIdentity.MountID ||
 		(job.PayloadIdentity.ReliableAcrossRename && identity.ObjectID != job.PayloadIdentity.ObjectID) {
 		return app.persistCurrentProblem(repository, job.ID, "FinalSeedPathMismatch",
@@ -812,11 +823,28 @@ func (app *App) ManagedHook(ctx context.Context, event, gid string) error {
 			return errors.New("torrent publication requires retained metainfo")
 		}
 	}
-	job.Phase = jobs.PhasePublishing
 	job.PayloadRoot = root
+	unlockPublication, err := repository.LockPublication(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlockPublication()
+	destinationRoot, allocationErr := publication.AvailableRoot(source, job.TargetDir, root)
+	job.Phase = jobs.PhasePublishing
+	job.DestinationRoot = destinationRoot
 	job.PayloadIdentity = jobIdentity(identity)
 	payloadLength := native.TotalLength
 	job.PayloadLength = &payloadLength
+	if allocationErr != nil {
+		// Persist a deterministic legacy-compatible destination so explicit
+		// Retry can repeat allocation without detaching the only live payload.
+		job.DestinationRoot = root
+		job.ProblemCode = publicationProblem(allocationErr)
+		if _, saveErr := repository.SaveCAS(job, token); saveErr != nil {
+			return errors.Join(allocationErr, saveErr)
+		}
+		return allocationErr
+	}
 	token, err = repository.SaveCAS(job, token)
 	if err != nil {
 		return err
@@ -834,7 +862,7 @@ func (app *App) ManagedHook(ctx context.Context, event, gid string) error {
 	if err := rpc.RemoveDownloadResult(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
 		return err
 	}
-	destination := filepath.Join(job.TargetDir, root)
+	destination := filepath.Join(job.TargetDir, job.FinalRoot())
 	currentIdentity, err := publication.Identify(source)
 	if err != nil || !publication.SameObject(identity, currentIdentity) {
 		return errors.New("PublicationPayloadMismatch: payload identity changed before publication")
@@ -845,7 +873,7 @@ func (app *App) ManagedHook(ctx context.Context, event, gid string) error {
 	}
 	job.Phase = jobs.PhasePublished
 	job.ProblemCode = ""
-	if !isTorrent {
+	if !isTorrent || job.PublicationRenamed() {
 		job.ActivityIntent = jobs.ActivityStopped
 	}
 	if move.DirectorySyncUnsupported {

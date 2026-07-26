@@ -55,3 +55,44 @@ func TestValidatePayloadRootRejectsSymlink(t *testing.T) {
 		t.Fatal("nested payload root accepted")
 	}
 }
+
+func TestAvailableRootSuffixesFilesDirectoriesAndDotfiles(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "target")
+	stage := filepath.Join(root, "stage")
+	if err := os.MkdirAll(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(stage, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		root      string
+		directory bool
+		want      string
+	}{
+		{root: "archive.tar.gz", want: "archive.tar (1).gz"},
+		{root: "Comics", directory: true, want: "Comics (1)"},
+		{root: ".download", want: ".download (1)"},
+	} {
+		source, existing := filepath.Join(stage, test.root), filepath.Join(target, test.root)
+		var err error
+		if test.directory {
+			err = os.Mkdir(source, 0o700)
+			if err == nil {
+				err = os.Mkdir(existing, 0o700)
+			}
+		} else {
+			err = os.WriteFile(source, []byte("payload"), 0o600)
+			if err == nil {
+				err = os.WriteFile(existing, []byte("existing"), 0o600)
+			}
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := AvailableRoot(source, target, test.root); err != nil || got != test.want {
+			t.Fatalf("%q root=%q err=%v", test.root, got, err)
+		}
+	}
+}

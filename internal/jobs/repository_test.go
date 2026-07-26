@@ -133,3 +133,29 @@ func TestJobPayloadLengthIsOptionalAndRoundTripsZero(t *testing.T) {
 		t.Fatalf("legacy payload length = %v, want unknown", loaded.PayloadLength)
 	}
 }
+
+func TestRenamedPublishedRootRoundTripsAndRequiresStoppedIntent(t *testing.T) {
+	repository := New(t.TempDir())
+	job := validJob(t.TempDir())
+	job.Phase = PhasePublished
+	job.ActivityIntent = ActivityStopped
+	job.PayloadRoot = "Comics"
+	job.DestinationRoot = "Comics (1)"
+	job.PayloadIdentity = ObjectIdentity{MountID: 1, ObjectID: 2}
+	if _, err := repository.Create(job); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.FinalRoot() != job.DestinationRoot || !loaded.PublicationRenamed() {
+		t.Fatalf("renamed publication facts=%+v", loaded)
+	}
+
+	job.ID = "1111111111111111"
+	job.ActivityIntent = ActivityRunning
+	if _, err := repository.Create(job); err == nil {
+		t.Fatal("running renamed publication was accepted")
+	}
+}

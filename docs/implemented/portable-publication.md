@@ -26,8 +26,9 @@ Non-goals:
 
 1. Staging remains on the target filesystem and outside `TargetDir`.
 2. Publication still moves one complete payload root without copying or redownloading it.
-3. aria2s checks that the destination does not exist before moving and reports
-   `PublicationConflict` when it does.
+3. The portable move primitive rejects an existing destination. The managed app now
+   allocates a durable conflict-free destination before calling that primitive; see
+   `docs/implemented/automatic-publication-suffix.md`.
 4. Source and destination-parent identities are revalidated immediately before moving.
 5. A successful ordinary rename is reconciled from path presence after process death. If
    source is absent and destination exists, the transaction converges to `Published` even
@@ -46,16 +47,19 @@ syncs both parent directories when supported.
 `storageMatches` becomes purely an identity/availability check. Existing storage JSON stays
 readable because Go's JSON decoder ignores the obsolete `capability` property.
 
-Crash reconciliation uses the durable `Publishing` phase and path presence:
+At the time of this implementation, crash reconciliation used the durable `Publishing`
+phase and path presence:
 
 - source only: retry the guarded ordinary rename;
 - destination only: treat the move as committed;
 - both: keep `PublicationConflict`;
 - neither or unreadable paths: keep a recoverable publication error.
 
-The app still does not knowingly overwrite an existing destination. The accepted trade-off
-is that POSIX `rename` may replace a destination created concurrently after the preflight
-check. This CLI has no hostile multi-writer boundary around a user's download directory,
+Managed publication now resolves an observed conflict by selecting a suffixed destination;
+the underlying primitive and external-writer boundary are unchanged. The app still does not
+knowingly overwrite an existing destination. The accepted trade-off is that POSIX `rename`
+may replace a destination created concurrently after the preflight check. This CLI has no
+hostile multi-writer boundary around a user's download directory,
 and retaining a hard dependency on optional filesystem protocol support imposes much more
 product cost than that narrow race justifies.
 
