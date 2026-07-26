@@ -23,14 +23,51 @@ type dashboardRPCStub struct {
 	addGID      string
 	addErr      error
 	cleanupErr  error
+	detail      aria2.DownloadDetail
+	detailErr   error
 }
 
 func (rpc *dashboardRPCStub) DashboardSnapshot(_ context.Context, current state.State, _ aria2.DashboardQuery) (aria2.DashboardRead, error) {
 	rpc.identities = append(rpc.identities, current)
 	return rpc.snapshot, rpc.snapshotErr
 }
-func (*dashboardRPCStub) TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error) {
-	return aria2.DownloadDetail{}, nil
+func (rpc *dashboardRPCStub) TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error) {
+	return rpc.detail, rpc.detailErr
+}
+
+func TestDashboardTaskDetailFallsBackToPublishedManifestAfterNativeDetach(t *testing.T) {
+	const gid = "928cecc78f5f8415"
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	length := int64(1234)
+	job := jobs.Job{
+		ID:              gid,
+		Source:          "https://example.test/payload.bin",
+		TargetDir:       filepath.Join(root, "downloads"),
+		TargetIdentity:  jobs.ObjectIdentity{MountID: 1, ObjectID: 1},
+		StorageID:       "928cecc78f5f8414",
+		Phase:           jobs.PhasePublished,
+		ActivityIntent:  jobs.ActivityStopped,
+		PayloadRoot:     "payload.bin",
+		DestinationRoot: "payload (1).bin",
+		PayloadIdentity: jobs.ObjectIdentity{MountID: 1, ObjectID: 2},
+		PayloadLength:   &length,
+	}
+	if _, err := jobs.New(servicePaths.StateDir).Create(job); err != nil {
+		t.Fatal(err)
+	}
+	rpc := &dashboardRPCStub{detailErr: &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "GID is not found"}}
+	session := &DashboardSession{app: New(Options{Paths: servicePaths}), rpc: rpc}
+
+	detail, err := session.TaskDetail(context.Background(), gid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detail.DownloadDir != job.TargetDir || detail.Name != job.DestinationRoot ||
+		detail.CanonicalStatus != string(StatusComplete) || detail.CompletedLength != length ||
+		detail.TotalLength != length || !detail.LengthKnown {
+		t.Fatalf("manifest detail = %#v", detail)
+	}
 }
 func (*dashboardRPCStub) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
 	return "added", nil

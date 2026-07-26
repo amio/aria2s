@@ -119,20 +119,8 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 	if query.DetailGID != "" && read.Detail == nil && aria2.IsNotFound(read.DetailErr) {
 		managedRow, absenceKnown := read.Managed[query.DetailGID]
 		if job, ok := managed[query.DetailGID]; ok && absenceKnown && managedRow == nil {
-			classification := ClassifyTask(ClassificationFact{Managed: true, Phase: job.Phase, Intent: job.ActivityIntent, ProblemCode: job.ProblemCode, NativeAbsent: true})
-			read.Detail = &aria2.DownloadDetail{
-				GID:             job.ID,
-				Status:          "absent",
-				Name:            firstNonempty(job.FinalRoot(), job.Source),
-				PrimaryURI:      job.Source,
-				DownloadDir:     job.TargetDir,
-				CanonicalStatus: string(classification.Status),
-				Ownership:       string(classification.Ownership),
-				Phase:           classification.Phase,
-				ProblemCode:     projectedProblemCode(job, true),
-				Actions:         session.availableActions(classification, true, job),
-			}
-			applyPublishedMetrics(&read.Detail.CompletedLength, &read.Detail.TotalLength, &read.Detail.LengthKnown, job)
+			detail := session.manifestDetail(job)
+			read.Detail = &detail
 			read.DetailErr = nil
 			read.DetailSourceErr = nil
 		}
@@ -148,6 +136,33 @@ func applyPublishedMetrics(completed, total *int64, known *bool, job jobs.Job) {
 	*completed = *job.PayloadLength
 	*total = *job.PayloadLength
 	*known = true
+}
+
+// manifestDetail supplies the stable local projection after aria2 has detached
+// a managed task. It keeps detail-only commands, such as opening the payload,
+// consistent with the Dashboard snapshot.
+func (session *DashboardSession) manifestDetail(job jobs.Job) aria2.DownloadDetail {
+	classification := ClassifyTask(ClassificationFact{
+		Managed:      true,
+		Phase:        job.Phase,
+		Intent:       job.ActivityIntent,
+		ProblemCode:  job.ProblemCode,
+		NativeAbsent: true,
+	})
+	detail := aria2.DownloadDetail{
+		GID:             job.ID,
+		Status:          "absent",
+		Name:            firstNonempty(job.FinalRoot(), job.Source),
+		PrimaryURI:      job.Source,
+		DownloadDir:     job.TargetDir,
+		CanonicalStatus: string(classification.Status),
+		Ownership:       string(classification.Ownership),
+		Phase:           classification.Phase,
+		ProblemCode:     projectedProblemCode(job, true),
+		Actions:         session.availableActions(classification, true, job),
+	}
+	applyPublishedMetrics(&detail.CompletedLength, &detail.TotalLength, &detail.LengthKnown, job)
+	return detail
 }
 
 func (session *DashboardSession) decorateDetail(detail *aria2.DownloadDetail, job jobs.Job, managed bool) {
@@ -273,11 +288,15 @@ func firstNonempty(values ...string) string {
 func (session *DashboardSession) TaskDetail(ctx context.Context, gid string) (aria2.DownloadDetail, error) {
 	ctx, cancel := context.WithTimeout(ctx, session.app.options.DashboardReadTimeout)
 	defer cancel()
+	job, _, loadErr := jobs.New(session.app.options.Paths.StateDir).Load(gid)
 	detail, err := session.rpc.TaskDetail(ctx, session.identity, gid)
 	if err != nil {
+		if loadErr == nil && aria2.IsNotFound(err) {
+			return session.manifestDetail(job), nil
+		}
 		return detail, err
 	}
-	if job, _, loadErr := jobs.New(session.app.options.Paths.StateDir).Load(gid); loadErr == nil {
+	if loadErr == nil {
 		session.decorateDetail(&detail, job, true)
 	} else {
 		session.decorateDetail(&detail, jobs.Job{}, false)
