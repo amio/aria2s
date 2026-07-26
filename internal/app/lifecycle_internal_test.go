@@ -19,18 +19,21 @@ type lifecycleRPC struct {
 	status           aria2.LifecycleStatus
 	statusErr        error
 	added            aria2.AddOptions
+	addedSource      string
 	census           []aria2.LifecycleStatus
 	forceCalls       int
 	clearCalls       int
 	clearMakesAbsent bool
 	addMakesVisible  bool
+	saveCalls        int
 	torrentCalls     int
 	torrentFiles     []aria2.DownloadFile
 }
 
 func (*lifecycleRPC) Version(context.Context, state.State) (string, error) { return "1.37.0", nil }
-func (rpc *lifecycleRPC) AddURI(_ context.Context, _ state.State, _ string, options aria2.AddOptions) (string, error) {
+func (rpc *lifecycleRPC) AddURI(_ context.Context, _ state.State, source string, options aria2.AddOptions) (string, error) {
 	rpc.added = options
+	rpc.addedSource = source
 	if rpc.addMakesVisible {
 		status := "active"
 		if options.Pause {
@@ -43,6 +46,7 @@ func (rpc *lifecycleRPC) AddURI(_ context.Context, _ state.State, _ string, opti
 }
 func (rpc *lifecycleRPC) AddTorrent(_ context.Context, _ state.State, _ []byte, options aria2.AddOptions) (string, error) {
 	rpc.torrentCalls++
+	rpc.added = options
 	if rpc.addMakesVisible {
 		rpc.status = aria2.LifecycleStatus{GID: options.GID, Status: "active", Dir: options.Dir, Files: rpc.torrentFiles}
 		rpc.statusErr = nil
@@ -65,8 +69,11 @@ func (rpc *lifecycleRPC) RemoveDownloadResult(context.Context, state.State, stri
 	}
 	return nil
 }
-func (*lifecycleRPC) SaveSession(context.Context, state.State) error { return nil }
-func (*lifecycleRPC) Shutdown(context.Context, state.State) error    { return nil }
+func (rpc *lifecycleRPC) SaveSession(context.Context, state.State) error {
+	rpc.saveCalls++
+	return nil
+}
+func (*lifecycleRPC) Shutdown(context.Context, state.State) error { return nil }
 func (rpc *lifecycleRPC) CompleteCensus(context.Context, state.State) ([]aria2.LifecycleStatus, error) {
 	return rpc.census, nil
 }
@@ -216,7 +223,7 @@ func TestRemoveCompletedResultSkipsForceRemoveAndCleansStaging(t *testing.T) {
 	}
 }
 
-func TestRemovedRetryConvergesCrashAfterTombstone(t *testing.T) {
+func TestRemovedRetryRestartsAfterCrashFollowingTombstone(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	target := filepath.Join(root, "downloads")
@@ -253,15 +260,20 @@ func TestRemovedRetryConvergesCrashAfterTombstone(t *testing.T) {
 	if err := application.RetryManaged(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(work); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("staging survived removed Retry: %v", err)
+	entries, err := os.ReadDir(work)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("restart work directory = %v, err=%v", entries, err)
 	}
-	if err := application.ClearManaged(context.Background(), job.ID); err != nil {
-		t.Fatal(err)
+	job, _, err = repository.Load(job.ID)
+	if err != nil || job.Phase != jobs.PhaseStaged || job.ActivityIntent != jobs.ActivityRunning {
+		t.Fatalf("restarted job=%+v err=%v", job, err)
+	}
+	if rpc.addedSource != job.Source || rpc.added.GID != job.ID || rpc.added.Dir != work || rpc.saveCalls != 2 {
+		t.Fatalf("restart RPC source=%q options=%+v saves=%d", rpc.addedSource, rpc.added, rpc.saveCalls)
 	}
 }
 
-func TestRemovedRetryConvergesCrashBeforeNativeDetach(t *testing.T) {
+func TestRemovedRetryRestartsAfterCrashBeforeNativeDetach(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	target := filepath.Join(root, "downloads")
@@ -301,8 +313,13 @@ func TestRemovedRetryConvergesCrashBeforeNativeDetach(t *testing.T) {
 	if rpc.forceCalls != 1 || rpc.clearCalls != 1 {
 		t.Fatalf("native detach calls: force=%d clear=%d", rpc.forceCalls, rpc.clearCalls)
 	}
-	if _, err := os.Stat(workDir); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("staging survived recovered Remove: %v", err)
+	entries, err := os.ReadDir(workDir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("restart work directory = %v, err=%v", entries, err)
+	}
+	job, _, err = repository.Load(job.ID)
+	if err != nil || job.Phase != jobs.PhaseStaged || rpc.added.GID != job.ID {
+		t.Fatalf("restarted job=%+v options=%+v err=%v", job, rpc.added, err)
 	}
 }
 
@@ -427,7 +444,7 @@ func TestPublishedSeedStartRequiresExistingPublishedPayload(t *testing.T) {
 	}
 }
 
-func TestRemovedPublishedCleanupMustConvergeBeforeClear(t *testing.T) {
+func TestRemovedPublishedTorrentRestartsFinalSeedAfterCleanup(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	target := filepath.Join(root, "downloads")
@@ -437,9 +454,15 @@ func TestRemovedPublishedCleanupMustConvergeBeforeClear(t *testing.T) {
 	if err := state.Save(servicePaths.StateFile, state.State{RuntimeSchemaVersion: 2}); err != nil {
 		t.Fatal(err)
 	}
-	rpc := &lifecycleRPC{statusErr: &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "not found"}}
+	rpc := &lifecycleRPC{
+		statusErr:       &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "not found"},
+		addMakesVisible: true,
+	}
 	application := New(Options{Paths: servicePaths, RPC: rpc})
-	result, err := application.AddManaged(context.Background(), AddRequest{Source: "https://example.test/payload.bin", TargetDir: target})
+	result, err := application.AddManaged(context.Background(), AddRequest{
+		Source:    "magnet:?xt=urn:btih:0123456789012345678901234567890123456789",
+		TargetDir: target,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -464,7 +487,12 @@ func TestRemovedPublishedCleanupMustConvergeBeforeClear(t *testing.T) {
 	if _, err := publication.Move(payload, filepath.Join(target, "payload.bin")); err != nil {
 		t.Fatal(err)
 	}
+	rpc.torrentFiles = []aria2.DownloadFile{{Path: filepath.Join(job.TargetDir, "payload.bin")}}
 	if err := os.WriteFile(filepath.Join(workDir, "payload.bin.aria2"), []byte("control"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	metainfo := []byte("d4:infod6:lengthi7e4:name11:payload.bin12:piece lengthi7e6:pieces20:01234567890123456789ee")
+	if err := repository.WriteMetainfo(job.ID, metainfo); err != nil {
 		t.Fatal(err)
 	}
 	job.Phase, job.ActivityIntent = jobs.PhaseRemoved, jobs.ActivityStopped
@@ -472,17 +500,26 @@ func TestRemovedPublishedCleanupMustConvergeBeforeClear(t *testing.T) {
 	if _, err := repository.SaveCAS(job, token); err != nil {
 		t.Fatal(err)
 	}
+	rpc.status = aria2.LifecycleStatus{}
+	rpc.statusErr = &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "not found"}
 	if err := application.ClearManaged(context.Background(), job.ID); err == nil {
 		t.Fatal("Clear accepted residual published staging artifacts")
 	}
 	if err := application.RetryManaged(context.Background(), job.ID); err != nil {
-		t.Fatal(err)
+		t.Fatalf("restart: %v (native=%+v)", err, rpc.status)
 	}
 	if _, err := os.Stat(workDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("published staging residue survived Retry: %v", err)
 	}
-	if err := application.ClearManaged(context.Background(), job.ID); err != nil {
-		t.Fatal(err)
+	job, _, err = repository.Load(job.ID)
+	if err != nil || job.Phase != jobs.PhasePublished || job.ActivityIntent != jobs.ActivityRunning || job.ProblemCode != "" {
+		t.Fatalf("restarted published job=%+v err=%v", job, err)
+	}
+	if rpc.torrentCalls != 1 || rpc.added.GID != job.ID || rpc.added.Dir != job.TargetDir {
+		t.Fatalf("final seed calls=%d options=%+v", rpc.torrentCalls, rpc.added)
+	}
+	if data, err := os.ReadFile(filepath.Join(target, "payload.bin")); err != nil || string(data) != "payload" {
+		t.Fatalf("published payload changed: %q err=%v", data, err)
 	}
 }
 

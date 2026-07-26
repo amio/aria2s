@@ -1,3 +1,6 @@
+// Package app owns crash-safe managed task lifecycle workflows. Durable
+// manifest intent precedes RPC and filesystem mutations; removed tasks may
+// restart only after native absence and staging cleanup are proven.
 package app
 
 import (
@@ -241,9 +244,24 @@ func (app *App) RetryManaged(ctx context.Context, gid string) error {
 		if cleanupErr != nil {
 			return persistJobProblem(repository, job, token, "CleanupFailed", cleanupErr)
 		}
+		job.ActivityIntent = jobs.ActivityRunning
 		job.ProblemCode = ""
-		_, err = repository.SaveCAS(job, token)
-		return err
+		if job.PayloadRoot != "" {
+			job.Phase = jobs.PhasePublished
+			if _, err = repository.SaveCAS(job, token); err != nil {
+				return err
+			}
+			return app.startFinalSeedWithoutLock(ctx, repository, job)
+		}
+		if err := os.Mkdir(workDir, 0o700); err != nil {
+			return err
+		}
+		job.Phase = jobs.PhasePending
+		token, err = repository.SaveCAS(job, token)
+		if err != nil {
+			return err
+		}
+		return retryPendingWithoutLock(ctx, repository, rpc, current, job, token, scope)
 	}
 	if job.Phase == jobs.PhaseStaged && job.ProblemCode != "" {
 		return app.retryStagedWithoutLock(ctx, repository, job, token, scope)
@@ -330,6 +348,11 @@ func (app *App) RetryManaged(ctx context.Context, gid string) error {
 	if !ok {
 		return errors.New("configured RPC does not support managed Retry")
 	}
+	return retryPendingWithoutLock(ctx, repository, rpc, current, job, token, scope)
+}
+
+func retryPendingWithoutLock(ctx context.Context, repository *jobs.Repository, rpc managedRPC, current state.State, job jobs.Job, token jobs.Token, scope jobs.StorageScope) error {
+	gid := job.ID
 	native, statusErr := rpc.LifecycleStatus(ctx, current, gid)
 	workDir := jobs.WorkDir(scope, gid)
 	if statusErr == nil {
@@ -337,30 +360,35 @@ func (app *App) RetryManaged(ctx context.Context, gid string) error {
 			return errors.New("ManagedIdentityConflict: live GID points outside its work directory")
 		}
 		job.Phase, job.ProblemCode = jobs.PhaseStaged, ""
-		_, err = repository.SaveCAS(job, token)
-		return err
+	} else {
+		if !aria2.IsNotFound(statusErr) {
+			return statusErr
+		}
+		entries, err := os.ReadDir(workDir)
+		if err != nil || len(entries) != 0 {
+			return errors.New("RestartStateMissing: pending Add cannot be retried beside staged artifacts")
+		}
+		options := aria2.AddOptions{Dir: workDir, GID: gid, Managed: true}
+		if strings.HasPrefix(job.Source, "magnet:") {
+			options.MetadataOnly, options.SaveMetadata = true, true
+		}
+		added, err := rpc.AddURI(ctx, current, job.Source, options)
+		if err != nil {
+			return err
+		}
+		if added != gid {
+			return errors.New("ManagedIdentityConflict: Retry changed GID")
+		}
+		job.Phase, job.ProblemCode = jobs.PhaseStaged, ""
 	}
-	if !aria2.IsNotFound(statusErr) {
-		return statusErr
-	}
-	entries, err := os.ReadDir(workDir)
-	if err != nil || len(entries) != 0 {
-		return errors.New("RestartStateMissing: pending Add cannot be retried beside staged artifacts")
-	}
-	options := aria2.AddOptions{Dir: workDir, GID: gid, Managed: true}
-	if strings.HasPrefix(job.Source, "magnet:") {
-		options.MetadataOnly, options.SaveMetadata = true, true
-	}
-	added, err := rpc.AddURI(ctx, current, job.Source, options)
+	nextToken, err := repository.SaveCAS(job, token)
 	if err != nil {
 		return err
 	}
-	if added != gid {
-		return errors.New("ManagedIdentityConflict: Retry changed GID")
+	if err := rpc.SaveSession(ctx, current); err != nil {
+		return persistJobProblem(repository, job, nextToken, "RestartCheckpointFailed", err)
 	}
-	job.Phase, job.ProblemCode = jobs.PhaseStaged, ""
-	_, err = repository.SaveCAS(job, token)
-	return err
+	return nil
 }
 
 func (app *App) retryStagedWithoutLock(ctx context.Context, repository *jobs.Repository, job jobs.Job, token jobs.Token, scope jobs.StorageScope) error {

@@ -146,8 +146,8 @@ func TestItemsGroupByCanonicalStatusAndSortDownloadingByProgress(t *testing.T) {
 		"waiting-first", "waiting-second",
 		"paused",
 		"error",
-		"removed",
 		"complete-new", "complete-old",
+		"removed",
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("ordered GIDs got %v, want %v", got, want)
@@ -436,6 +436,7 @@ func TestListResumeKeyDispatchesAdvertisedAction(t *testing.T) {
 	}{
 		{name: "paused resumes", native: "paused", canonical: "paused", actions: []string{"resume"}, want: "resume:g1"},
 		{name: "error retries", native: "error", canonical: "error", actions: []string{"retry"}, want: "retry:g1"},
+		{name: "removed restarts", native: "removed", canonical: "removed", actions: []string{"retry"}, want: "retry:g1"},
 		{name: "complete is no-op", native: "complete", canonical: "complete"},
 		{name: "downloading without action is no-op", native: "active", canonical: "downloading"},
 		{name: "waiting without action is no-op", native: "waiting", canonical: "waiting"},

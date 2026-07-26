@@ -367,7 +367,8 @@ user confirmation protocol or block an otherwise supported normal rename.
 - `Publishing`: detach/rename/commit may be incomplete;
 - `Published`: the final root is authoritative;
 - `Removed`: a durable tombstone written before native removal or staging deletion; startup
-  emits nothing, cleanup may be retried, and any published payload is retained.
+  emits nothing, any published payload is retained, and explicit Retry first converges
+  cleanup before restarting the same job.
 
 There are no durable resolving, transferring, detached, conflict, cleanup, closed, or
 failed phases. Transport state comes from aria2/session; storage and publication failures
@@ -516,9 +517,11 @@ After `Published` and final seed rehydration are confirmed, remove the now paylo
 `WorkDir`. Retained metainfo remains while Start seeding is supported. A `Removed` tombstone
 allows deletion of an unpublished staging payload only after native ownership is confirmed
 absent; it never deletes a published final root. Cleanup failure retains the tombstone so a
-restart cannot reload the task. Clear normally removes history/control metadata only after
-those ownership and cleanup conditions are satisfied. A `Publishing` task must reconcile
-through Retry before Clear can remove its metadata.
+service restart cannot reload the task. Explicit Retry first converges those ownership and
+cleanup conditions, then restarts unpublished work from its retained source or rehydrates a
+published final seed under the same GID. Clear removes an already-clean tombstone without
+restarting it. A `Publishing` task must reconcile through Retry before Clear can remove its
+metadata.
 
 The storage registration and empty storage-ID marker are not automatically collected. This
 avoids reference counting and marker-adoption races in MVP.

@@ -40,7 +40,7 @@ Non-goals:
   - manifest, identity, and lifecycle problems are `error`.
 - Observed native activity remains authoritative over stale managed intent.
 - Status order is `downloading`, `metadata`, `seeding`, `waiting`, `paused`,
-  `error`, `removed`, then `complete`.
+  `error`, `complete`, then `removed`.
 - Downloads sort by progress descending. Metadata, seeds, aria2 queue order,
   and newest-first stopped history remain stable within their own groups.
 

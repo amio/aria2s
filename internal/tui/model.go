@@ -733,13 +733,13 @@ func downloadStatusRank(download aria2.Download) int {
 		return 4
 	case app.StatusError:
 		return 5
-	case app.StatusRemoved:
-		return 6
 	case app.StatusComplete:
+		return 6
+	case app.StatusRemoved:
 		return 8
 	default:
 		// Unknown states remain visible near other exceptional states, while
-		// Complete is always the final group.
+		// Removed is always the final group.
 		return 7
 	}
 }
