@@ -3,27 +3,56 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amio/aria2s/internal/aria2"
 	"github.com/charmbracelet/x/ansi"
 )
 
 func TestTableShowsPeerMetricsAtWideViewport(t *testing.T) {
-	const contentWidth = 118
+	const contentWidth = 144
 	model := Model{}
 	header := model.tableHeader(contentWidth)
-	if !strings.Contains(header, "Seeds") || !strings.Contains(header, "Peers") {
-		t.Fatalf("wide header missing peer metrics: %q", header)
+	if !strings.Contains(header, "Seeds") || !strings.Contains(header, "Peers") ||
+		!strings.Contains(header, "Uploaded") || !strings.Contains(header, "Added Ago") {
+		t.Fatalf("wide header missing optional metrics: %q", header)
 	}
 
 	row := stripANSI(model.downloadRow(contentWidth+8, aria2.Download{
-		GID:         "a",
-		Name:        "torrent",
-		NumSeeders:  73,
-		Connections: 41,
+		GID:               "a",
+		Name:              "torrent",
+		NumSeeders:        73,
+		Connections:       41,
+		UploadLength:      2500,
+		UploadLengthKnown: true,
+		AddedAt:           time.Now().Add(-2*time.Hour - 5*time.Minute),
 	}, false))
-	if !strings.Contains(row, "73") || !strings.Contains(row, "41") {
-		t.Fatalf("wide row missing peer metrics: %q", row)
+	if !strings.Contains(row, "73") || !strings.Contains(row, "41") ||
+		!strings.Contains(row, "2.5K") || !strings.Contains(row, "2h 05m") {
+		t.Fatalf("wide row missing optional metrics: %q", row)
+	}
+}
+
+func TestAddedAgeFormattingUsesManagedCreationTime(t *testing.T) {
+	now := time.Date(2026, time.July, 26, 12, 0, 0, 0, time.UTC)
+	tests := []struct {
+		name    string
+		addedAt time.Time
+		want    string
+	}{
+		{name: "unknown", want: "—"},
+		{name: "less than minute", addedAt: now.Add(-30 * time.Second), want: "<1m"},
+		{name: "minutes", addedAt: now.Add(-42 * time.Minute), want: "42m"},
+		{name: "hours", addedAt: now.Add(-7*time.Hour - 3*time.Minute), want: "7h 03m"},
+		{name: "days", addedAt: now.Add(-49*time.Hour - 8*time.Minute), want: "2d 01h"},
+		{name: "future clock", addedAt: now.Add(time.Hour), want: "<1m"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := formatAddedAge(test.addedAt, now); got != test.want {
+				t.Fatalf("formatAddedAge() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
@@ -91,12 +120,22 @@ func TestKnownStatusTonesAreDistinct(t *testing.T) {
 }
 
 func TestTableColumnsHideByPriority(t *testing.T) {
-	full := computeLayout(118)
-	if full.seedsWidth == 0 || full.peersWidth == 0 {
-		t.Fatalf("peer metrics hidden in full layout: %#v", full)
+	full := computeLayout(144)
+	if full.uploadedWidth == 0 || full.addedAgoWidth == 0 {
+		t.Fatalf("new metrics hidden in full layout: %#v", full)
 	}
 	if full.nameWidth < minNameWidth {
 		t.Fatalf("full layout name width got %d, want at least %d", full.nameWidth, minNameWidth)
+	}
+
+	addedAgoHidden := computeLayout(143)
+	if addedAgoHidden.addedAgoWidth != 0 || addedAgoHidden.uploadedWidth == 0 {
+		t.Fatalf("added age did not hide before uploaded: %#v", addedAgoHidden)
+	}
+
+	uploadedHidden := computeLayout(131)
+	if uploadedHidden.uploadedWidth != 0 || uploadedHidden.peersWidth == 0 {
+		t.Fatalf("uploaded did not hide before peer metrics: %#v", uploadedHidden)
 	}
 
 	peerMetricsHidden := computeLayout(117)
@@ -121,7 +160,8 @@ func TestTableColumnsHideByPriority(t *testing.T) {
 	requiredOnly := computeLayout(minTableWidth)
 	if requiredOnly.downloadedWidth != 0 || requiredOnly.downWidth != 0 ||
 		requiredOnly.upWidth != 0 ||
-		requiredOnly.seedsWidth != 0 || requiredOnly.peersWidth != 0 {
+		requiredOnly.seedsWidth != 0 || requiredOnly.peersWidth != 0 ||
+		requiredOnly.uploadedWidth != 0 || requiredOnly.addedAgoWidth != 0 {
 		t.Fatalf("optional columns survived required-only layout: %#v", requiredOnly)
 	}
 	if requiredOnly.nameWidth != minNameWidth {

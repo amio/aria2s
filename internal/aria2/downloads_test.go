@@ -20,7 +20,7 @@ func TestListDownloadsFetchesActiveWaitingAndStoppedWindows(t *testing.T) {
 		requests = append(requests, call)
 		switch call.Method {
 		case "aria2.tellActive":
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[{"gid":"a1","status":"active","files":[{"path":"/tmp/a.iso"}],"completedLength":"25","totalLength":"100","downloadSpeed":"5"}]}`)
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[{"gid":"a1","status":"active","files":[{"path":"/tmp/a.iso"}],"completedLength":"25","totalLength":"100","downloadSpeed":"5","uploadLength":"0"}]}`)
 		case "aria2.tellWaiting":
 			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[{"gid":"w1","status":"waiting","files":[{"path":"/tmp/w.iso"}],"completedLength":"0","totalLength":"200"}]}`)
 		case "aria2.tellStopped":
@@ -39,6 +39,9 @@ func TestListDownloadsFetchesActiveWaitingAndStoppedWindows(t *testing.T) {
 
 	if len(snapshot.Active) != 1 || snapshot.Active[0].GID != "a1" || snapshot.Active[0].Name != "a.iso" {
 		t.Fatalf("unexpected active downloads: %#v", snapshot.Active)
+	}
+	if snapshot.Active[0].UploadLength != 0 || !snapshot.Active[0].UploadLengthKnown {
+		t.Fatalf("known-zero upload length was lost: %#v", snapshot.Active[0])
 	}
 	if len(snapshot.Waiting) != 1 || snapshot.Waiting[0].GID != "w1" || snapshot.Waiting[0].Status != "waiting" {
 		t.Fatalf("unexpected waiting downloads: %#v", snapshot.Waiting)
@@ -108,8 +111,9 @@ func TestListDownloadsDecodesMetadataDisplayName(t *testing.T) {
 		case "aria2.tellActive":
 			assertRequestIncludesField(t, call, "numSeeders")
 			assertRequestIncludesField(t, call, "connections")
+			assertRequestIncludesField(t, call, "uploadLength")
 			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[
-				{"gid":"m1","status":"active","files":[{"path":"[METADATA]The+New+York+Times+Best+Sellers"}],"completedLength":"0","totalLength":"20480","numSeeders":"7","connections":"13"}
+				{"gid":"m1","status":"active","files":[{"path":"[METADATA]The+New+York+Times+Best+Sellers"}],"completedLength":"0","totalLength":"20480","uploadLength":"2048","numSeeders":"7","connections":"13"}
 			]}`)
 		case "aria2.tellWaiting":
 			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[]}`)
@@ -135,6 +139,9 @@ func TestListDownloadsDecodesMetadataDisplayName(t *testing.T) {
 	}
 	if snapshot.Active[0].NumSeeders != 7 || snapshot.Active[0].Connections != 13 {
 		t.Fatalf("peer metrics got seeds=%d peers=%d, want 7 and 13", snapshot.Active[0].NumSeeders, snapshot.Active[0].Connections)
+	}
+	if snapshot.Active[0].UploadLength != 2048 || !snapshot.Active[0].UploadLengthKnown {
+		t.Fatalf("upload length got value=%d known=%t, want 2048 and true", snapshot.Active[0].UploadLength, snapshot.Active[0].UploadLengthKnown)
 	}
 }
 

@@ -257,20 +257,24 @@ func TestDashboardKeepsNativeMetricsAuthoritativeForManagedTask(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	manifestLength := int64(1234)
+	createdAt := time.Date(2026, time.July, 20, 10, 0, 0, 0, time.UTC)
 	job := jobs.Job{
 		ID:             gid,
 		TargetDir:      filepath.Join(root, "downloads"),
 		Phase:          jobs.PhasePublished,
 		ActivityIntent: jobs.ActivityStopped,
 		PayloadLength:  &manifestLength,
+		CreatedAt:      createdAt,
 	}
 	row := aria2.Download{
-		GID:             gid,
-		Status:          "complete",
-		Dir:             job.TargetDir,
-		CompletedLength: 99,
-		TotalLength:     100,
-		LengthKnown:     true,
+		GID:               gid,
+		Status:            "complete",
+		Dir:               job.TargetDir,
+		CompletedLength:   99,
+		TotalLength:       100,
+		LengthKnown:       true,
+		UploadLength:      77,
+		UploadLengthKnown: true,
 	}
 	detail := aria2.DownloadDetail{
 		GID:             gid,
@@ -293,8 +297,13 @@ func TestDashboardKeepsNativeMetricsAuthoritativeForManagedTask(t *testing.T) {
 
 	if len(got.Downloads.Stopped) != 1 ||
 		got.Downloads.Stopped[0].CompletedLength != 99 ||
-		got.Downloads.Stopped[0].TotalLength != 100 {
+		got.Downloads.Stopped[0].TotalLength != 100 ||
+		got.Downloads.Stopped[0].UploadLength != 77 ||
+		!got.Downloads.Stopped[0].UploadLengthKnown {
 		t.Fatalf("native row metrics were overwritten: %#v", got.Downloads.Stopped)
+	}
+	if !got.Downloads.Stopped[0].AddedAt.Equal(createdAt) {
+		t.Fatalf("managed added time = %v, want %v", got.Downloads.Stopped[0].AddedAt, createdAt)
 	}
 	if got.Detail == nil || got.Detail.CompletedLength != 99 || got.Detail.TotalLength != 100 {
 		t.Fatalf("native detail metrics were overwritten: %#v", got.Detail)

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
 
 /** ListOptions bounds aria2 history reads for the interactive dashboard. */
@@ -47,25 +48,28 @@ type DownloadSnapshot struct {
 
 /** Download is the compact task row used by list views. */
 type Download struct {
-	GID             string
-	Status          string
-	Dir             string
-	Name            string
-	IsMetadata      bool
-	CompletedLength int64
-	TotalLength     int64
-	LengthKnown     bool
-	DownloadSpeed   int64
-	UploadSpeed     int64
-	NumSeeders      int64
-	Connections     int64
-	Seeder          bool
-	InfoHash        string
-	CanonicalStatus string
-	Ownership       string
-	Phase           string
-	ProblemCode     string
-	Actions         []string
+	GID               string
+	Status            string
+	Dir               string
+	Name              string
+	IsMetadata        bool
+	CompletedLength   int64
+	TotalLength       int64
+	LengthKnown       bool
+	DownloadSpeed     int64
+	UploadSpeed       int64
+	UploadLength      int64
+	UploadLengthKnown bool
+	NumSeeders        int64
+	Connections       int64
+	Seeder            bool
+	InfoHash          string
+	AddedAt           time.Time
+	CanonicalStatus   string
+	Ownership         string
+	Phase             string
+	ProblemCode       string
+	Actions           []string
 }
 
 /** DownloadDetail is the selected task payload fetched on demand. */
@@ -356,20 +360,22 @@ type rawURI struct {
 
 func (raw rawDownload) toDownload() Download {
 	return Download{
-		GID:             raw.GID,
-		Status:          raw.Status,
-		Dir:             raw.Dir,
-		Name:            raw.name(),
-		IsMetadata:      raw.isMetadata(),
-		CompletedLength: parseInt(raw.CompletedLength),
-		TotalLength:     parseInt(raw.TotalLength),
-		LengthKnown:     raw.TotalLength != "",
-		DownloadSpeed:   parseInt(raw.DownloadSpeed),
-		UploadSpeed:     parseInt(raw.UploadSpeed),
-		NumSeeders:      parseInt(raw.NumSeeders),
-		Connections:     parseInt(raw.Connections),
-		Seeder:          raw.Seeder == "true",
-		InfoHash:        raw.InfoHash,
+		GID:               raw.GID,
+		Status:            raw.Status,
+		Dir:               raw.Dir,
+		Name:              raw.name(),
+		IsMetadata:        raw.isMetadata(),
+		CompletedLength:   parseInt(raw.CompletedLength),
+		TotalLength:       parseInt(raw.TotalLength),
+		LengthKnown:       raw.TotalLength != "",
+		DownloadSpeed:     parseInt(raw.DownloadSpeed),
+		UploadSpeed:       parseInt(raw.UploadSpeed),
+		UploadLength:      parseInt(raw.UploadLength),
+		UploadLengthKnown: raw.UploadLength != "",
+		NumSeeders:        parseInt(raw.NumSeeders),
+		Connections:       parseInt(raw.Connections),
+		Seeder:            raw.Seeder == "true",
+		InfoHash:          raw.InfoHash,
 	}
 }
 
@@ -465,7 +471,7 @@ func fileName(path string) string {
 }
 
 func downloadFields() []string {
-	return []string{"gid", "status", "dir", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "infoHash", "numSeeders", "connections", "seeder"}
+	return []string{"gid", "status", "dir", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "uploadLength", "infoHash", "numSeeders", "connections", "seeder"}
 }
 
 func detailFields() []string {

@@ -91,6 +91,7 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 			if owned {
 				fact.Phase, fact.Intent, fact.ProblemCode = job.Phase, job.ActivityIntent, job.ProblemCode
 				fact.IdentityConflict = session.nativeDirConflict(job, row.Dir)
+				row.AddedAt = job.CreatedAt
 				seen[row.GID] = struct{}{}
 			}
 			classification := ClassifyTask(fact)
@@ -111,7 +112,7 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 			continue
 		}
 		classification := ClassifyTask(ClassificationFact{Managed: true, Phase: job.Phase, Intent: job.ActivityIntent, ProblemCode: job.ProblemCode, NativeAbsent: true})
-		row := aria2.Download{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.FinalRoot(), job.Source), CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), Phase: classification.Phase, ProblemCode: projectedProblemCode(job, true), Actions: session.availableActions(classification, true, job)}
+		row := aria2.Download{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.FinalRoot(), job.Source), AddedAt: job.CreatedAt, CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), Phase: classification.Phase, ProblemCode: projectedProblemCode(job, true), Actions: session.availableActions(classification, true, job)}
 		applyPublishedMetrics(&row.CompletedLength, &row.TotalLength, &row.LengthKnown, job)
 		read.Downloads.Stopped = append(read.Downloads.Stopped, row)
 	}

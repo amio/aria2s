@@ -593,6 +593,7 @@ func projectDownloadDetail(download aria2.Download) aria2.DownloadDetail {
 		LengthKnown:     download.LengthKnown,
 		DownloadSpeed:   download.DownloadSpeed,
 		UploadSpeed:     download.UploadSpeed,
+		UploadLength:    download.UploadLength,
 		InfoHash:        download.InfoHash,
 		NumSeeders:      download.NumSeeders,
 		Seeder:          download.Seeder,
