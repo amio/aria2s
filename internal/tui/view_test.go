@@ -10,7 +10,7 @@ import (
 )
 
 func TestTableShowsPeerMetricsAtWideViewport(t *testing.T) {
-	const contentWidth = 144
+	const contentWidth = 155
 	model := Model{}
 	header := model.tableHeader(contentWidth)
 	if !strings.Contains(header, "Seeds") || !strings.Contains(header, "Peers") ||
@@ -120,7 +120,7 @@ func TestKnownStatusTonesAreDistinct(t *testing.T) {
 }
 
 func TestTableColumnsHideByPriority(t *testing.T) {
-	full := computeLayout(144)
+	full := computeLayout(155)
 	if full.uploadedWidth == 0 || full.addedAgoWidth == 0 {
 		t.Fatalf("new metrics hidden in full layout: %#v", full)
 	}
@@ -128,17 +128,17 @@ func TestTableColumnsHideByPriority(t *testing.T) {
 		t.Fatalf("full layout name width got %d, want at least %d", full.nameWidth, minNameWidth)
 	}
 
-	addedAgoHidden := computeLayout(143)
+	addedAgoHidden := computeLayout(154)
 	if addedAgoHidden.addedAgoWidth != 0 || addedAgoHidden.uploadedWidth == 0 {
 		t.Fatalf("added age did not hide before uploaded: %#v", addedAgoHidden)
 	}
 
-	uploadedHidden := computeLayout(131)
+	uploadedHidden := computeLayout(138)
 	if uploadedHidden.uploadedWidth != 0 || uploadedHidden.peersWidth == 0 {
 		t.Fatalf("uploaded did not hide before peer metrics: %#v", uploadedHidden)
 	}
 
-	peerMetricsHidden := computeLayout(117)
+	peerMetricsHidden := computeLayout(122)
 	if peerMetricsHidden.seedsWidth != 0 || peerMetricsHidden.peersWidth != 0 {
 		t.Fatalf("equal-priority peer metrics did not hide together: %#v", peerMetricsHidden)
 	}
@@ -147,12 +147,12 @@ func TestTableColumnsHideByPriority(t *testing.T) {
 		t.Fatalf("higher-priority columns hid before peer metrics: %#v", peerMetricsHidden)
 	}
 
-	upHidden := computeLayout(103)
+	upHidden := computeLayout(99)
 	if upHidden.upWidth != 0 || upHidden.downWidth == 0 || upHidden.downloadedWidth == 0 {
 		t.Fatalf("up speed did not hide at priority 3: %#v", upHidden)
 	}
 
-	downHidden := computeLayout(91)
+	downHidden := computeLayout(84)
 	if downHidden.downWidth != 0 || downHidden.downloadedWidth == 0 {
 		t.Fatalf("down speed did not hide at priority 2: %#v", downHidden)
 	}
@@ -173,11 +173,28 @@ func TestTableColumnsHideByPriority(t *testing.T) {
 	}
 }
 
+func TestWideHeaderUsesCompactColumnSpacing(t *testing.T) {
+	header := Model{}.tableHeader(155)
+	titles := []string{"Size", "Downloaded", "Progress", "Down Speed", "Up Speed", "Seeds", "Peers", "Uploaded", "Added Ago"}
+	for i := 0; i < len(titles)-1; i++ {
+		left := strings.Index(header, titles[i])
+		right := strings.Index(header, titles[i+1])
+		gap := right - (left + len(titles[i]))
+		if gap > 3 {
+			t.Fatalf("gap between %q and %q = %d, want at most 3", titles[i], titles[i+1], gap)
+		}
+	}
+	if got := computeLayout(155).sizeWidth; got != 9 {
+		t.Fatalf("size width = %d, want 9", got)
+	}
+}
+
 func TestTableLayoutPreservesMinimumNameWidth(t *testing.T) {
 	for width := minTableWidth; width <= 200; width++ {
 		layout := computeLayout(width)
-		if layout.nameWidth < minNameWidth {
-			t.Fatalf("width %d produced name width %d, want at least %d", width, layout.nameWidth, minNameWidth)
+		minimumNameWidth := max(minNameWidth, (width*3+9)/10)
+		if layout.nameWidth < minimumNameWidth {
+			t.Fatalf("width %d produced name width %d, want at least %d", width, layout.nameWidth, minimumNameWidth)
 		}
 		if got := layout.fixed() + layout.nameWidth; got != width {
 			t.Fatalf("width %d produced total layout width %d", width, got)

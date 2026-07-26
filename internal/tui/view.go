@@ -17,21 +17,24 @@ const (
 	defaultViewportHeight = 28
 	minBodyHeight         = 3
 	minNameWidth          = 25
-	columnGap             = "  "
+	// Keep titles visually separated without wasting horizontal room. Right-aligned
+	// headers contribute their own leading padding, so a single explicit gap leaves
+	// at most three spaces between adjacent titles at their base widths.
+	columnGap             = " "
 	framePaddingX         = 2
 	bodyTopPaddingLines   = 1
 	bodyBottomPaddingLine = 1
 
 	// column base widths
 	statusBaseWidth     = 11
-	sizeBaseWidth       = 12
+	sizeBaseWidth       = 9
 	downloadedBaseWidth = 12
 	progressBaseWidth   = 10
 	downBaseWidth       = 12
 	upBaseWidth         = 10
-	seedsBaseWidth      = 5
-	peersBaseWidth      = 5
-	uploadedBaseWidth   = 12
+	seedsBaseWidth      = 7
+	peersBaseWidth      = 7
+	uploadedBaseWidth   = 10
 	addedAgoBaseWidth   = 10
 
 	// Column priority 0 is required. Higher values are hidden first.
@@ -577,9 +580,10 @@ func computeLayout(width int) tableLayout {
 		uploadedWidth:   uploadedBaseWidth,
 		addedAgoWidth:   addedAgoBaseWidth,
 	}
-	for l.fixed()+minNameWidth > width && l.hideLowestPriorityColumns() {
+	minimumNameWidth := max(minNameWidth, (width*3+9)/10)
+	for l.fixed()+minimumNameWidth > width && l.hideLowestPriorityColumns() {
 	}
-	l.nameWidth = max(width-l.fixed(), minNameWidth)
+	l.nameWidth = max(width-l.fixed(), minimumNameWidth)
 	return l
 }
 
