@@ -8,7 +8,10 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/term"
 )
+
+var _ term.File = (*terminalOutput)(nil)
 
 type staticDashboardModel struct{}
 

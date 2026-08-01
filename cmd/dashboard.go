@@ -28,6 +28,10 @@ func newTerminalOutput(file *os.File, cancel context.CancelFunc) *terminalOutput
 	return &terminalOutput{file: file, cancel: cancel}
 }
 
+func (output *terminalOutput) Read(data []byte) (int, error) {
+	return output.file.Read(data)
+}
+
 func (output *terminalOutput) Write(data []byte) (int, error) {
 	written, err := output.file.Write(data)
 	if err == nil {
@@ -50,6 +54,12 @@ func (output *terminalOutput) Write(data []byte) (int, error) {
 
 func (output *terminalOutput) Fd() uintptr {
 	return output.file.Fd()
+}
+
+// Close is intentionally a no-op because terminalOutput observes stdout but
+// does not own it. The method completes Bubble Tea's TTY file contract.
+func (output *terminalOutput) Close() error {
+	return nil
 }
 
 func (output *terminalOutput) Err() error {
