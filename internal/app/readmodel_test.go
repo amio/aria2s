@@ -17,6 +17,8 @@ func TestCanonicalStatusUsesNativeVocabularyAndActiveSubstates(t *testing.T) {
 		{name: "active metadata", fact: ClassificationFact{NativeStatus: "active", NativeMetadata: true}, want: StatusMetadata},
 		{name: "waiting", fact: ClassificationFact{NativeStatus: "waiting"}, want: StatusWaiting},
 		{name: "paused", fact: ClassificationFact{NativeStatus: "paused"}, want: StatusPaused},
+		{name: "managed completed metadata awaiting promotion", fact: ClassificationFact{Managed: true, Phase: jobs.PhaseStaged, NativeStatus: "complete", NativeMetadata: true}, want: StatusMetadata},
+		{name: "unmanaged completed metadata", fact: ClassificationFact{NativeStatus: "complete", NativeMetadata: true}, want: StatusComplete},
 		{name: "complete", fact: ClassificationFact{NativeStatus: "complete"}, want: StatusComplete},
 		{name: "error", fact: ClassificationFact{NativeStatus: "error"}, want: StatusError},
 		{name: "removed", fact: ClassificationFact{NativeStatus: "removed"}, want: StatusRemoved},

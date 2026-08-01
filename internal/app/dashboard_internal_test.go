@@ -204,6 +204,45 @@ func TestDashboardDecoratesManagedDetail(t *testing.T) {
 	}
 }
 
+func TestDashboardKeepsCompletedManagedMetadataInMetadataStateUntilPromotion(t *testing.T) {
+	const gid = "928cecc78f5f8415"
+	job := jobs.Job{
+		ID:             gid,
+		TargetDir:      "/downloads",
+		Phase:          jobs.PhaseStaged,
+		ActivityIntent: jobs.ActivityRunning,
+	}
+	metadata := aria2.Download{
+		GID:        gid,
+		Status:     "complete",
+		IsMetadata: true,
+	}
+	detail := aria2.DownloadDetail{
+		GID:        gid,
+		Status:     "complete",
+		IsMetadata: true,
+	}
+	session := &DashboardSession{}
+
+	got := session.decorateSnapshot(
+		aria2.DashboardRead{
+			Detail:  &detail,
+			Managed: map[string]*aria2.Download{gid: &metadata},
+		},
+		[]jobs.ScannedJob{{ID: gid, Job: job}},
+		aria2.DashboardQuery{DetailGID: gid},
+	)
+
+	if len(got.Downloads.Stopped) != 1 || got.Downloads.Stopped[0].CanonicalStatus != string(StatusMetadata) ||
+		!reflect.DeepEqual(got.Downloads.Stopped[0].Actions, []string{"pause", "remove"}) {
+		t.Fatalf("managed metadata row classification = %#v", got.Downloads.Stopped)
+	}
+	if got.Detail == nil || got.Detail.CanonicalStatus != string(StatusMetadata) ||
+		!reflect.DeepEqual(got.Detail.Actions, []string{"pause", "remove"}) {
+		t.Fatalf("managed metadata detail classification = %#v", got.Detail)
+	}
+}
+
 func TestDashboardProjectsDetachedPublishingAsRecoverableManifestDetail(t *testing.T) {
 	const gid = "928cecc78f5f8415"
 	job := jobs.Job{

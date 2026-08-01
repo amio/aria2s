@@ -68,6 +68,8 @@ func ClassifyTask(fact ClassificationFact) TaskClassification {
 		result.Status = StatusWaiting
 	case fact.NativeStatus == "paused":
 		result.Status = StatusPaused
+	case fact.Managed && fact.Phase == jobs.PhaseStaged && fact.NativeStatus == "complete" && fact.NativeMetadata:
+		result.Status = StatusMetadata
 	case fact.NativeStatus == "complete":
 		result.Status = StatusComplete
 	case fact.NativeStatus == "error":
