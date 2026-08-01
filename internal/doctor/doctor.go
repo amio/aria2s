@@ -1,9 +1,12 @@
 package doctor
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"regexp"
 	"strings"
 
 	"github.com/amio/aria2s/internal/jobs"
@@ -23,7 +26,24 @@ type Issue struct {
 
 type Report struct {
 	Healthy bool
+	Checks  []DiagnosticCheck
 	Issues  []Issue
+	Repair  *Repair
+}
+
+type DiagnosticCheck struct {
+	Name     string
+	Healthy  bool
+	Severity string
+	Summary  string
+	Evidence string
+	Recovery []string
+}
+
+type Repair struct {
+	Code    string
+	Command string
+	Summary string
 }
 
 type Options struct {
@@ -31,50 +51,118 @@ type Options struct {
 	IsPortAvailable func(int) bool
 	Service         SupervisorStatus
 	RPCReachable    func(context.Context, state.State) bool
+	ReadLogTail     func(string, int64) ([]byte, error)
 }
 
 func Check(ctx context.Context, options Options) Report {
-	var issues []Issue
+	report := Report{Healthy: true}
+	addSuccess := func(name, summary string) {
+		report.Checks = append(report.Checks, DiagnosticCheck{Name: name, Healthy: true, Severity: "ok", Summary: summary})
+	}
+	addIssue := func(name string, issue Issue) {
+		report.Checks = append(report.Checks, DiagnosticCheck{Name: name, Severity: issue.Severity, Summary: issue.Summary, Evidence: issue.Evidence, Recovery: issue.Recovery})
+		report.Issues = append(report.Issues, issue)
+		if issue.Severity == "error" {
+			report.Healthy = false
+		}
+	}
+
 	current, err := state.Load(options.Paths.StateFile)
 	if err != nil {
-		return Report{Healthy: false, Issues: []Issue{problem("InstallIncomplete", "state file missing or unreadable", err.Error(), "Run `aria2s install`.")}}
+		addIssue("Runtime state", problem("InstallIncomplete", "state file is missing or unreadable", err.Error(), "Run `aria2s install`."))
+		return report
 	}
+	addSuccess("Runtime state", "managed state is readable")
 	if current.RuntimeSchemaVersion != 2 {
-		issues = append(issues, problem("UpgradeRequired", "managed runtime upgrade required", fmt.Sprintf("schema=%d", current.RuntimeSchemaVersion), "Run `aria2s dashboard` for v1 reinstall instructions, or `aria2s install --discard-legacy-tasks`."))
+		addIssue("Runtime schema", problem("UpgradeRequired", "managed runtime upgrade is required", fmt.Sprintf("schema=%d", current.RuntimeSchemaVersion), "Run `aria2s dashboard` for v1 reinstall instructions, or `aria2s install --discard-legacy-tasks`."))
+	} else {
+		addSuccess("Runtime schema", "schema v2")
 	}
 	if !isExecutable(current.Aria2cPath) {
-		issues = append(issues, problem("ControllerUnavailable", "missing aria2c binary", current.Aria2cPath, "Install aria2 and rerun `aria2s install`."))
+		addIssue("aria2c", problem("ControllerUnavailable", "missing aria2c binary or binary is not executable", current.Aria2cPath, "Install aria2 and rerun `aria2s install`."))
+	} else {
+		addSuccess("aria2c", "binary is executable")
 	}
 	if !fileExists(options.Paths.ServiceFile) {
-		issues = append(issues, problem("InstallIncomplete", "missing service file", options.Paths.ServiceFile, "Run `aria2s install`."))
-	}
-	if options.Service != nil && !options.Service.IsLoaded(ctx) {
-		issues = append(issues, problem("ControllerUnavailable", "supervisor unloaded", current.ServiceName, "Run `aria2s start`."))
-	}
-	if options.Service != nil && options.Service.IsLoaded(ctx) && !options.Service.IsRunning(ctx) {
-		issues = append(issues, problem("ControllerUnavailable", "supervisor not running", current.ServiceName, "Inspect logs, then run `aria2s start`."))
-	}
-	if options.RPCReachable != nil && !options.RPCReachable(ctx, current) {
-		issues = append(issues, problem("RPCUnavailable", "RPC unreachable", fmt.Sprintf("127.0.0.1:%d", current.RPCPort), "Inspect logs and run `aria2s doctor`."))
-	}
-	if options.IsPortAvailable != nil && !options.IsPortAvailable(current.RPCPort) && !managedServiceOwnsPort(ctx, options, current) {
-		issues = append(issues, problem("RPCUnavailable", "port conflict", fmt.Sprintf("127.0.0.1:%d", current.RPCPort), "Stop the conflicting process or rerun install."))
-	}
-	scanned, scanErr := jobs.New(options.Paths.StateDir).Scan()
-	if scanErr != nil {
-		issues = append(issues, problem("InstallIncomplete", "managed job store is unreadable", scanErr.Error(), "Repair permissions for the aria2s state directory, then rerun doctor."))
+		addIssue("Service", problem("InstallIncomplete", "missing service file", options.Paths.ServiceFile, "Run `aria2s install`."))
 	} else {
-		for _, item := range scanned {
-			if item.Err != nil {
-				issues = append(issues, lifecycleProblem("CorruptManifest", item.ID, item.Err.Error()))
-				continue
-			}
-			if item.Job.ProblemCode != "" {
-				issues = append(issues, lifecycleProblem(item.Job.ProblemCode, item.ID, "managed manifest"))
+		addSuccess("Service", "managed service is installed")
+	}
+	loaded, running := false, false
+	if options.Service != nil {
+		loaded = options.Service.IsLoaded(ctx)
+		running = loaded && options.Service.IsRunning(ctx)
+		switch {
+		case !loaded:
+			addIssue("Supervisor", problem("ControllerUnavailable", "supervisor unloaded", current.ServiceName, "Run `aria2s start`."))
+		case !running:
+			addIssue("Supervisor", problem("ControllerUnavailable", "supervisor not running", current.ServiceName, "Inspect the logs, then run `aria2s start`."))
+		default:
+			addSuccess("Supervisor", "managed service is running")
+		}
+	}
+
+	scanned, scanErr := jobs.New(options.Paths.StateDir).Scan()
+	rpcReachable := options.RPCReachable != nil && options.RPCReachable(ctx, current)
+	portOccupied := options.IsPortAvailable != nil && !options.IsPortAvailable(current.RPCPort)
+	endpoint := fmt.Sprintf("127.0.0.1:%d", current.RPCPort)
+	if rpcReachable {
+		addSuccess("RPC", endpoint+" is responding")
+	} else if options.RPCReachable != nil || options.IsPortAvailable != nil {
+		switch {
+		case running && portOccupied:
+			addIssue("RPC", problem("RPCUnresponsive", "managed service is listening but RPC does not respond", endpoint, "Use the recommended repair below when a startup blocker is identified."))
+		case !running && portOccupied:
+			addIssue("RPC", problem("PortConflict", "port conflict: RPC port is used by another process", endpoint, "Stop the conflicting process or rerun `aria2s install` to select another port."))
+		default:
+			addIssue("RPC", problem("RPCUnavailable", "RPC unreachable", endpoint, "Inspect `aria2s logs`, correct the reported startup error, then run `aria2s start`."))
+		}
+	}
+
+	if running && portOccupied && !rpcReachable {
+		readTail := options.ReadLogTail
+		if readTail == nil {
+			readTail = readFileTail
+		}
+		logPath := current.LogPath
+		if logPath == "" {
+			logPath = options.Paths.LogFile
+		}
+		if tail, readErr := readTail(logPath, 256*1024); readErr == nil {
+			if gid := currentFileAllocationGID(tail, scanned); gid != "" {
+				addIssue("Startup", problem("FileAllocationBlocked", "file allocation is blocking aria2 startup", "gid="+gid+"; current aria2 log is stalled at FileAlloc", "Run `aria2s doctor --repair --discard-unmanaged-tasks`."))
+				report.Repair = &Repair{
+					Code:    "FileAllocationBlocked",
+					Command: "aria2s doctor --repair --discard-unmanaged-tasks",
+					Summary: "Restarts aria2 with file preallocation disabled for this process, preserves managed download state, and verifies RPC before reporting success.",
+				}
 			}
 		}
 	}
-	return Report{Healthy: len(issues) == 0, Issues: issues}
+
+	if scanErr != nil {
+		addIssue("Managed tasks", problem("InstallIncomplete", "managed job store is unreadable", scanErr.Error(), "Repair permissions for the aria2s state directory, then rerun doctor."))
+	} else {
+		corrupt := 0
+		for _, item := range scanned {
+			if item.Err != nil {
+				corrupt++
+			}
+		}
+		if corrupt == 0 {
+			addSuccess("Managed tasks", fmt.Sprintf("%d manifest(s) are readable", len(scanned)))
+		}
+		for _, item := range scanned {
+			if item.Err != nil {
+				addIssue("Task "+item.ID, lifecycleProblem("CorruptManifest", item.ID, item.Err.Error()))
+				continue
+			}
+			if item.Job.ProblemCode != "" {
+				addIssue("Task "+item.ID, lifecycleProblem(item.Job.ProblemCode, item.ID, "managed manifest"))
+			}
+		}
+	}
+	return report
 }
 
 func problem(code, summary, evidence, recovery string) Issue {
@@ -108,7 +196,7 @@ func lifecycleProblem(code, gid, evidence string) Issue {
 		recovery = "Keep the service running, repair RPC/session access, and retry the operation."
 	case "CleanupFailed":
 		summary = "published task cleanup is incomplete"
-		recovery = "Restore storage access and use Retry; the published payload is retained."
+		recovery = "Restore storage access, run `aria2s dashboard`, select this task, and choose Retry; the published payload is retained."
 	case "AddFailed", "FinalSeedStartFailed":
 		summary = "managed Add outcome needs reconciliation"
 		recovery = "Restore RPC availability and use Retry; do not submit a duplicate manually."
@@ -123,11 +211,51 @@ func lifecycleProblem(code, gid, evidence string) Issue {
 	return issue
 }
 
-func managedServiceOwnsPort(ctx context.Context, options Options, current state.State) bool {
-	if options.Service == nil || options.RPCReachable == nil {
-		return false
+var fileAllocationPattern = regexp.MustCompile(`FileAlloc:#([0-9a-fA-F]{6,16})`)
+
+func currentFileAllocationGID(logTail []byte, scanned []jobs.ScannedJob) string {
+	listener := bytes.LastIndex(logTail, []byte("RPC: listening on TCP port"))
+	if listener < 0 {
+		return ""
 	}
-	return options.Service.IsRunning(ctx) && options.RPCReachable(ctx, current)
+	matches := fileAllocationPattern.FindAllSubmatch(logTail[listener:], -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	prefix := strings.ToLower(string(matches[len(matches)-1][1]))
+	matched := ""
+	for _, item := range scanned {
+		if strings.HasPrefix(item.ID, prefix) {
+			if matched != "" {
+				return prefix
+			}
+			matched = item.ID
+		}
+	}
+	if matched != "" {
+		return matched
+	}
+	return prefix
+}
+
+func readFileTail(path string, limit int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	start := info.Size() - limit
+	if start < 0 {
+		start = 0
+	}
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(io.LimitReader(file, limit))
 }
 
 type SupervisorStatus interface {

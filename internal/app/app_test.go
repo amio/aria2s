@@ -38,6 +38,57 @@ func TestInstallStartPollsRPCUntilReady(t *testing.T) {
 	}
 }
 
+func TestRecoverRPCRequiresAcknowledgementAndVerifiesSafeRestart(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	serviceBackend := &recoveryService{running: true, loaded: true, marker: servicePaths.SafeStartupFile}
+	rpc := &recoveryRPC{service: serviceBackend}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{
+		RPCReadyTimeout: time.Second,
+		RPCPollInterval: time.Nanosecond,
+	})
+
+	if err := application.RecoverRPC(context.Background(), false); err == nil || !strings.Contains(err.Error(), "--discard-unmanaged-tasks") {
+		t.Fatalf("expected unmanaged-task acknowledgement, got %v", err)
+	}
+	if len(serviceBackend.calls) != 0 {
+		t.Fatalf("service changed before acknowledgement: %v", serviceBackend.calls)
+	}
+	if err := application.RecoverRPC(context.Background(), true); err != nil {
+		t.Fatalf("recover RPC: %v", err)
+	}
+	if got := strings.Join(serviceBackend.calls, ","); got != "stop,start" {
+		t.Fatalf("recovery service calls = %s", got)
+	}
+	if !serviceBackend.markerSeen {
+		t.Fatal("service started without safe-startup marker")
+	}
+	if _, err := os.Stat(servicePaths.SafeStartupFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("successful recovery retained marker: %v", err)
+	}
+}
+
+func TestRecoverRPCRetainsSafeMarkerUntilRPCResponds(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	serviceBackend := &recoveryService{running: true, loaded: true, marker: servicePaths.SafeStartupFile}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, alwaysUnavailableRPC{}, app.Options{
+		RPCReadyTimeout: time.Nanosecond,
+		RPCPollInterval: time.Nanosecond,
+	})
+
+	if err := application.RecoverRPC(context.Background(), true); err == nil {
+		t.Fatal("expected recovery verification failure")
+	}
+	if _, err := os.Stat(servicePaths.SafeStartupFile); err != nil {
+		t.Fatalf("failed recovery did not retain safe marker: %v", err)
+	}
+}
+
 func TestInstallStartPollsRPCUntilReadyOnLinuxPaths(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewLinux(filepath.Join(root, "home"))
@@ -903,6 +954,60 @@ type recordingService struct {
 	events            *[]string
 	shutdownLagChecks int
 }
+
+type recoveryService struct {
+	loaded     bool
+	running    bool
+	restarted  bool
+	marker     string
+	markerSeen bool
+	calls      []string
+}
+
+func (service *recoveryService) Install(context.Context) error { return nil }
+func (service *recoveryService) Uninstall(context.Context) error {
+	service.loaded, service.running = false, false
+	return nil
+}
+func (service *recoveryService) Start(context.Context) error {
+	service.calls = append(service.calls, "start")
+	service.loaded, service.running, service.restarted = true, true, true
+	_, err := os.Stat(service.marker)
+	service.markerSeen = err == nil
+	return err
+}
+func (service *recoveryService) Stop(context.Context) error {
+	service.calls = append(service.calls, "stop")
+	service.loaded, service.running = false, false
+	return nil
+}
+func (service *recoveryService) IsLoaded(context.Context) bool  { return service.loaded }
+func (service *recoveryService) IsRunning(context.Context) bool { return service.running }
+
+type recoveryRPC struct{ service *recoveryService }
+
+func (rpc *recoveryRPC) Version(context.Context, state.State) (string, error) {
+	if !rpc.service.restarted {
+		return "", errors.New("RPC blocked")
+	}
+	return "1.37.0", nil
+}
+func (*recoveryRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
+	return "", nil
+}
+func (*recoveryRPC) SaveSession(context.Context, state.State) error { return nil }
+func (*recoveryRPC) Shutdown(context.Context, state.State) error    { return nil }
+
+type alwaysUnavailableRPC struct{}
+
+func (alwaysUnavailableRPC) Version(context.Context, state.State) (string, error) {
+	return "", errors.New("RPC blocked")
+}
+func (alwaysUnavailableRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
+	return "", nil
+}
+func (alwaysUnavailableRPC) SaveSession(context.Context, state.State) error { return nil }
+func (alwaysUnavailableRPC) Shutdown(context.Context, state.State) error    { return nil }
 
 func (service *recordingService) Install(context.Context) error {
 	service.calls = append(service.calls, "install")

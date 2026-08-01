@@ -162,9 +162,21 @@ func (app *App) ManagedExec(ctx context.Context) error {
 			return err
 		}
 	}
-	args := aria2.ManagedV2Args(current, app.options.Paths.HooksDir)
+	safeStartup, err := managedruntime.SafeStartupEnabled(app.options.Paths.SafeStartupFile)
+	if err != nil {
+		return err
+	}
+	args := managedRuntimeArgs(current, app.options.Paths.HooksDir, safeStartup)
 	environment := append(os.Environ(), lease.Environment())
 	return managedExec(current.Aria2cPath, args, environment)
+}
+
+func managedRuntimeArgs(current state.State, hooksDir string, safeStartup bool) []string {
+	args := aria2.ManagedV2Args(current, hooksDir)
+	if safeStartup {
+		args = append(args, "--file-allocation=none")
+	}
+	return args
 }
 
 var managedExec = managedruntime.Exec

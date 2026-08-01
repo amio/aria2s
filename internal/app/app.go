@@ -25,6 +25,7 @@ import (
 	"github.com/amio/aria2s/internal/doctor"
 	"github.com/amio/aria2s/internal/jobs"
 	"github.com/amio/aria2s/internal/paths"
+	managedruntime "github.com/amio/aria2s/internal/runtime"
 	"github.com/amio/aria2s/internal/service"
 	"github.com/amio/aria2s/internal/state"
 	"golang.org/x/sys/unix"
@@ -685,6 +686,41 @@ func (app *App) guardUnmanagedTasks(ctx context.Context, current state.State, di
 
 func (app *App) Restart(ctx context.Context) error {
 	return app.RestartManaged(ctx, StopOptions{})
+}
+
+// RecoverRPC performs an explicitly acknowledged managed-only restart. It
+// retains durable managed state and disables file preallocation for the new
+// process so startup work cannot block JSON-RPC recovery.
+func (app *App) RecoverRPC(ctx context.Context, discardUnmanaged bool) error {
+	current, err := app.preflightLifecycle()
+	if err != nil {
+		return err
+	}
+	if _, err := app.options.RPC.Version(ctx, current); err == nil {
+		return nil
+	}
+	if !discardUnmanaged {
+		return errors.New("UnmanagedTaskCensusUnavailable: RPC is blocked; rerun with --discard-unmanaged-tasks to acknowledge a managed-only recovery")
+	}
+	if err := managedruntime.EnableSafeStartup(app.options.Paths.SafeStartupFile); err != nil {
+		return fmt.Errorf("enable safe startup: %w", err)
+	}
+	if app.options.Service.IsRunning(ctx) || app.options.Service.IsLoaded(ctx) {
+		if err := app.options.Service.Stop(ctx); err != nil {
+			_ = managedruntime.DisableSafeStartup(app.options.Paths.SafeStartupFile)
+			return fmt.Errorf("stop blocked service: %w", err)
+		}
+	}
+	if err := app.options.Service.Start(ctx); err != nil {
+		return fmt.Errorf("start safe service: %w", err)
+	}
+	if err := app.waitForRPC(ctx, current); err != nil {
+		return fmt.Errorf("safe startup did not restore RPC: %w", err)
+	}
+	if err := managedruntime.DisableSafeStartup(app.options.Paths.SafeStartupFile); err != nil {
+		return fmt.Errorf("RPC recovered but safe-startup marker cleanup failed: %w", err)
+	}
+	return nil
 }
 
 func (app *App) RestartManaged(ctx context.Context, options StopOptions) error {

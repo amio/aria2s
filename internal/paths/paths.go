@@ -16,6 +16,7 @@ type Paths struct {
 	StoragesDir       string
 	HooksDir          string
 	InstanceLockFile  string
+	SafeStartupFile   string
 	LogFile           string
 	ErrorLogFile      string
 }

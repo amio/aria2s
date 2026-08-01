@@ -2,11 +2,25 @@ package app
 
 import (
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/amio/aria2s/internal/aria2"
 	"github.com/amio/aria2s/internal/jobs"
+	"github.com/amio/aria2s/internal/state"
 )
+
+func TestManagedRuntimeArgsUseSafeFileAllocationOnlyWhenRequested(t *testing.T) {
+	current := state.State{RPCPort: 6800, RPCSecret: "secret", StartupInputPath: "/state/startup", SessionPath: "/state/session"}
+	normal := managedRuntimeArgs(current, "/state/hooks", false)
+	if slices.Contains(normal, "--file-allocation=none") {
+		t.Fatalf("normal startup unexpectedly overrides file allocation: %v", normal)
+	}
+	safe := managedRuntimeArgs(current, "/state/hooks", true)
+	if !slices.Contains(safe, "--file-allocation=none") || safe[len(safe)-1] != "--file-allocation=none" {
+		t.Fatalf("safe startup does not apply final file allocation override: %v", safe)
+	}
+}
 
 func TestPlanStartupNormalizesHTTPAndFailsClosedWithoutRoot(t *testing.T) {
 	root := t.TempDir()

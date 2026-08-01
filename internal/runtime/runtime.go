@@ -16,6 +16,42 @@ import (
 
 const LockFDEnvironment = "ARIA2S_INSTANCE_LOCK_FD"
 
+const safeStartupContent = "file-allocation=none\n"
+
+// EnableSafeStartup requests a managed process whose file allocation cannot
+// monopolize aria2's event loop before JSON-RPC becomes responsive.
+func EnableSafeStartup(path string) error {
+	return atomicfile.Write(path, []byte(safeStartupContent), 0o600)
+}
+
+func SafeStartupEnabled(path string) (bool, error) {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return false, errors.New("safe-startup marker is not a regular file")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	if string(data) != safeStartupContent {
+		return false, errors.New("safe-startup marker has invalid content")
+	}
+	return true, nil
+}
+
+func DisableSafeStartup(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return atomicfile.SyncDirectory(filepathDir(path))
+}
+
 type Lease struct {
 	file *os.File
 }

@@ -32,6 +32,35 @@ func TestLeaseIsExclusiveAndHookExecsController(t *testing.T) {
 	}
 }
 
+func TestSafeStartupMarkerLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "safe-startup")
+	if enabled, err := SafeStartupEnabled(path); err != nil || enabled {
+		t.Fatalf("missing marker: enabled=%t err=%v", enabled, err)
+	}
+	if err := EnableSafeStartup(path); err != nil {
+		t.Fatalf("enable safe startup: %v", err)
+	}
+	if enabled, err := SafeStartupEnabled(path); err != nil || !enabled {
+		t.Fatalf("enabled marker: enabled=%t err=%v", enabled, err)
+	}
+	if err := DisableSafeStartup(path); err != nil {
+		t.Fatalf("disable safe startup: %v", err)
+	}
+	if enabled, err := SafeStartupEnabled(path); err != nil || enabled {
+		t.Fatalf("removed marker: enabled=%t err=%v", enabled, err)
+	}
+}
+
+func TestSafeStartupMarkerRejectsUnexpectedContent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "safe-startup")
+	if err := os.WriteFile(path, []byte("file-allocation=prealloc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := SafeStartupEnabled(path); err == nil {
+		t.Fatal("unexpected safe-startup content was accepted")
+	}
+}
+
 func TestHookPreservesLiteralControllerPathAndArguments(t *testing.T) {
 	root := t.TempDir()
 	controller := filepath.Join(root, "controller $HOME `tick` 'quote'")

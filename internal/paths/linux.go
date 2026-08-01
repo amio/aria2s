@@ -19,6 +19,7 @@ func NewLinux(home string) Paths {
 		StoragesDir:       filepath.Join(stateDir, "storages"),
 		HooksDir:          filepath.Join(stateDir, "hooks"),
 		InstanceLockFile:  filepath.Join(stateDir, "instance.lock"),
+		SafeStartupFile:   filepath.Join(stateDir, "safe-startup"),
 		LogFile:           filepath.Join(stateDir, "aria2.log"),
 		ErrorLogFile:      filepath.Join(stateDir, "aria2.err.log"),
 	}

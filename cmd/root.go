@@ -1,12 +1,22 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/amio/aria2s/internal/app"
 	"github.com/spf13/cobra"
 )
+
+type reportedFailure struct{ message string }
+
+func (failure *reportedFailure) Error() string { return failure.message }
+
+func IsReportedFailure(err error) bool {
+	var failure *reportedFailure
+	return errors.As(err, &failure)
+}
 
 func NewRoot(application *app.App) *cobra.Command {
 	return newRoot(application, defaultDashboardRunner)

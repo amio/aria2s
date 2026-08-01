@@ -3,6 +3,7 @@ package doctor_test
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,6 +126,119 @@ func TestCheckDoesNotReportPortConflictWhenManagedRPCIsReachable(t *testing.T) {
 	if !report.Healthy {
 		t.Fatalf("expected healthy report, got %#v", report.Issues)
 	}
+}
+
+func TestCheckRecognizesManagedFileAllocationStallWithoutPortConflict(t *testing.T) {
+	root := t.TempDir()
+	aria2c := filepath.Join(root, "aria2c")
+	if err := os.WriteFile(aria2c, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	current := state.State{RuntimeSchemaVersion: 2, Aria2cPath: aria2c, RPCPort: 6800, ServiceName: servicePaths.ServiceName, LogPath: servicePaths.LogFile}
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, []byte("plist"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report := doctor.Check(context.Background(), doctor.Options{
+		Paths:           servicePaths,
+		Service:         fixedService{loaded: true, running: true},
+		IsPortAvailable: func(int) bool { return false },
+		RPCReachable:    func(context.Context, state.State) bool { return false },
+		ReadLogTail: func(string, int64) ([]byte, error) {
+			return []byte("[NOTICE] IPv4 RPC: listening on TCP port 6800\n[FileAlloc:#b3f360 0B/0B]\n"), nil
+		},
+	})
+
+	assertReportContains(t, report, "managed service is listening but RPC does not respond")
+	assertReportContains(t, report, "file allocation is blocking aria2 startup")
+	for _, issue := range report.Issues {
+		if issue.Code == "PortConflict" {
+			t.Fatalf("managed listener was misclassified as port conflict: %#v", report.Issues)
+		}
+	}
+	if report.Repair == nil || report.Repair.Command != "aria2s doctor --repair --discard-unmanaged-tasks" {
+		t.Fatalf("missing executable recovery: %#v", report.Repair)
+	}
+}
+
+func TestCheckIgnoresFileAllocationFromAnEarlierStartup(t *testing.T) {
+	root := t.TempDir()
+	aria2c := filepath.Join(root, "aria2c")
+	if err := os.WriteFile(aria2c, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	current := state.State{RuntimeSchemaVersion: 2, Aria2cPath: aria2c, RPCPort: 6800, ServiceName: servicePaths.ServiceName, LogPath: servicePaths.LogFile}
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatal(err)
+	}
+
+	report := doctor.Check(context.Background(), doctor.Options{
+		Paths:           servicePaths,
+		Service:         fixedService{loaded: true, running: true},
+		IsPortAvailable: func(int) bool { return false },
+		RPCReachable:    func(context.Context, state.State) bool { return false },
+		ReadLogTail: func(string, int64) ([]byte, error) {
+			return []byte("RPC: listening on TCP port 6800\nFileAlloc:#b3f360\nRPC: listening on TCP port 6800\n"), nil
+		},
+	})
+
+	if report.Repair != nil {
+		t.Fatalf("stale FileAlloc marker produced a repair: %#v", report.Repair)
+	}
+	for _, issue := range report.Issues {
+		if issue.Code == "FileAllocationBlocked" {
+			t.Fatalf("stale FileAlloc marker produced issue: %#v", report.Issues)
+		}
+	}
+}
+
+func TestDoctorCommandRendersSuccessfulAndFailedChecks(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := filepath.Join(root, "aria2c")
+	if err := os.WriteFile(aria2c, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	current := state.State{RuntimeSchemaVersion: 2, Aria2cPath: aria2c, RPCPort: 6800, ServiceName: servicePaths.ServiceName, LogPath: servicePaths.LogFile}
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, []byte("plist"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.LogFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(servicePaths.LogFile, []byte("[NOTICE] IPv4 RPC: listening on TCP port 6800\n[FileAlloc:#b3f360 0B/0B]\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	application := app.New(app.Options{
+		Paths:           servicePaths,
+		Service:         &fakeService{installed: true, started: true},
+		IsPortAvailable: func(int) bool { return false },
+		RPC:             unavailableRPC{},
+	})
+
+	output, err := runCommand(t, application, "doctor")
+	if err == nil {
+		t.Fatal("expected failed doctor checks")
+	}
+	assertContains(t, output, "✓ Runtime state: managed state is readable")
+	assertContains(t, output, "✓ Supervisor: managed service is running")
+	assertContains(t, output, "✗ RPC: managed service is listening but RPC does not respond")
+	assertContains(t, output, "✗ Startup: file allocation is blocking aria2 startup")
+	assertContains(t, output, "Recommended repair:\n  aria2s doctor --repair --discard-unmanaged-tasks")
 }
 
 func TestCheckReportsSupervisorDrift(t *testing.T) {
@@ -408,6 +522,17 @@ type fakeRPC struct {
 	gid      string
 	addedURI string
 }
+
+type unavailableRPC struct{}
+
+func (unavailableRPC) Version(context.Context, state.State) (string, error) {
+	return "", errors.New("RPC timeout")
+}
+func (unavailableRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
+	return "", nil
+}
+func (unavailableRPC) SaveSession(context.Context, state.State) error { return nil }
+func (unavailableRPC) Shutdown(context.Context, state.State) error    { return nil }
 
 func (rpc *fakeRPC) Version(context.Context, state.State) (string, error) {
 	return rpc.version, nil

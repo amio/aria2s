@@ -20,6 +20,7 @@ func NewDarwin(home string) Paths {
 		StoragesDir:       filepath.Join(configDir, "storages"),
 		HooksDir:          filepath.Join(configDir, "hooks"),
 		InstanceLockFile:  filepath.Join(configDir, "instance.lock"),
+		SafeStartupFile:   filepath.Join(configDir, "safe-startup"),
 		LogFile:           filepath.Join(logDir, "aria2.log"),
 		ErrorLogFile:      filepath.Join(logDir, "aria2.err.log"),
 	}
