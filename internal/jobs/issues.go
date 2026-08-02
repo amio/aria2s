@@ -10,7 +10,7 @@ type IssueMetadata struct {
 
 var issueMetadata = map[string]IssueMetadata{
 	"AddFailed":                      {"error", "aria2 could not start this transfer", []string{"retry", "remove"}},
-	"CleanupFailed":                  {"warning", "managed staging cleanup is incomplete", []string{"retry"}},
+	"CleanupFailed":                  {"warning", "managed staging cleanup is incomplete", []string{"remove"}},
 	"CorruptManifest":                {"error", "managed task metadata is corrupt", []string{"clear"}},
 	"FinalSeedPathMismatch":          {"error", "published payload no longer matches the seed", []string{"retry", "remove"}},
 	"FinalSeedStartFailed":           {"error", "published payload could not start seeding", []string{"retry", "remove"}},

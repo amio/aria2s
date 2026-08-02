@@ -604,7 +604,7 @@ func TestIssueMetadataIsDerivedFromSingleCode(t *testing.T) {
 		t.Fatal("issue metadata action slice was not isolated")
 	}
 	actions := (&DashboardSession{}).availableActions(TaskClassification{Status: StatusComplete}, true, jobs.Job{Issue: &jobs.JobIssue{Code: "CleanupFailed"}})
-	if len(actions) != 1 || actions[0] != "retry" {
+	if len(actions) != 1 || actions[0] != "remove" {
 		t.Fatalf("warning issue actions did not come from metadata: %v", actions)
 	}
 }
@@ -650,6 +650,50 @@ func TestRetryRemovedCleansBeforeRestarting(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("stale staging data survived removed Retry: %v", err)
+	}
+}
+
+func TestRemoveManagedRetriesCleanupWithoutRestarting(t *testing.T) {
+	application, repository, _, target := newReconcilerTestApp(t)
+	targetFact, _ := publication.InspectTarget(target)
+	scope, _ := ensureStorageScope(repository, targetFact)
+	job := jobs.Job{
+		ID: "1414141414141414", Source: "https://example.test/x", TargetDir: target,
+		TargetIdentity: jobIdentity(targetFact.Identity), StorageID: scope.ID,
+		ActivityIntent: jobs.ActivityStopped, Removed: true,
+		Payload: jobs.PayloadState{Location: jobs.PayloadStaging},
+		Issue:   &jobs.JobIssue{Code: "CleanupFailed"},
+	}
+	if _, err := repository.Create(job); err != nil {
+		t.Fatal(err)
+	}
+	workDir := jobs.WorkDir(scope, job.ID)
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "stale-partial"), []byte("stale"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := application.RemoveManaged(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !loaded.Removed || loaded.Execution != nil || loaded.Issue != nil {
+		t.Fatalf("cleanup retry resurrected removed job: %+v", loaded)
+	}
+	if _, err := os.Stat(workDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging directory survived cleanup retry: %v", err)
+	}
+
+	if err := application.ClearManaged(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if repository.Exists(job.ID) {
+		t.Fatal("removed job remained after Clear")
 	}
 }
 
