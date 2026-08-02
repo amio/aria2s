@@ -5,9 +5,8 @@ import (
 	"unicode/utf8"
 )
 
-/** TextField is a labeled single-line input with optional placeholder
-and block-cursor rendering. All cursor/ANSI styling is self-contained
-so callers never manage escape sequences. */
+// TextField renders a stacked label and single-line input with an optional
+// placeholder. Cursor and ANSI styling stay encapsulated here.
 type TextField struct {
 	Label       string
 	Value       string
@@ -15,12 +14,12 @@ type TextField struct {
 	Focused     bool
 }
 
-func (field TextField) Line(cursorVisible bool) string {
-	label := field.Label + ":"
+func (field TextField) Lines(cursorVisible bool) []string {
+	label := field.Label
 	if field.Focused {
 		label = boldText(label)
 	}
-	return label + " " + field.valueText(cursorVisible)
+	return []string{label, "  " + field.valueText(cursorVisible)}
 }
 
 func (field TextField) valueText(cursorVisible bool) string {

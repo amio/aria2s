@@ -17,19 +17,19 @@ type dashboardKeyMaps struct {
 }
 
 type listKeyMap struct {
-		Quit       key.Binding
-		SelectDown key.Binding
-		SelectUp   key.Binding
-		Detail     key.Binding
-		Add        key.Binding
-		PasteURL   key.Binding
-		Pause      key.Binding
-		Resume     key.Binding
-		Remove     key.Binding
-		Open       key.Binding
-		NextPage   key.Binding
-		PrevPage   key.Binding
-	}
+	Quit       key.Binding
+	SelectDown key.Binding
+	SelectUp   key.Binding
+	Detail     key.Binding
+	Add        key.Binding
+	PasteURL   key.Binding
+	Pause      key.Binding
+	Resume     key.Binding
+	Remove     key.Binding
+	Open       key.Binding
+	NextPage   key.Binding
+	PrevPage   key.Binding
+}
 
 type addKeyMap struct {
 	Quit       key.Binding
@@ -75,8 +75,8 @@ func newDashboardKeyMaps() dashboardKeyMaps {
 			Quit:       newBinding("Ctrl+C", "Quit", "ctrl+c"),
 			Cancel:     newBinding("Esc", "Back", "esc"),
 			Submit:     newBinding("Enter", "Submit", "enter"),
-			NextField:  newBinding("Tab", "Next", "tab"),
-			PrevField:  newHiddenBinding("shift+tab"),
+			NextField:  newBinding("Tab", "Switch field", "tab"),
+			PrevField:  newBinding("Shift+Tab", "Switch field", "shift+tab"),
 			Backspace:  newHiddenBinding("backspace"),
 			RecentUp:   newHiddenBinding("up"),
 			RecentDown: newHiddenBinding("down"),
@@ -114,7 +114,7 @@ func (keys listKeyMap) HelpItems() []helpItem {
 func (keys addKeyMap) HelpItems() []helpItem {
 	return bindingHelpItems(
 		helpGroup(keys.Submit),
-		helpGroup(keys.NextField),
+		helpGroup(keys.NextField, keys.PrevField),
 		helpGroup(keys.Cancel),
 		helpGroup(keys.Quit),
 	)

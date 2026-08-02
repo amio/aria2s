@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"fmt"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -61,8 +60,8 @@ func (form AddForm) WithRecents(dirs []string) AddForm {
 	form.recentDirs = dirs
 	if form.dir == "" && len(dirs) > 0 {
 		form.dir = dirs[0]
-		form.dirPick = 0
 	}
+	form.dirPick = recentDirIndex(dirs, form.dir)
 	return form
 }
 
@@ -95,7 +94,7 @@ func (form AddForm) DirField() TextField {
 		hint = "aria2 default"
 	}
 	return TextField{
-		Label:       "Dir",
+		Label:       "Directory",
 		Value:       form.dir,
 		Placeholder: hint + " (default)",
 		Focused:     form.focus == focusDir,
@@ -104,19 +103,20 @@ func (form AddForm) DirField() TextField {
 
 func (form AddForm) BodyLines() []string {
 	lines := []string{
-		"URL or magnet link, Tab to set dir, Enter to submit.",
+		"URL or magnet link. Tab/Shift+Tab switch fields, Enter submits.",
 		"",
-		form.URLField().Line(form.cursorVisible),
-		form.DirField().Line(form.cursorVisible),
 	}
+	lines = append(lines, form.URLField().Lines(form.cursorVisible)...)
+	lines = append(lines, "")
+	lines = append(lines, form.DirField().Lines(form.cursorVisible)...)
 	if form.focus == focusDir && len(form.recentDirs) > 0 {
-		lines = append(lines, "", "Recent dirs (Tab to cycle):")
+		lines = append(lines, "", "  Recent (↑↓ select)")
 		for i, dir := range form.recentDirs {
-			marker := "  "
+			marker := "     "
 			if i == form.dirPick {
-				marker = "> "
+				marker = "  ›  "
 			}
-			lines = append(lines, fmt.Sprintf("%s%d %s", marker, i+1, dir))
+			lines = append(lines, marker+dir)
 		}
 	}
 	return lines
@@ -151,9 +151,8 @@ func (form AddForm) HandlePaste(content string) (AddForm, tea.Cmd, AddFormAction
 
 func (form AddForm) handleURLKey(msg tea.KeyPressMsg) (AddForm, tea.Cmd, AddFormAction) {
 	switch {
-	case key.Matches(msg, dashboardKeys.Add.NextField):
+	case key.Matches(msg, dashboardKeys.Add.NextField, dashboardKeys.Add.PrevField):
 		form.focus = focusDir
-		form.dirPick = -1
 		form.cursorVisible = true
 	case key.Matches(msg, dashboardKeys.Add.Submit):
 		return form, nil, AddFormSubmit
@@ -169,11 +168,9 @@ func (form AddForm) handleURLKey(msg tea.KeyPressMsg) (AddForm, tea.Cmd, AddForm
 
 func (form AddForm) handleDirKey(msg tea.KeyPressMsg) (AddForm, tea.Cmd, AddFormAction) {
 	switch {
-	case key.Matches(msg, dashboardKeys.Add.PrevField):
+	case key.Matches(msg, dashboardKeys.Add.NextField, dashboardKeys.Add.PrevField):
 		form.focus = focusURL
 		form.cursorVisible = true
-	case key.Matches(msg, dashboardKeys.Add.NextField):
-		form.cycleRecents()
 	case key.Matches(msg, dashboardKeys.Add.Submit):
 		return form, nil, AddFormSubmit
 	case key.Matches(msg, dashboardKeys.Add.Backspace):
@@ -200,14 +197,6 @@ func trimLastRune(text string) string {
 	return text[:len(text)-size]
 }
 
-func (form *AddForm) cycleRecents() {
-	if len(form.recentDirs) == 0 {
-		return
-	}
-	form.dirPick = (form.dirPick + 1) % len(form.recentDirs)
-	form.dir = form.recentDirs[form.dirPick]
-}
-
 func (form *AddForm) navigateRecents(down bool) {
 	if len(form.recentDirs) == 0 {
 		return
@@ -223,4 +212,13 @@ func (form *AddForm) navigateRecents(down bool) {
 		form.dirPick = max(form.dirPick-1, 0)
 	}
 	form.dir = form.recentDirs[form.dirPick]
+}
+
+func recentDirIndex(dirs []string, selected string) int {
+	for i, dir := range dirs {
+		if dir == selected {
+			return i
+		}
+	}
+	return -1
 }

@@ -7,20 +7,23 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func TestAddFormTabCyclesRecents(t *testing.T) {
+func TestAddFormTabAndShiftTabSwitchFields(t *testing.T) {
 	form := NewAddForm("/home/user/Downloads").WithRecents([]string{
 		"/data/Movies",
 		"/data/Music",
 	})
 
-	form, _, _ = stepKey(form, keySpecial(tea.KeyTab)) // URL -> Dir
-	form, _, _ = stepKey(form, keySpecial(tea.KeyTab)) // pick 1st
-	if form.dir != "/data/Movies" {
-		t.Fatalf("first tab got %q, want /data/Movies", form.dir)
+	form, _, _ = stepKey(form, keySpecial(tea.KeyTab))
+	if form.focus != focusDir {
+		t.Fatalf("Tab focus got %v, want directory", form.focus)
 	}
-	form, _, _ = stepKey(form, keySpecial(tea.KeyTab)) // pick 2nd
-	if form.dir != "/data/Music" {
-		t.Fatalf("second tab got %q, want /data/Music", form.dir)
+	form, _, _ = stepKey(form, keySpecial(tea.KeyTab))
+	if form.focus != focusURL {
+		t.Fatalf("second Tab focus got %v, want URL", form.focus)
+	}
+	form, _, _ = stepKey(form, tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if form.focus != focusDir {
+		t.Fatalf("Shift+Tab focus got %v, want directory", form.focus)
 	}
 }
 
@@ -63,14 +66,37 @@ func TestAddFormWithRecentsDoesNotOverwriteExistingDir(t *testing.T) {
 	}
 }
 
-func TestAddFormBodyLinesIncludeRecentsWhenDirFocused(t *testing.T) {
-	form := NewAddForm("/home").WithRecents([]string{"/data/Movies"})
+func TestAddFormBodyLinesUseStackedFieldsAndFocusedRecents(t *testing.T) {
+	form := NewAddForm("/home").WithRecents([]string{"/data/Movies", "/data/Music"})
+
+	unfocused := strings.Join(form.BodyLines(), "\n")
+	if strings.Contains(unfocused, "Recent") {
+		t.Fatalf("recents visible while URL focused:\n%s", unfocused)
+	}
+	if !strings.Contains(unfocused, "Directory\n  /data/Movies") {
+		t.Fatalf("fields are not stacked and indented:\n%s", unfocused)
+	}
+
+	form.focus = focusDir
+	focused := strings.Join(form.BodyLines(), "\n")
+	if !strings.Contains(focused, "  Recent (↑↓ select)") ||
+		!strings.Contains(focused, "  ›  /data/Movies") ||
+		!strings.Contains(focused, "     /data/Music") {
+		t.Fatalf("focused recent picker has unexpected layout:\n%s", focused)
+	}
+}
+
+func TestAddFormArrowsSelectRecentsWithoutChangingFieldFocus(t *testing.T) {
+	form := NewAddForm("").WithRecents([]string{"/data/Movies", "/data/Music"})
 	form.focus = focusDir
 
-	lines := form.BodyLines()
-	joined := strings.Join(lines, "\n")
-	if !strings.Contains(joined, "Recent dirs") || !strings.Contains(joined, "/data/Movies") {
-		t.Fatalf("body lines missing recents: %#v", lines)
+	form, _, _ = stepKey(form, keySpecial(tea.KeyDown))
+	if form.dir != "/data/Music" || form.dirPick != 1 || form.focus != focusDir {
+		t.Fatalf("down selection got dir=%q pick=%d focus=%v", form.dir, form.dirPick, form.focus)
+	}
+	form, _, _ = stepKey(form, keySpecial(tea.KeyUp))
+	if form.dir != "/data/Movies" || form.dirPick != 0 || form.focus != focusDir {
+		t.Fatalf("up selection got dir=%q pick=%d focus=%v", form.dir, form.dirPick, form.focus)
 	}
 }
 
