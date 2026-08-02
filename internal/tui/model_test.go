@@ -416,6 +416,43 @@ func TestDetailActionErrorRendersFullTextInBody(t *testing.T) {
 	}
 }
 
+func TestIssueRendersWithDetailErrorsAndInSelectedListFeedback(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.loaded = true
+	model.width = 180
+	model.height = 40
+	issue := "restore the seed files and retry"
+	row := aria2.Download{GID: "a", Name: "task-a", CanonicalStatus: "error", IssueCode: "FinalSeedPathMismatch", IssueText: issue}
+	model.snapshot.Stopped = []aria2.Download{row}
+	model.actionErrors["a"] = errors.New(issue)
+
+	listView := ansi.Strip(model.View().Content)
+	if !strings.Contains(listView, "ISSUE: "+issue) {
+		t.Fatalf("selected issue missing from list feedback:\n%s", listView)
+	}
+	if strings.Contains(listView, "ACTION: "+issue) || strings.Count(listView, issue) != 1 {
+		t.Fatalf("durable issue duplicated by action feedback:\n%s", listView)
+	}
+
+	model.mode = ModeDetail
+	model.detailState = DetailState{RequestedGID: "a", AppliedGID: "a", HasDetail: true}
+	model.detail = aria2.DownloadDetail{
+		GID: "a", Name: "task-a", CanonicalStatus: "error", Ownership: "managed",
+		IssueCode: "FinalSeedPathMismatch", IssueText: issue,
+		ErrorCode: "13", ErrorMessage: "native disk failure",
+	}
+	detailView := ansi.Strip(model.View().Content)
+	errorIndex := strings.Index(detailView, "Error 13:")
+	issueIndex := strings.Index(detailView, "Issue:")
+	downloadDirIndex := strings.Index(detailView, "Download Dir:")
+	if errorIndex < 0 || issueIndex < 0 || downloadDirIndex < 0 || issueIndex < errorIndex || errorIndex < downloadDirIndex {
+		t.Fatalf("issue is not grouped with detail errors:\n%s", detailView)
+	}
+	if strings.Contains(detailView, "Action:") || strings.Count(detailView, issue) != 1 {
+		t.Fatalf("detail issue duplicated by action feedback:\n%s", detailView)
+	}
+}
+
 func TestInitialFailureRendersUnavailablePlaceholder(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.loaded = true

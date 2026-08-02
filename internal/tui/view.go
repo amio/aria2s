@@ -87,6 +87,8 @@ func (model Model) View() tea.View {
 func (model Model) listView() string {
 	width, height := model.viewport()
 	cWidth := frameContentWidth(width)
+	selected := model.Selected()
+	issueMessage := taskIssueMessage(selected.IssueCode, selected.IssueText)
 	leftSide := dimText("aria2s (" + model.version + ")")
 	if model.list.LastError != nil {
 		if model.list.HasSnapshot {
@@ -99,7 +101,10 @@ func (model Model) listView() string {
 		// Transient tips (inapplicable keys, clipboard issues) share the notice slot.
 		leftSide += "  " + colorizeForeground("NOTE: "+model.notice, errorTextColor, false)
 	}
-	if err := model.actionErrors[model.Selected().GID]; err != nil {
+	if issueMessage != "" {
+		leftSide += "  " + colorizeForeground("ISSUE: "+issueMessage, errorTextColor, false)
+	}
+	if err := model.actionErrors[selected.GID]; err != nil && err.Error() != issueMessage {
 		leftSide += "  " + colorizeForeground("ACTION: "+err.Error(), errorTextColor, false)
 	}
 	if model.addError != nil {
@@ -224,13 +229,6 @@ func (model Model) detailView() string {
 	if detail.Ownership != "" {
 		lines = appendDetailLabelLines(lines, "Ownership", detail.Ownership, contentWidth)
 	}
-	if detail.IssueCode != "" {
-		message := detail.IssueText
-		if message == "" {
-			message = detail.IssueCode
-		}
-		lines = appendDetailErrorLines(lines, "Issue", message, contentWidth)
-	}
 	if detail.InfoHash != "" {
 		lines = appendDetailLabelLines(lines, "Info Hash", detail.InfoHash, contentWidth)
 	}
@@ -262,12 +260,19 @@ func (model Model) detailView() string {
 	if detail.VerifyIntegrityPending {
 		lines = appendDetailLabelLines(lines, "Hash Check", "pending", contentWidth)
 	}
-	if detail.ErrorMessage != "" {
+	issueMessage := taskIssueMessage(detail.IssueCode, detail.IssueText)
+	actionErr := model.actionErrors[model.detailState.RequestedGID]
+	hasDistinctActionError := actionErr != nil && actionErr.Error() != issueMessage
+	if detail.ErrorMessage != "" || issueMessage != "" || hasDistinctActionError {
 		lines = append(lines, "")
+	}
+	if detail.ErrorMessage != "" {
 		lines = appendDetailErrorLines(lines, "Error "+detail.ErrorCode, detail.ErrorMessage, contentWidth)
 	}
-	if actionErr := model.actionErrors[model.detailState.RequestedGID]; actionErr != nil {
-		lines = append(lines, "")
+	if issueMessage != "" {
+		lines = appendDetailErrorLines(lines, "Issue", issueMessage, contentWidth)
+	}
+	if hasDistinctActionError {
 		lines = appendDetailErrorLines(lines, "Action", actionErr.Error(), contentWidth)
 	}
 	if len(detail.Files) > 0 {
@@ -314,6 +319,13 @@ func (model Model) detailView() string {
 	}
 
 	return model.framedView(topContent, body, bottomContent)
+}
+
+func taskIssueMessage(code, message string) string {
+	if message != "" {
+		return message
+	}
+	return code
 }
 
 func (model Model) tableHeader(contentWidth int) string {
