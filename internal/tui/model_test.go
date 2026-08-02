@@ -25,6 +25,11 @@ type fakeService struct {
 	snapshotFunc func(context.Context, aria2.DashboardQuery) (aria2.DashboardRead, error)
 }
 
+type presentableTestError struct{}
+
+func (presentableTestError) Error() string       { return "internal diagnostic" }
+func (presentableTestError) UserMessage() string { return "restore the files and retry" }
+
 func keySpecial(code rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: code} }
 
 func (service *fakeService) Snapshot(ctx context.Context, query aria2.DashboardQuery) (aria2.DashboardRead, error) {
@@ -234,6 +239,13 @@ func TestUnknownMutationDoesNotRepeatAndQueuesReconciliation(t *testing.T) {
 	}
 	if !errors.Is(result.err, aria2.ErrOutcomeUnknown) {
 		t.Fatal("unknown identity lost")
+	}
+}
+
+func TestOutcomeMessageUsesUserFacingIssueText(t *testing.T) {
+	err := outcomeMessage(presentableTestError{})
+	if got, want := err.Error(), "restore the files and retry"; got != want {
+		t.Fatalf("outcome message = %q, want %q", got, want)
 	}
 }
 

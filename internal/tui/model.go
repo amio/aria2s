@@ -831,6 +831,10 @@ func outcomeMessage(err error) error {
 	if errors.Is(err, aria2.ErrOutcomeUnknown) {
 		return fmt.Errorf("outcome unknown; the action may have succeeded and will not be repeated: %w", err)
 	}
+	var userMessage interface{ UserMessage() string }
+	if errors.As(err, &userMessage) {
+		return errors.New(userMessage.UserMessage())
+	}
 	return err
 }
 

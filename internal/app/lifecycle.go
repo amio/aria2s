@@ -801,12 +801,30 @@ func checkpointAndClearIssue(ctx context.Context, repository *jobs.Repository, e
 	return ReconcileResult{}, nil
 }
 
+// managedIssueError keeps the diagnostic cause available to logs and error
+// inspection while allowing user interfaces to use the issue policy's stable,
+// actionable text instead of exposing reconciliation internals.
+type managedIssueError struct {
+	code  string
+	cause error
+}
+
+func (err *managedIssueError) Error() string { return err.cause.Error() }
+func (err *managedIssueError) Unwrap() error { return err.cause }
+
+func (err *managedIssueError) UserMessage() string {
+	if metadata, ok := jobs.LookupIssue(err.code); ok && metadata.Text != "" {
+		return metadata.Text
+	}
+	return err.Error()
+}
+
 func persistIssue(repository *jobs.Repository, job jobs.Job, token jobs.Token, code string, cause error) error {
 	job.Issue = &jobs.JobIssue{Code: code}
 	if _, err := repository.SaveCAS(job, token); err != nil {
 		return errors.Join(cause, fmt.Errorf("persist %s: %w", code, err))
 	}
-	return cause
+	return &managedIssueError{code: code, cause: cause}
 }
 
 func issueCode(err error, fallback string) string {

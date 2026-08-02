@@ -212,6 +212,49 @@ func TestFinalSeedFailureDoesNotUndoPublishedPayload(t *testing.T) {
 	}
 }
 
+func TestMissingPublishedSeedExposesActionableUserMessageWithoutLosingCause(t *testing.T) {
+	application, repository, _, target := newReconcilerTestApp(t)
+	targetFact, _ := publication.InspectTarget(target)
+	scope, _ := ensureStorageScope(repository, targetFact)
+	payload := filepath.Join(target, "moved")
+	if err := os.WriteFile(payload, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := publication.Identify(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := jobs.Job{
+		ID: "a1a1a1a1a1a1a1a1", Source: "magnet:?xt=urn:btih:test", TargetDir: target,
+		TargetIdentity: jobIdentity(targetFact.Identity), StorageID: scope.ID,
+		ActivityIntent: jobs.ActivityRunning,
+		Payload:        jobs.PayloadState{Location: jobs.PayloadPublished, Root: "moved", FinalRoot: "moved", Identity: jobIdentity(identity)},
+	}
+	if _, err := repository.Create(job); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = application.ReconcileJob(context.Background(), job.ID, ReconcileInput{Mode: ReconcileLive})
+	if err == nil || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing payload cause was not preserved: %v", err)
+	}
+	var userMessage interface{ UserMessage() string }
+	if !errors.As(err, &userMessage) {
+		t.Fatalf("missing payload error has no user message: %T", err)
+	}
+	want := "seed files are missing or changed; restore them to the download location and retry, or remove the task"
+	if got := userMessage.UserMessage(); got != want {
+		t.Fatalf("user message = %q, want %q", got, want)
+	}
+	loaded, _, loadErr := repository.Load(job.ID)
+	if loadErr != nil || loaded.Issue == nil || loaded.Issue.Code != "FinalSeedPathMismatch" {
+		t.Fatalf("missing payload issue was not persisted: job=%+v err=%v", loaded, loadErr)
+	}
+}
+
 func TestCleanupFailureAfterPublicationIsOnlyAWarning(t *testing.T) {
 	application, repository, rpc, target := newReconcilerTestApp(t)
 	targetFact, _ := publication.InspectTarget(target)
