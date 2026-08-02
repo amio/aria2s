@@ -113,6 +113,7 @@ func (opts AddOptions) values() map[string]string {
 		values["allow-overwrite"] = "false"
 		values["auto-file-renaming"] = "false"
 		values["remove-control-file"] = "false"
+		values["force-save"] = "true"
 		values["follow-torrent"] = "false"
 		// Staged payloads must not inherit a user-wide trust policy. A failed
 		// allocation can leave full-length files without any verified pieces.

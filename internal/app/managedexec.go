@@ -77,6 +77,12 @@ func (app *App) ManagedExec(ctx context.Context) error {
 			continue
 		}
 		job := scannedJob.Job
+		// Pending has no confirmed native task and Removed is a tombstone. Neither
+		// phase may make global startup depend on its storage or work directory.
+		if job.Phase == jobs.PhasePending || job.Phase == jobs.PhaseRemoved {
+			manifests = append(manifests, job)
+			continue
+		}
 		scope, ok := storageMap[job.StorageID]
 		if !ok {
 			manifests = append(manifests, job)
@@ -341,6 +347,11 @@ func inspectStartupFact(repository *jobs.Repository, job jobs.Job, scope jobs.St
 		fact.MetainfoPath = repository.MetainfoPath(job.ID)
 		fact.Torrent = true
 	}
+	// Published jobs are reconstructed from retained metainfo at the final
+	// target. Their staging directory is no longer part of startup truth.
+	if job.Phase == jobs.PhasePublished {
+		return fact
+	}
 	workDir := jobs.WorkDir(scope, job.ID)
 	entries, err := os.ReadDir(workDir)
 	if errors.Is(err, os.ErrNotExist) || (err == nil && len(entries) == 0) {
@@ -374,6 +385,7 @@ func inspectStartupFact(repository *jobs.Repository, job jobs.Job, scope jobs.St
 			return fact
 		}
 	}
+	fact.HasControl = len(controls) > 0
 	if job.PayloadRoot != "" {
 		if len(roots) == 1 {
 			if _, ok := roots[job.PayloadRoot]; ok {

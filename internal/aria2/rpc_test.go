@@ -97,10 +97,12 @@ func TestManagedTorrentOverridesUnverifiedSeedingByPublicationPhase(t *testing.T
 	); err != nil {
 		t.Fatalf("add staged torrent: %v", err)
 	}
+	forceSave := false
+	removeControl := true
 	if _, err := client.AddTorrent(
 		context.Background(),
 		[]byte("metainfo"),
-		aria2.AddOptions{Managed: true, SeedUnverified: true},
+		aria2.AddOptions{Managed: true, SeedUnverified: true, ForceSave: &forceSave, RemoveControlFile: &removeControl},
 	); err != nil {
 		t.Fatalf("add final seed: %v", err)
 	}
@@ -109,7 +111,11 @@ func TestManagedTorrentOverridesUnverifiedSeedingByPublicationPhase(t *testing.T
 		t.Fatalf("request count = %d, want 2", len(bodies))
 	}
 	assertContains(t, string(bodies[0]), `"bt-seed-unverified":"false"`)
+	assertContains(t, string(bodies[0]), `"force-save":"true"`)
+	assertContains(t, string(bodies[0]), `"remove-control-file":"false"`)
 	assertContains(t, string(bodies[1]), `"bt-seed-unverified":"true"`)
+	assertContains(t, string(bodies[1]), `"force-save":"false"`)
+	assertContains(t, string(bodies[1]), `"remove-control-file":"true"`)
 }
 
 func TestWrapTransportErrorMarksEOFAsTransportUnavailable(t *testing.T) {

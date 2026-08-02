@@ -62,9 +62,17 @@ type Options struct {
 	RPC                      RPC
 	RPCReadyTimeout          time.Duration
 	RPCPollInterval          time.Duration
+	RPCProbeTimeout          time.Duration
+	RPCSlowThreshold         time.Duration
 	DashboardReadTimeout     time.Duration
 	DashboardMutationTimeout time.Duration
 }
+
+const (
+	defaultRPCOperationTimeout = 30 * time.Second
+	defaultRPCSlowThreshold    = 2 * time.Second
+	localRPCTransportTimeout   = 35 * time.Second
+)
 
 type App struct {
 	options Options
@@ -93,16 +101,22 @@ func New(options Options) *App {
 		options.RPC = &LocalRPC{}
 	}
 	if options.RPCReadyTimeout == 0 {
-		options.RPCReadyTimeout = 5 * time.Second
+		options.RPCReadyTimeout = defaultRPCOperationTimeout
 	}
 	if options.RPCPollInterval == 0 {
 		options.RPCPollInterval = 100 * time.Millisecond
 	}
+	if options.RPCProbeTimeout == 0 {
+		options.RPCProbeTimeout = defaultRPCOperationTimeout
+	}
+	if options.RPCSlowThreshold == 0 {
+		options.RPCSlowThreshold = defaultRPCSlowThreshold
+	}
 	if options.DashboardReadTimeout == 0 {
-		options.DashboardReadTimeout = 2 * time.Second
+		options.DashboardReadTimeout = defaultRPCOperationTimeout
 	}
 	if options.DashboardMutationTimeout == 0 {
-		options.DashboardMutationTimeout = 5 * time.Second
+		options.DashboardMutationTimeout = defaultRPCOperationTimeout
 	}
 	return &App{options: options}
 }
@@ -760,8 +774,10 @@ func (app *App) saveSession(ctx context.Context, current state.State) error {
 
 func (app *App) Status(ctx context.Context) doctor.StatusReport {
 	return doctor.Status(ctx, doctor.StatusOptions{
-		Paths:   app.options.Paths,
-		Service: app.options.Service,
+		Paths:            app.options.Paths,
+		Service:          app.options.Service,
+		RPCProbeTimeout:  app.options.RPCProbeTimeout,
+		RPCSlowThreshold: app.options.RPCSlowThreshold,
 		RPCVersion: func(ctx context.Context, current state.State) (string, error) {
 			return app.options.RPC.Version(ctx, current)
 		},
@@ -770,12 +786,13 @@ func (app *App) Status(ctx context.Context) doctor.StatusReport {
 
 func (app *App) Doctor(ctx context.Context) doctor.Report {
 	return doctor.Check(ctx, doctor.Options{
-		Paths:           app.options.Paths,
-		IsPortAvailable: app.options.IsPortAvailable,
-		Service:         app.options.Service,
-		RPCReachable: func(ctx context.Context, current state.State) bool {
-			_, err := app.options.RPC.Version(ctx, current)
-			return err == nil
+		Paths:            app.options.Paths,
+		IsPortAvailable:  app.options.IsPortAvailable,
+		Service:          app.options.Service,
+		RPCProbeTimeout:  app.options.RPCProbeTimeout,
+		RPCSlowThreshold: app.options.RPCSlowThreshold,
+		RPCVersion: func(ctx context.Context, current state.State) (string, error) {
+			return app.options.RPC.Version(ctx, current)
 		},
 	})
 }
@@ -859,15 +876,19 @@ func (app *App) preflightLifecycle() (state.State, error) {
 }
 
 func (app *App) waitForRPC(ctx context.Context, current state.State) error {
-	deadline := time.Now().Add(app.options.RPCReadyTimeout)
+	readyCtx, cancel := context.WithTimeout(ctx, app.options.RPCReadyTimeout)
+	defer cancel()
 	var lastErr error
 	for {
-		if _, err := app.options.RPC.Version(ctx, current); err == nil {
+		if _, err := app.options.RPC.Version(readyCtx, current); err == nil {
 			return nil
 		} else {
 			lastErr = err
 		}
-		if time.Now().Add(app.options.RPCPollInterval).After(deadline) {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if readyCtx.Err() != nil {
 			return app.rpcReadyError(current, lastErr)
 		}
 		timer := time.NewTimer(app.options.RPCPollInterval)
@@ -875,6 +896,9 @@ func (app *App) waitForRPC(ctx context.Context, current state.State) error {
 		case <-ctx.Done():
 			timer.Stop()
 			return ctx.Err()
+		case <-readyCtx.Done():
+			timer.Stop()
+			return app.rpcReadyError(current, lastErr)
 		case <-timer.C:
 		}
 	}
@@ -944,9 +968,13 @@ type LocalRPC struct {
 
 func (r *LocalRPC) httpClient() *http.Client {
 	r.httpOnce.Do(func() {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		// The managed endpoint is loopback-only. Proxying it can leak the RPC
+		// secret and makes local health depend on an unrelated proxy process.
+		transport.Proxy = nil
 		r.http = &http.Client{
-			Timeout:   10 * time.Second,
-			Transport: http.DefaultTransport,
+			Timeout:   localRPCTransportTimeout,
+			Transport: transport,
 		}
 	})
 	return r.http
@@ -963,8 +991,6 @@ func (r *LocalRPC) rpcClient(current state.State) *aria2.RPCClient {
 }
 
 func (r *LocalRPC) Version(ctx context.Context, current state.State) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
 	return r.rpcClient(current).Version(ctx)
 }
 

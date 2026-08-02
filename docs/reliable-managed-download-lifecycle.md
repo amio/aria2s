@@ -191,9 +191,10 @@ copy there. The viable mechanism is detach, rename, and rehydrate.
    metadata. Other native session blocks are preserved rather than regenerated.
 5. A missing or corrupt block is reconstructed only from retained torrent metainfo or when
    the isolated `WorkDir` has no payload/control artifacts and the persisted submitted source
-   is a complete launch input. A valid HTTP block may use a safely inferred sole root to
-   force `out`; a missing block beside any partial artifact becomes `RestartStateMissing`
-   and starts no new I/O.
+   is a complete launch input. A retained torrent payload without native control state is
+   re-added only with piece verification enabled. A valid HTTP block may use a safely inferred
+   sole root to force `out`; a missing block beside any partial HTTP artifact becomes
+   `RestartStateMissing` and starts no new I/O.
 6. One job ID remains the only GID across descriptor acquisition, torrent payload transfer,
    publication, and final seeding.
 7. Final seeds use `bt-seed-unverified=true`, `check-integrity=false`, and
@@ -408,7 +409,7 @@ publication problem and rejects Remove rather than discarding the only recovery 
    speculative rename capability probe: file probes cannot prove directory rename behavior,
    and optional no-replace syscalls reject otherwise usable NAS/removable filesystems.
 5. Add the URI with managed invariants: `gid`, `dir`, `allow-overwrite=false`,
-   `auto-file-renaming=false`, `remove-control-file=false`, and
+   `auto-file-renaming=false`, `remove-control-file=false`, `force-save=true`, and
    `follow-torrent=false`. Magnets additionally use metadata-only/save/load options.
 6. After confirmed Add, persist `Staged` and request a native session checkpoint. Unknown
    Add stays `Pending`; explicit Retry revalidates storage, reconciles live/session GID

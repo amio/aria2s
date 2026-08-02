@@ -61,7 +61,11 @@ func renderDoctorReport(command *cobra.Command, report doctor.Report) {
 		}
 	}
 	if report.Healthy {
-		fmt.Fprintln(command.OutOrStdout(), "\nNo issues found.")
+		if len(report.Issues) == 0 {
+			fmt.Fprintln(command.OutOrStdout(), "\nNo issues found.")
+		} else {
+			fmt.Fprintln(command.OutOrStdout(), "\nNo errors found.")
+		}
 		return
 	}
 	if report.Repair != nil {

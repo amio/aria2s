@@ -13,6 +13,7 @@ import (
 type StartupFact struct {
 	StorageAvailable bool
 	WorkEmpty        bool
+	HasControl       bool
 	InferredRoot     string
 	HasMetainfo      bool
 	MetainfoPath     string
@@ -41,6 +42,9 @@ func PlanStartup(manifests []jobs.Job, storages map[string]jobs.StorageScope, fa
 	sort.Slice(manifests, func(i, j int) bool { return manifests[i].ID < manifests[j].ID })
 	plan := StartupPlan{}
 	for _, job := range manifests {
+		if job.Phase == jobs.PhasePending || job.Phase == jobs.PhaseRemoved {
+			continue
+		}
 		fact := facts[job.ID]
 		scope, storageKnown := storages[job.StorageID]
 		if !storageKnown || !fact.StorageAvailable {
@@ -53,8 +57,6 @@ func PlanStartup(manifests []jobs.Job, storages map[string]jobs.StorageScope, fa
 			continue
 		}
 		switch job.Phase {
-		case jobs.PhasePending, jobs.PhaseRemoved:
-			continue
 		case jobs.PhasePublishing:
 			plan.problem(job.ID, "PublicationRecoveryRequired", "publication must reconcile before startup planning")
 			continue
@@ -75,11 +77,14 @@ func PlanStartup(manifests []jobs.Job, storages map[string]jobs.StorageScope, fa
 					plan.problem(job.ID, "RestartStateMissing", problem)
 					continue
 				}
+				applyMissingControlRecovery(&block, fact)
 				plan.Blocks = append(plan.Blocks, block)
 				continue
 			}
 			if fact.Torrent && fact.HasMetainfo {
-				plan.Blocks = append(plan.Blocks, generatedTorrentBlock(job, fact.MetainfoPath, workDir, job.ActivityIntent == jobs.ActivityStopped, false))
+				block := generatedTorrentBlock(job, fact.MetainfoPath, workDir, job.ActivityIntent == jobs.ActivityStopped, false)
+				applyMissingControlRecovery(&block, fact)
+				plan.Blocks = append(plan.Blocks, block)
 				continue
 			}
 			if fact.WorkEmpty && completeSubmittedSource(job.Source) {
@@ -122,6 +127,7 @@ func applyManagedOptions(block *aria2.SessionBlock, job jobs.Job, dir string) {
 	block.SetOption("allow-overwrite", "false")
 	block.SetOption("auto-file-renaming", "false")
 	block.SetOption("remove-control-file", "false")
+	block.SetOption("force-save", "true")
 	block.SetOption("follow-torrent", "false")
 	// Managed staged jobs may inherit a legacy global true value otherwise.
 	// Only generated final-seed blocks override this after publication.
@@ -140,6 +146,18 @@ func generatedTorrentBlock(job jobs.Job, metainfoPath, dir string, paused, final
 		block.SetOption("remove-control-file", "true")
 	}
 	return block
+}
+
+func applyMissingControlRecovery(block *aria2.SessionBlock, fact StartupFact) {
+	if stagedIntegrityRequired(fact) {
+		// aria2 can reconstruct torrent progress from piece hashes when the
+		// native control file is missing. Never trust staged bytes as a seed.
+		block.SetOption("check-integrity", "true")
+	}
+}
+
+func stagedIntegrityRequired(fact StartupFact) bool {
+	return fact.Torrent && !fact.WorkEmpty && !fact.HasControl
 }
 
 func completeSubmittedSource(source string) bool {

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/amio/aria2s/cmd"
 	"github.com/amio/aria2s/internal/app"
@@ -73,7 +74,7 @@ func TestCheckReportsCorruptManagedManifestWithRecoveryCode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(jobDir, "manifest.json"), []byte("not-json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	report := doctor.Check(context.Background(), doctor.Options{Paths: servicePaths, Service: fixedService{loaded: true, running: true}, IsPortAvailable: func(int) bool { return true }, RPCReachable: func(context.Context, state.State) bool { return true }})
+	report := doctor.Check(context.Background(), doctor.Options{Paths: servicePaths, Service: fixedService{loaded: true, running: true}, IsPortAvailable: func(int) bool { return true }, RPCVersion: func(context.Context, state.State) (string, error) { return "1.37.0", nil }})
 	for _, issue := range report.Issues {
 		if issue.Code == "CorruptManifest" && len(issue.Recovery) > 0 {
 			return
@@ -118,14 +119,59 @@ func TestCheckDoesNotReportPortConflictWhenManagedRPCIsReachable(t *testing.T) {
 			loaded:  true,
 			running: true,
 		},
-		RPCReachable: func(context.Context, state.State) bool {
-			return true
+		RPCVersion: func(context.Context, state.State) (string, error) {
+			return "1.37.0", nil
 		},
 	})
 
 	if !report.Healthy {
 		t.Fatalf("expected healthy report, got %#v", report.Issues)
 	}
+}
+
+func TestCheckReportsSlowManagedRPCAsWarning(t *testing.T) {
+	root := t.TempDir()
+	aria2c := filepath.Join(root, "aria2c")
+	if err := os.WriteFile(aria2c, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	current := state.State{RuntimeSchemaVersion: 2, Aria2cPath: aria2c, RPCPort: 6800, ServiceName: servicePaths.ServiceName}
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, []byte("plist"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	report := doctor.Check(context.Background(), doctor.Options{
+		Paths:            servicePaths,
+		Service:          fixedService{loaded: true, running: true},
+		IsPortAvailable:  func(int) bool { return false },
+		RPCProbeTimeout:  100 * time.Millisecond,
+		RPCSlowThreshold: time.Millisecond,
+		RPCVersion: func(ctx context.Context, _ state.State) (string, error) {
+			select {
+			case <-time.After(5 * time.Millisecond):
+				return "1.37.0", nil
+			case <-ctx.Done():
+				return "", ctx.Err()
+			}
+		},
+	})
+
+	if !report.Healthy {
+		t.Fatalf("slow but reachable RPC made report unhealthy: %#v", report.Issues)
+	}
+	for _, issue := range report.Issues {
+		if issue.Code == "RPCSlow" && issue.Severity == "warning" {
+			return
+		}
+	}
+	t.Fatalf("missing slow RPC warning: %#v", report.Issues)
 }
 
 func TestCheckRecognizesManagedFileAllocationStallWithoutPortConflict(t *testing.T) {
@@ -150,7 +196,7 @@ func TestCheckRecognizesManagedFileAllocationStallWithoutPortConflict(t *testing
 		Paths:           servicePaths,
 		Service:         fixedService{loaded: true, running: true},
 		IsPortAvailable: func(int) bool { return false },
-		RPCReachable:    func(context.Context, state.State) bool { return false },
+		RPCVersion:      func(context.Context, state.State) (string, error) { return "", errors.New("unavailable") },
 		ReadLogTail: func(string, int64) ([]byte, error) {
 			return []byte("[NOTICE] IPv4 RPC: listening on TCP port 6800\n[FileAlloc:#b3f360 0B/0B]\n"), nil
 		},
@@ -184,7 +230,7 @@ func TestCheckIgnoresFileAllocationFromAnEarlierStartup(t *testing.T) {
 		Paths:           servicePaths,
 		Service:         fixedService{loaded: true, running: true},
 		IsPortAvailable: func(int) bool { return false },
-		RPCReachable:    func(context.Context, state.State) bool { return false },
+		RPCVersion:      func(context.Context, state.State) (string, error) { return "", errors.New("unavailable") },
 		ReadLogTail: func(string, int64) ([]byte, error) {
 			return []byte("RPC: listening on TCP port 6800\nFileAlloc:#b3f360\nRPC: listening on TCP port 6800\n"), nil
 		},
@@ -314,8 +360,8 @@ func TestCheckReportsNotRunningAndRPCUnreachable(t *testing.T) {
 		IsPortAvailable: func(int) bool {
 			return true
 		},
-		RPCReachable: func(context.Context, state.State) bool {
-			return false
+		RPCVersion: func(context.Context, state.State) (string, error) {
+			return "", errors.New("unavailable")
 		},
 	})
 
@@ -373,6 +419,16 @@ func TestStatusReportOmitsRPCSecret(t *testing.T) {
 	if strings.Contains(output, "secret-token") {
 		t.Fatalf("status leaked RPC secret: %s", output)
 	}
+}
+
+func TestStatusReportRendersSlowReachableRPC(t *testing.T) {
+	report := doctor.StatusReport{
+		RPCReachable: true,
+		RPCSlow:      true,
+		RPCLatency:   11850 * time.Millisecond,
+	}
+
+	assertContains(t, report.String(), "RPC:        reachable (slow, 11.9s)")
 }
 
 func TestInstallStartStatusAndAddCommands(t *testing.T) {

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/amio/aria2s/internal/aria2"
 	"github.com/amio/aria2s/internal/atomicfile"
@@ -83,14 +84,9 @@ func (app *App) SetActivity(ctx context.Context, gid string, running bool) error
 	}
 	if job.Phase == jobs.PhasePublished {
 		if running {
-			return app.startFinalSeedWithoutLock(ctx, repository, job)
+			return app.resumeOrStartFinalSeedWithoutLock(ctx, repository, rpc, current, job)
 		}
-		if removeErr := rpc.ForceRemove(ctx, current, gid); removeErr != nil && !aria2.IsNotFound(removeErr) {
-			return removeErr
-		}
-		if clearErr := rpc.RemoveDownloadResult(ctx, current, gid); clearErr != nil && !aria2.IsNotFound(clearErr) {
-			return clearErr
-		}
+		return detachManagedNative(ctx, rpc, current, gid)
 	}
 	return nil
 }
@@ -271,7 +267,7 @@ func (app *App) RetryManaged(ctx context.Context, gid string) error {
 		}
 		return retryPendingWithoutLock(ctx, repository, rpc, current, job, token, scope)
 	}
-	if job.Phase == jobs.PhaseStaged && job.ProblemCode != "" {
+	if job.Phase == jobs.PhaseStaged {
 		return app.retryStagedWithoutLock(ctx, repository, job, token, scope)
 	}
 	if job.Phase == jobs.PhasePublished && job.ProblemCode != "" && job.ProblemCode != "PowerLossDurabilityUnavailable" {
@@ -410,23 +406,32 @@ func (app *App) retryStagedWithoutLock(ctx context.Context, repository *jobs.Rep
 	}
 	workDir := jobs.WorkDir(scope, job.ID)
 	native, statusErr := rpc.LifecycleStatus(ctx, current, job.ID)
+	reconstruct := false
 	if statusErr == nil {
 		if native.GID != job.ID || filepath.Clean(native.Dir) != filepath.Clean(workDir) {
 			return errors.New("ManagedIdentityConflict: live staged GID points outside its work directory")
 		}
 		if native.Status == "error" || native.Status == "removed" || native.Status == "complete" {
-			return errors.New("RestartStateMissing: staged GID is not resumable in its observed state")
+			if err := detachManagedNative(ctx, rpc, current, job.ID); err != nil {
+				return err
+			}
+			reconstruct = true
 		}
-		if job.ActivityIntent == jobs.ActivityStopped && native.Status != "paused" {
+		if !reconstruct && job.ActivityIntent == jobs.ActivityStopped && native.Status != "paused" {
 			if err := rpc.Pause(ctx, current, job.ID); err != nil {
 				return err
 			}
-		} else if job.ActivityIntent == jobs.ActivityRunning && native.Status == "paused" {
+		} else if !reconstruct && job.ActivityIntent == jobs.ActivityRunning && native.Status == "paused" {
 			if err := rpc.Resume(ctx, current, job.ID); err != nil {
 				return err
 			}
 		}
 	} else if aria2.IsNotFound(statusErr) {
+		reconstruct = true
+	} else {
+		return statusErr
+	}
+	if reconstruct {
 		fact := inspectStartupFact(repository, job, scope, true)
 		options := aria2.AddOptions{Dir: workDir, GID: job.ID, Managed: true, Pause: job.ActivityIntent == jobs.ActivityStopped}
 		var added string
@@ -435,6 +440,10 @@ func (app *App) retryStagedWithoutLock(ctx context.Context, repository *jobs.Rep
 			metainfo, readErr := readValidatedMetainfo(repository, job.ID)
 			if readErr != nil {
 				return persistJobProblem(repository, job, token, "RestartStateMissing", readErr)
+			}
+			if stagedIntegrityRequired(fact) {
+				value := true
+				options.CheckIntegrity = &value
 			}
 			added, addErr = rpc.AddTorrent(ctx, current, metainfo, options)
 		} else if fact.WorkEmpty && completeSubmittedSource(job.Source) {
@@ -449,8 +458,6 @@ func (app *App) retryStagedWithoutLock(ctx context.Context, repository *jobs.Rep
 		if err := confirmManagedAdd(ctx, rpc, current, job.ID, workDir, added, addErr); err != nil {
 			return persistJobProblem(repository, job, token, "AddFailed", err)
 		}
-	} else {
-		return statusErr
 	}
 	job.ProblemCode = ""
 	token, err = repository.SaveCAS(job, token)
@@ -484,15 +491,45 @@ func detachManagedNative(ctx context.Context, rpc managedRPC, current state.Stat
 	default:
 		return fmt.Errorf("cannot detach managed GID from native status %q", native.Status)
 	}
-	if err := rpc.RemoveDownloadResult(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
-		return err
+	return waitForManagedNativeAbsence(ctx, rpc, current, gid)
+}
+
+func waitForManagedNativeAbsence(ctx context.Context, rpc managedRPC, current state.State, gid string) error {
+	const (
+		pollInterval = 25 * time.Millisecond
+		pollTimeout  = 3 * time.Second
+	)
+	timeout := time.NewTimer(pollTimeout)
+	defer timeout.Stop()
+	for {
+		native, err := rpc.LifecycleStatus(ctx, current, gid)
+		if aria2.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if native.GID != gid {
+			return errors.New("ManagedIdentityConflict: detach status returned a different GID")
+		}
+		switch native.Status {
+		case "complete", "error", "removed":
+			if err := rpc.RemoveDownloadResult(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
+				return err
+			}
+		case "active", "waiting", "paused":
+			// forceRemove acknowledges before aria2 necessarily retires the task.
+		default:
+			return fmt.Errorf("cannot confirm managed GID absence from native status %q", native.Status)
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout.C:
+			return errors.New("managed GID remains present after detach timeout")
+		case <-time.After(pollInterval):
+		}
 	}
-	if remaining, statusErr := rpc.LifecycleStatus(ctx, current, gid); statusErr == nil && remaining.GID != "" {
-		return errors.New("managed GID remains present after detach")
-	} else if statusErr != nil && !aria2.IsNotFound(statusErr) {
-		return statusErr
-	}
-	return nil
 }
 
 func (app *App) setActivityWithoutLock(ctx context.Context, repository *jobs.Repository, job jobs.Job, running bool) error {
@@ -537,6 +574,42 @@ func (app *App) startFinalSeedWithoutLock(ctx context.Context, repository *jobs.
 			errors.Join(errors.New("final seed files do not match the published payload"), statusErr))
 	}
 	return nil
+}
+
+func (app *App) resumeOrStartFinalSeedWithoutLock(ctx context.Context, repository *jobs.Repository, rpc managedRPC, current state.State, job jobs.Job) error {
+	destination, identity, err := publication.ValidatePayloadRoot(job.TargetDir, job.FinalRoot())
+	if err != nil || identity.MountID != job.PayloadIdentity.MountID ||
+		(job.PayloadIdentity.ReliableAcrossRename && identity.ObjectID != job.PayloadIdentity.ObjectID) {
+		return app.persistCurrentProblem(repository, job.ID, "FinalSeedPathMismatch",
+			errors.Join(errors.New("published payload is missing or its identity changed"), err))
+	}
+	native, statusErr := rpc.LifecycleStatus(ctx, current, job.ID)
+	if aria2.IsNotFound(statusErr) {
+		return app.startFinalSeedWithoutLock(ctx, repository, job)
+	}
+	if statusErr != nil {
+		return statusErr
+	}
+	if native.GID != job.ID || filepath.Clean(native.Dir) != filepath.Clean(job.TargetDir) || !publishedFilesMatch(native.Files, destination) {
+		return app.persistCurrentProblem(repository, job.ID, "FinalSeedPathMismatch",
+			errors.New("ManagedIdentityConflict: existing final seed does not match the published payload"))
+	}
+	switch native.Status {
+	case "active", "waiting":
+		return nil
+	case "paused":
+		if err := rpc.Resume(ctx, current, job.ID); err != nil {
+			return app.persistCurrentProblem(repository, job.ID, "FinalSeedStartFailed", err)
+		}
+		return nil
+	case "complete", "error", "removed":
+		if err := detachManagedNative(ctx, rpc, current, job.ID); err != nil {
+			return err
+		}
+		return app.startFinalSeedWithoutLock(ctx, repository, job)
+	default:
+		return fmt.Errorf("cannot resume final seed from native status %q", native.Status)
+	}
 }
 
 func (app *App) persistCurrentProblem(repository *jobs.Repository, gid, code string, cause error) error {
@@ -850,16 +923,10 @@ func (app *App) ManagedHook(ctx context.Context, event, gid string) error {
 		return err
 	}
 	if isTorrent {
-		if native.Status == "active" {
-			if err := rpc.Pause(ctx, current, gid); err != nil {
-				return err
-			}
-		}
-		if err := rpc.ForceRemove(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
+		if err := detachManagedNative(ctx, rpc, current, gid); err != nil {
 			return err
 		}
-	}
-	if err := rpc.RemoveDownloadResult(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
+	} else if err := rpc.RemoveDownloadResult(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
 		return err
 	}
 	destination := filepath.Join(job.TargetDir, job.FinalRoot())
@@ -1070,7 +1137,7 @@ func cleanupPublishedWorkDir(workDir, root string) error {
 }
 
 func isPublishedCleanupArtifact(name, root string) bool {
-	if name == root+".aria2" || strings.HasSuffix(name, ".torrent") {
+	if name == root+".aria2" || strings.HasSuffix(name, ".torrent") || name == ".DS_Store" || name == "._.DS_Store" {
 		return true
 	}
 	// macOS stores extended attributes in AppleDouble companions on filesystems

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"os"
 	"path/filepath"
 	"slices"
 	"testing"
@@ -9,6 +10,42 @@ import (
 	"github.com/amio/aria2s/internal/jobs"
 	"github.com/amio/aria2s/internal/state"
 )
+
+func TestInspectStartupFactRecognizesAdjacentControlFile(t *testing.T) {
+	root := t.TempDir()
+	scope := jobs.StorageScope{ID: "fedcba9876543210", StagingAnchor: root}
+	job := jobs.Job{ID: "0123456789abcdef", StorageID: scope.ID, PayloadRoot: "payload"}
+	workDir := jobs.WorkDir(scope, job.ID)
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"payload", "payload.aria2"} {
+		if err := os.WriteFile(filepath.Join(workDir, name), []byte(name), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	fact := inspectStartupFact(jobs.New(filepath.Join(root, "state")), job, scope, true)
+	if !fact.HasControl || fact.InferredRoot != job.PayloadRoot {
+		t.Fatalf("startup fact = %+v", fact)
+	}
+}
+
+func TestInspectStartupFactIgnoresPublishedStagingDirectory(t *testing.T) {
+	root := t.TempDir()
+	scope := jobs.StorageScope{ID: "fedcba9876543210", StagingAnchor: root}
+	job := jobs.Job{ID: "0123456789abcdef", StorageID: scope.ID, Phase: jobs.PhasePublished}
+	workDir := jobs.WorkDir(scope, job.ID)
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "obsolete-staging-payload"), []byte("payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fact := inspectStartupFact(jobs.New(filepath.Join(root, "state")), job, scope, true)
+	if fact.InferredRoot != "" || fact.HasControl {
+		t.Fatalf("published startup fact observed staging: %+v", fact)
+	}
+}
 
 func TestManagedRuntimeArgsUseSafeFileAllocationOnlyWhenRequested(t *testing.T) {
 	current := state.State{RPCPort: 6800, RPCSecret: "secret", StartupInputPath: "/state/startup", SessionPath: "/state/session"}
@@ -19,6 +56,17 @@ func TestManagedRuntimeArgsUseSafeFileAllocationOnlyWhenRequested(t *testing.T) 
 	safe := managedRuntimeArgs(current, "/state/hooks", true)
 	if !slices.Contains(safe, "--file-allocation=none") || safe[len(safe)-1] != "--file-allocation=none" {
 		t.Fatalf("safe startup does not apply final file allocation override: %v", safe)
+	}
+}
+
+func TestPlanStartupOmitsPendingAndRemovedWithoutStorageInspection(t *testing.T) {
+	jobsWithoutNativeState := []jobs.Job{
+		{ID: "0123456789abcdef", Phase: jobs.PhasePending, StorageID: "1111111111111111"},
+		{ID: "fedcba9876543210", Phase: jobs.PhaseRemoved, StorageID: "2222222222222222"},
+	}
+	plan := PlanStartup(jobsWithoutNativeState, nil, nil, nil)
+	if len(plan.Blocks) != 0 || len(plan.Problems) != 0 {
+		t.Fatalf("omitted phase plan = %+v", plan)
 	}
 }
 
@@ -103,6 +151,12 @@ func TestPlanStartupOverridesUnverifiedSeedingByPublicationPhase(t *testing.T) {
 	if value, _ := normalized.Blocks[0].Option("bt-seed-unverified"); value != "false" {
 		t.Fatalf("normalized staged options = %+v", normalized.Blocks[0].Options)
 	}
+	if value, _ := normalized.Blocks[0].Option("force-save"); value != "true" {
+		t.Fatalf("normalized staged options = %+v", normalized.Blocks[0].Options)
+	}
+	if value, _ := normalized.Blocks[0].Option("check-integrity"); value != "true" {
+		t.Fatalf("missing-control staged options = %+v", normalized.Blocks[0].Options)
+	}
 
 	generated := PlanStartup(
 		[]jobs.Job{staged},
@@ -115,6 +169,12 @@ func TestPlanStartupOverridesUnverifiedSeedingByPublicationPhase(t *testing.T) {
 	}
 	if value, _ := generated.Blocks[0].Option("bt-seed-unverified"); value != "false" {
 		t.Fatalf("generated staged options = %+v", generated.Blocks[0].Options)
+	}
+	if value, _ := generated.Blocks[0].Option("force-save"); value != "true" {
+		t.Fatalf("generated staged options = %+v", generated.Blocks[0].Options)
+	}
+	if value, _ := generated.Blocks[0].Option("check-integrity"); value != "true" {
+		t.Fatalf("generated missing-control options = %+v", generated.Blocks[0].Options)
 	}
 
 	published := staged
@@ -130,6 +190,23 @@ func TestPlanStartupOverridesUnverifiedSeedingByPublicationPhase(t *testing.T) {
 	}
 	if value, _ := finalSeed.Blocks[0].Option("bt-seed-unverified"); value != "true" {
 		t.Fatalf("final seed options = %+v", finalSeed.Blocks[0].Options)
+	}
+	if value, _ := finalSeed.Blocks[0].Option("force-save"); value != "false" {
+		t.Fatalf("final seed options = %+v", finalSeed.Blocks[0].Options)
+	}
+}
+
+func TestPlanStartupTrustsRetainedControlBeforeIntegrityRecovery(t *testing.T) {
+	root := t.TempDir()
+	scope := jobs.StorageScope{ID: "fedcba9876543210", StagingAnchor: root}
+	job := jobs.Job{ID: "0123456789abcdef", Source: "magnet:?xt=urn:btih:test", TargetDir: filepath.Join(root, "target"), StorageID: scope.ID, Phase: jobs.PhaseStaged, ActivityIntent: jobs.ActivityRunning}
+	fact := StartupFact{StorageAvailable: true, Torrent: true, HasMetainfo: true, HasControl: true, MetainfoPath: filepath.Join(root, "meta.torrent")}
+	plan := PlanStartup([]jobs.Job{job}, map[string]jobs.StorageScope{scope.ID: scope}, map[string]StartupFact{job.ID: fact}, nil)
+	if len(plan.Blocks) != 1 || len(plan.Problems) != 0 {
+		t.Fatalf("plan = %+v", plan)
+	}
+	if _, found := plan.Blocks[0].Option("check-integrity"); found {
+		t.Fatalf("retained control unexpectedly forced full verification: %+v", plan.Blocks[0].Options)
 	}
 }
 

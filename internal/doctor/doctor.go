@@ -8,6 +8,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/amio/aria2s/internal/jobs"
 	"github.com/amio/aria2s/internal/paths"
@@ -47,12 +48,19 @@ type Repair struct {
 }
 
 type Options struct {
-	Paths           paths.Paths
-	IsPortAvailable func(int) bool
-	Service         SupervisorStatus
-	RPCReachable    func(context.Context, state.State) bool
-	ReadLogTail     func(string, int64) ([]byte, error)
+	Paths            paths.Paths
+	IsPortAvailable  func(int) bool
+	Service          SupervisorStatus
+	RPCVersion       func(context.Context, state.State) (string, error)
+	RPCProbeTimeout  time.Duration
+	RPCSlowThreshold time.Duration
+	ReadLogTail      func(string, int64) ([]byte, error)
 }
+
+const (
+	defaultRPCProbeTimeout  = 30 * time.Second
+	defaultRPCSlowThreshold = 2 * time.Second
+)
 
 func Check(ctx context.Context, options Options) Report {
 	report := Report{Healthy: true}
@@ -103,12 +111,22 @@ func Check(ctx context.Context, options Options) Report {
 	}
 
 	scanned, scanErr := jobs.New(options.Paths.StateDir).Scan()
-	rpcReachable := options.RPCReachable != nil && options.RPCReachable(ctx, current)
+	probe := observeRPC(ctx, current, options.RPCVersion, options.RPCProbeTimeout, options.RPCSlowThreshold)
+	rpcReachable := probe.Reachable
 	portOccupied := options.IsPortAvailable != nil && !options.IsPortAvailable(current.RPCPort)
 	endpoint := fmt.Sprintf("127.0.0.1:%d", current.RPCPort)
-	if rpcReachable {
+	if probe.Slow {
+		issue := problem(
+			"RPCSlow",
+			"managed RPC is responding slowly",
+			fmt.Sprintf("%s; latency=%s", endpoint, formatLatency(probe.Latency)),
+			"If this persists, reduce seeding pressure on slow storage or set `max-overall-upload-limit` in aria2.conf.",
+		)
+		issue.Severity = "warning"
+		addIssue("RPC", issue)
+	} else if rpcReachable {
 		addSuccess("RPC", endpoint+" is responding")
-	} else if options.RPCReachable != nil || options.IsPortAvailable != nil {
+	} else if options.RPCVersion != nil || options.IsPortAvailable != nil {
 		switch {
 		case running && portOccupied:
 			addIssue("RPC", problem("RPCUnresponsive", "managed service is listening but RPC does not respond", endpoint, "Use the recommended repair below when a startup blocker is identified."))
@@ -264,9 +282,11 @@ type SupervisorStatus interface {
 }
 
 type StatusOptions struct {
-	Paths      paths.Paths
-	Service    SupervisorStatus
-	RPCVersion func(context.Context, state.State) (string, error)
+	Paths            paths.Paths
+	Service          SupervisorStatus
+	RPCVersion       func(context.Context, state.State) (string, error)
+	RPCProbeTimeout  time.Duration
+	RPCSlowThreshold time.Duration
 }
 
 type StatusReport struct {
@@ -275,6 +295,8 @@ type StatusReport struct {
 	SupervisorRunning bool
 	BinaryValid       bool
 	RPCReachable      bool
+	RPCSlow           bool
+	RPCLatency        time.Duration
 	Version           string
 	Endpoint          string
 	ConfigPath        string
@@ -298,11 +320,11 @@ func Status(ctx context.Context, options StatusOptions) StatusReport {
 		report.SupervisorRunning = options.Service.IsRunning(ctx)
 	}
 	if options.RPCVersion != nil {
-		version, err := options.RPCVersion(ctx, current)
-		if err == nil {
-			report.RPCReachable = true
-			report.Version = version
-		}
+		probe := observeRPC(ctx, current, options.RPCVersion, options.RPCProbeTimeout, options.RPCSlowThreshold)
+		report.RPCReachable = probe.Reachable
+		report.RPCSlow = probe.Slow
+		report.RPCLatency = probe.Latency
+		report.Version = probe.Version
 	}
 	return report
 }
@@ -321,6 +343,9 @@ func (report StatusReport) String() string {
 	rpcText := "unreachable"
 	if report.RPCReachable {
 		rpcText = "reachable"
+		if report.RPCSlow {
+			rpcText = fmt.Sprintf("reachable (slow, %s)", formatLatency(report.RPCLatency))
+		}
 	}
 	binaryText := "missing"
 	if report.BinaryValid {
@@ -340,6 +365,56 @@ func (report StatusReport) String() string {
 	fmt.Fprintf(&builder, "Config:     %s\n", report.ConfigPath)
 	fmt.Fprintf(&builder, "Logs:       %s\n", report.LogPath)
 	return builder.String()
+}
+
+type rpcObservation struct {
+	Reachable bool
+	Slow      bool
+	Latency   time.Duration
+	Version   string
+}
+
+func observeRPC(
+	ctx context.Context,
+	current state.State,
+	version func(context.Context, state.State) (string, error),
+	timeout time.Duration,
+	slowThreshold time.Duration,
+) rpcObservation {
+	if version == nil {
+		return rpcObservation{}
+	}
+	if timeout <= 0 {
+		timeout = defaultRPCProbeTimeout
+	}
+	if slowThreshold <= 0 {
+		slowThreshold = defaultRPCSlowThreshold
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	started := time.Now()
+	value, err := version(probeCtx, current)
+	elapsed := time.Since(started)
+	if err != nil {
+		return rpcObservation{Latency: elapsed}
+	}
+	return rpcObservation{
+		Reachable: true,
+		Slow:      elapsed > slowThreshold,
+		Latency:   elapsed,
+		Version:   value,
+	}
+}
+
+func formatLatency(value time.Duration) string {
+	switch {
+	case value < time.Millisecond:
+		return "<1ms"
+	case value < time.Second:
+		return value.Round(time.Millisecond).String()
+	default:
+		return value.Round(100 * time.Millisecond).String()
+	}
 }
 
 func isExecutable(path string) bool {
