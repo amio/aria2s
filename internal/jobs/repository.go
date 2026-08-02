@@ -1,7 +1,7 @@
 // Package jobs owns durable managed-download control facts. Manifests are the
-// authority for ownership, activity intent, publication phase, staging/final
-// payload roots, and final logical payload length; live aria2 status and
-// transport progress never become repository state.
+// authority for stable user identity, payload location, current native
+// execution binding, activity intent, and the current actionable issue. Live
+// aria2 progress never becomes repository state.
 package jobs
 
 import (
@@ -21,16 +21,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const CurrentVersion = 1
-
-type JobPhase string
+const (
+	CurrentManifestVersion = 2
+	CurrentStorageVersion  = 1
+)
 
 const (
-	PhasePending    JobPhase = "pending"
-	PhaseStaged     JobPhase = "staged"
-	PhasePublishing JobPhase = "publishing"
-	PhasePublished  JobPhase = "published"
-	PhaseRemoved    JobPhase = "removed"
+	legacyPhasePending    = "pending"
+	legacyPhaseStaged     = "staged"
+	legacyPhasePublishing = "publishing"
+	legacyPhasePublished  = "published"
+	legacyPhaseRemoved    = "removed"
 )
 
 type ActivityIntent string
@@ -38,6 +39,13 @@ type ActivityIntent string
 const (
 	ActivityRunning ActivityIntent = "running"
 	ActivityStopped ActivityIntent = "stopped"
+)
+
+type PayloadLocation string
+
+const (
+	PayloadStaging   PayloadLocation = "staging"
+	PayloadPublished PayloadLocation = "published"
 )
 
 type ObjectIdentity struct {
@@ -54,22 +62,37 @@ type StorageScope struct {
 	Marker        ObjectIdentity `json:"marker"`
 }
 
+type PayloadState struct {
+	Location  PayloadLocation `json:"location"`
+	Root      string          `json:"root,omitempty"`
+	FinalRoot string          `json:"finalRoot,omitempty"`
+	Identity  ObjectIdentity  `json:"identity,omitempty"`
+	Length    *int64          `json:"length,omitempty"`
+}
+
+type ExecutionBinding struct {
+	GID string `json:"gid"`
+}
+
+type JobIssue struct {
+	Code string `json:"code"`
+}
+
 type Job struct {
-	Version         int            `json:"version"`
-	ID              string         `json:"id"`
-	Source          string         `json:"source"`
-	TargetDir       string         `json:"targetDir"`
-	TargetIdentity  ObjectIdentity `json:"targetIdentity"`
-	StorageID       string         `json:"storageId"`
-	Phase           JobPhase       `json:"phase"`
-	ActivityIntent  ActivityIntent `json:"activityIntent"`
-	PayloadRoot     string         `json:"payloadRoot,omitempty"`
-	DestinationRoot string         `json:"destinationRoot,omitempty"`
-	PayloadIdentity ObjectIdentity `json:"payloadIdentity,omitempty"`
-	PayloadLength   *int64         `json:"payloadLength,omitempty"`
-	ProblemCode     string         `json:"problemCode,omitempty"`
-	CreatedAt       time.Time      `json:"createdAt"`
-	UpdatedAt       time.Time      `json:"updatedAt"`
+	Version        int               `json:"version"`
+	ID             string            `json:"id"`
+	Source         string            `json:"source"`
+	TargetDir      string            `json:"targetDir"`
+	TargetIdentity ObjectIdentity    `json:"targetIdentity"`
+	StorageID      string            `json:"storageId"`
+	ActivityIntent ActivityIntent    `json:"activityIntent"`
+	Removed        bool              `json:"removed,omitempty"`
+	Payload        PayloadState      `json:"payload"`
+	Execution      *ExecutionBinding `json:"execution,omitempty"`
+	Issue          *JobIssue         `json:"issue,omitempty"`
+	CreatedAt      time.Time         `json:"createdAt"`
+	UpdatedAt      time.Time         `json:"updatedAt"`
+	legacyPending  bool
 }
 
 type Token [sha256.Size]byte
@@ -111,7 +134,7 @@ func (repository *Repository) Create(job Job) (Token, error) {
 			_ = os.RemoveAll(directory)
 		}
 	}()
-	job.Version = CurrentVersion
+	job.Version = CurrentManifestVersion
 	now := time.Now().UTC()
 	if job.CreatedAt.IsZero() {
 		job.CreatedAt = now
@@ -165,7 +188,7 @@ func (repository *Repository) SaveCAS(job Job, expected Token) (Token, error) {
 	if job.CreatedAt.IsZero() {
 		job.CreatedAt = current.CreatedAt
 	}
-	job.Version = CurrentVersion
+	job.Version = CurrentManifestVersion
 	job.UpdatedAt = time.Now().UTC()
 	if err := validateJob(job); err != nil {
 		return Token{}, err
@@ -261,9 +284,9 @@ func (repository *Repository) Scan() ([]ScannedJob, error) {
 
 func (repository *Repository) SaveStorage(scope StorageScope) error {
 	if scope.Version == 0 {
-		scope.Version = CurrentVersion
+		scope.Version = CurrentStorageVersion
 	}
-	if !ValidID(scope.ID) || scope.MountPoint == "" || scope.StagingAnchor == "" {
+	if scope.Version != CurrentStorageVersion || !ValidID(scope.ID) || scope.MountPoint == "" || scope.StagingAnchor == "" {
 		return errors.New("invalid storage scope")
 	}
 	data, err := json.MarshalIndent(scope, "", "  ")
@@ -285,7 +308,7 @@ func (repository *Repository) LoadStorage(id string) (StorageScope, error) {
 	if err := json.Unmarshal(data, &scope); err != nil {
 		return StorageScope{}, err
 	}
-	if scope.Version != CurrentVersion || scope.ID != id {
+	if scope.Version != CurrentStorageVersion || scope.ID != id {
 		return StorageScope{}, errors.New("unsupported or mismatched storage scope")
 	}
 	return scope, nil
@@ -342,19 +365,21 @@ func WorkDir(scope StorageScope, jobID string) string {
 	return filepath.Join(scope.StagingAnchor, ".aria2s_staging", scope.ID, jobID)
 }
 
-// FinalRoot returns the durable publication destination. Empty
-// DestinationRoot is the backward-compatible representation used by manifests
-// created before conflict-free publication naming.
+// FinalRoot returns the prepared or committed publication destination.
 func (job Job) FinalRoot() string {
-	if job.DestinationRoot != "" {
-		return job.DestinationRoot
+	if job.Payload.FinalRoot != "" {
+		return job.Payload.FinalRoot
 	}
-	return job.PayloadRoot
+	return job.Payload.Root
 }
 
 func (job Job) PublicationRenamed() bool {
-	return job.PayloadRoot != "" && job.FinalRoot() != job.PayloadRoot
+	return job.Payload.Root != "" && job.FinalRoot() != job.Payload.Root
 }
+
+// LegacyPending reports the one migration-only distinction needed during the
+// first startup reconciliation. It is intentionally not persisted in v2.
+func (job Job) LegacyPending() bool { return job.legacyPending }
 
 func (repository *Repository) Lock(ctx context.Context, id string) (func() error, error) {
 	if !ValidID(id) {
@@ -417,6 +442,7 @@ func (repository *Repository) manifestPath(id string) string {
 }
 
 func encodeJob(job Job) ([]byte, Token, error) {
+	job.Version = CurrentManifestVersion
 	data, err := json.MarshalIndent(job, "", "  ")
 	if err != nil {
 		return nil, Token{}, err
@@ -426,9 +452,29 @@ func encodeJob(job Job) ([]byte, Token, error) {
 }
 
 func decodeJob(id string, data []byte) (Job, error) {
-	var job Job
-	if err := json.Unmarshal(data, &job); err != nil {
+	var envelope struct {
+		Version int `json:"version"`
+	}
+	if err := json.Unmarshal(data, &envelope); err != nil {
 		return Job{}, err
+	}
+	var job Job
+	switch envelope.Version {
+	case 1:
+		var legacy legacyJob
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return Job{}, err
+		}
+		if !validLegacyPhase(legacy.Phase) {
+			return Job{}, errors.New("invalid legacy job phase")
+		}
+		job = migrateV1(legacy)
+	case CurrentManifestVersion:
+		if err := json.Unmarshal(data, &job); err != nil {
+			return Job{}, err
+		}
+	default:
+		return Job{}, errors.New("unsupported job manifest version")
 	}
 	if job.ID != id {
 		return Job{}, errors.New("manifest id does not match directory")
@@ -440,38 +486,131 @@ func decodeJob(id string, data []byte) (Job, error) {
 }
 
 func validateJob(job Job) error {
-	if job.Version != 0 && job.Version != CurrentVersion {
+	if job.Version != 0 && job.Version != CurrentManifestVersion {
 		return errors.New("unsupported job manifest version")
 	}
 	if !ValidID(job.ID) || job.Source == "" || !filepath.IsAbs(job.TargetDir) || !ValidID(job.StorageID) || job.TargetIdentity.MountID == 0 || job.TargetIdentity.ObjectID == 0 {
 		return errors.New("invalid job manifest")
 	}
-	switch job.Phase {
-	case PhasePending, PhaseStaged, PhasePublishing, PhasePublished, PhaseRemoved:
+	switch job.Payload.Location {
+	case PayloadStaging, PayloadPublished:
 	default:
-		return errors.New("invalid job phase")
+		return errors.New("invalid payload location")
 	}
 	if job.ActivityIntent != ActivityRunning && job.ActivityIntent != ActivityStopped {
 		return errors.New("invalid activity intent")
 	}
-	if job.PayloadRoot != "" && (filepath.IsAbs(job.PayloadRoot) || strings.HasPrefix(filepath.Clean(job.PayloadRoot), "..")) {
+	if job.Removed && job.ActivityIntent != ActivityStopped {
+		return errors.New("removed job must be stopped")
+	}
+	if job.Payload.Root != "" && !validPayloadRoot(job.Payload.Root) {
 		return errors.New("invalid payload root")
 	}
-	if job.DestinationRoot != "" {
-		clean := filepath.Clean(job.DestinationRoot)
-		if filepath.IsAbs(job.DestinationRoot) || clean == "." || clean == ".." ||
+	if job.Payload.FinalRoot != "" {
+		clean := filepath.Clean(job.Payload.FinalRoot)
+		if filepath.IsAbs(job.Payload.FinalRoot) || clean == "." || clean == ".." ||
 			strings.HasPrefix(clean, ".."+string(filepath.Separator)) || filepath.Base(clean) != clean {
 			return errors.New("invalid destination root")
 		}
 	}
-	if job.Phase == PhasePublished && job.PublicationRenamed() && job.ActivityIntent != ActivityStopped {
+	if job.Payload.Location == PayloadPublished && job.PublicationRenamed() && job.ActivityIntent != ActivityStopped {
 		return errors.New("renamed published task must be stopped")
 	}
-	if (job.Phase == PhasePublishing || job.Phase == PhasePublished) && (job.PayloadRoot == "" || job.PayloadIdentity.MountID == 0 || job.PayloadIdentity.ObjectID == 0) {
-		return errors.New("publication phase requires payload identity")
+	if job.Payload.Location == PayloadPublished && job.PublicationRenamed() && job.Execution != nil {
+		return errors.New("renamed published task cannot bind a seed execution")
 	}
-	if job.PayloadLength != nil && *job.PayloadLength < 0 {
+	if job.Payload.FinalRoot != "" || job.Payload.Location == PayloadPublished {
+		if job.Payload.Root == "" || job.Payload.Identity.MountID == 0 || job.Payload.Identity.ObjectID == 0 {
+			return errors.New("prepared or published payload requires identity")
+		}
+	}
+	if job.Payload.Location == PayloadPublished && job.Payload.FinalRoot == "" {
+		return errors.New("published payload requires final root")
+	}
+	if job.Payload.Length != nil && *job.Payload.Length < 0 {
 		return errors.New("invalid payload length")
 	}
+	if job.Execution != nil && !ValidID(job.Execution.GID) {
+		return errors.New("invalid execution binding")
+	}
+	if job.Issue != nil {
+		if strings.TrimSpace(job.Issue.Code) == "" {
+			return errors.New("invalid job issue")
+		}
+		if _, ok := LookupIssue(job.Issue.Code); !ok {
+			return errors.New("unknown job issue code")
+		}
+	}
 	return nil
+}
+
+func validPayloadRoot(root string) bool {
+	clean := filepath.Clean(root)
+	return !filepath.IsAbs(root) && clean != "." && clean != ".." &&
+		!strings.HasPrefix(clean, ".."+string(filepath.Separator)) && filepath.Base(clean) == clean
+}
+
+type legacyJob struct {
+	Version         int            `json:"version"`
+	ID              string         `json:"id"`
+	Source          string         `json:"source"`
+	TargetDir       string         `json:"targetDir"`
+	TargetIdentity  ObjectIdentity `json:"targetIdentity"`
+	StorageID       string         `json:"storageId"`
+	Phase           string         `json:"phase"`
+	ActivityIntent  ActivityIntent `json:"activityIntent"`
+	PayloadRoot     string         `json:"payloadRoot,omitempty"`
+	DestinationRoot string         `json:"destinationRoot,omitempty"`
+	PayloadIdentity ObjectIdentity `json:"payloadIdentity,omitempty"`
+	PayloadLength   *int64         `json:"payloadLength,omitempty"`
+	ProblemCode     string         `json:"problemCode,omitempty"`
+	CreatedAt       time.Time      `json:"createdAt"`
+	UpdatedAt       time.Time      `json:"updatedAt"`
+}
+
+func migrateV1(old legacyJob) Job {
+	location := PayloadStaging
+	removed := old.Phase == legacyPhaseRemoved
+	finalRoot := ""
+	if old.Phase == legacyPhasePublishing {
+		finalRoot = old.DestinationRoot
+		if finalRoot == "" {
+			finalRoot = old.PayloadRoot
+		}
+	}
+	if old.Phase == legacyPhasePublished || (removed && old.PayloadRoot != "") {
+		location = PayloadPublished
+		finalRoot = old.DestinationRoot
+		if finalRoot == "" {
+			finalRoot = old.PayloadRoot
+		}
+	}
+	job := Job{
+		Version: CurrentManifestVersion, ID: old.ID, Source: old.Source,
+		TargetDir: old.TargetDir, TargetIdentity: old.TargetIdentity,
+		StorageID: old.StorageID, ActivityIntent: old.ActivityIntent,
+		Removed: removed,
+		Payload: PayloadState{Location: location, Root: old.PayloadRoot,
+			FinalRoot: finalRoot, Identity: old.PayloadIdentity, Length: old.PayloadLength},
+		CreatedAt: old.CreatedAt, UpdatedAt: old.UpdatedAt,
+		legacyPending: old.Phase == legacyPhasePending,
+	}
+	// A v1 GID was the JobID. Keep it only as a candidate binding until the
+	// reconciler proves authoritative absence.
+	if old.Phase != legacyPhasePublished || (old.ActivityIntent == ActivityRunning && finalRoot == old.PayloadRoot) {
+		job.Execution = &ExecutionBinding{GID: old.ID}
+	}
+	if old.ProblemCode != "" {
+		job.Issue = &JobIssue{Code: old.ProblemCode}
+	}
+	return job
+}
+
+func validLegacyPhase(phase string) bool {
+	switch phase {
+	case legacyPhasePending, legacyPhaseStaged, legacyPhasePublishing, legacyPhasePublished, legacyPhaseRemoved:
+		return true
+	default:
+		return false
+	}
 }

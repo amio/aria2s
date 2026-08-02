@@ -601,8 +601,8 @@ func projectDownloadDetail(download aria2.Download) aria2.DownloadDetail {
 		Connections:     download.Connections,
 		CanonicalStatus: download.CanonicalStatus,
 		Ownership:       download.Ownership,
-		Phase:           download.Phase,
-		ProblemCode:     download.ProblemCode,
+		IssueCode:       download.IssueCode,
+		IssueText:       download.IssueText,
 		Actions:         download.Actions,
 	}
 }

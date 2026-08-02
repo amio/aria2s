@@ -67,8 +67,8 @@ type Download struct {
 	AddedAt           time.Time
 	CanonicalStatus   string
 	Ownership         string
-	Phase             string
-	ProblemCode       string
+	IssueCode         string
+	IssueText         string
 	Actions           []string
 }
 
@@ -99,8 +99,8 @@ type DownloadDetail struct {
 	Files                  []DownloadFile
 	CanonicalStatus        string
 	Ownership              string
-	Phase                  string
-	ProblemCode            string
+	IssueCode              string
+	IssueText              string
 	Actions                []string
 }
 

@@ -576,6 +576,7 @@ var _ service.Backend = (*fakeService)(nil)
 type fakeRPC struct {
 	version  string
 	gid      string
+	dir      string
 	addedURI string
 }
 
@@ -599,14 +600,18 @@ func (rpc *fakeRPC) AddURI(_ context.Context, _ state.State, uri string, options
 	if options.GID != "" {
 		rpc.gid = options.GID
 	}
+	rpc.dir = options.Dir
 	return rpc.gid, nil
 }
 
 func (rpc *fakeRPC) AddTorrent(context.Context, state.State, []byte, aria2.AddOptions) (string, error) {
 	return rpc.gid, nil
 }
-func (rpc *fakeRPC) LifecycleStatus(context.Context, state.State, string) (aria2.LifecycleStatus, error) {
-	return aria2.LifecycleStatus{}, nil
+func (rpc *fakeRPC) LifecycleStatus(_ context.Context, _ state.State, gid string) (aria2.LifecycleStatus, error) {
+	if rpc.addedURI == "" || gid != rpc.gid {
+		return aria2.LifecycleStatus{}, &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "not found"}
+	}
+	return aria2.LifecycleStatus{GID: gid, Status: "active", Dir: rpc.dir}, nil
 }
 func (rpc *fakeRPC) Pause(context.Context, state.State, string) error                { return nil }
 func (rpc *fakeRPC) Resume(context.Context, state.State, string) error               { return nil }

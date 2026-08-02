@@ -61,58 +61,6 @@ func (app *App) ManagedExec(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	scopes, err := repository.ScanStorages()
-	if err != nil {
-		return err
-	}
-	storageMap := make(map[string]jobs.StorageScope, len(scopes))
-	for _, scope := range scopes {
-		storageMap[scope.ID] = scope
-	}
-	manifests := make([]jobs.Job, 0, len(scanned))
-	facts := make(map[string]StartupFact, len(scanned))
-	for _, scannedJob := range scanned {
-		if scannedJob.Err != nil {
-			fmt.Fprintf(os.Stderr, "aria2s: ignored corrupt managed manifest %s: %v\n", scannedJob.ID, scannedJob.Err)
-			continue
-		}
-		job := scannedJob.Job
-		// Pending has no confirmed native task and Removed is a tombstone. Neither
-		// phase may make global startup depend on its storage or work directory.
-		if job.Phase == jobs.PhasePending || job.Phase == jobs.PhaseRemoved {
-			manifests = append(manifests, job)
-			continue
-		}
-		scope, ok := storageMap[job.StorageID]
-		if !ok {
-			manifests = append(manifests, job)
-			continue
-		}
-		available := storageMatches(scope, job)
-		if available && job.Phase == jobs.PhasePublishing {
-			job, scannedJob.Token, err = reconcilePublishing(ctx, repository, job, scannedJob.Token, scope)
-			if err != nil {
-				return err
-			}
-		}
-		if available && job.Phase == jobs.PhasePublished && job.PayloadLength == nil {
-			job, scannedJob.Token, err = backfillTorrentPayloadLength(repository, job, scannedJob.Token)
-			if err != nil {
-				return err
-			}
-		}
-		fact := inspectStartupFact(repository, job, scope, available)
-		if available && job.PayloadRoot == "" && fact.InferredRoot != "" {
-			job.PayloadRoot = fact.InferredRoot
-			next, saveErr := repository.SaveCAS(job, scannedJob.Token)
-			if saveErr != nil {
-				return saveErr
-			}
-			scannedJob.Token = next
-		}
-		facts[job.ID] = fact
-		manifests = append(manifests, job)
-	}
 	nativeData, err := os.ReadFile(current.SessionPath)
 	if errors.Is(err, os.ErrNotExist) {
 		nativeData = nil
@@ -121,42 +69,49 @@ func (app *App) ManagedExec(ctx context.Context) error {
 	}
 	blocks, parseProblems := aria2.ParseSession(nativeData)
 	for _, problem := range parseProblems {
-		// Invalid blocks are omitted by the parser. The planner then either uses
+		// Invalid blocks are omitted by the parser. Reconciliation then either uses
 		// an explicitly safe fallback or persists RestartStateMissing for any
 		// managed job with artifacts; stderr keeps unscoped corruption visible.
 		fmt.Fprintf(os.Stderr, "aria2s: ignored corrupt native session block: %v\n", problem)
 	}
-	plan := PlanStartup(manifests, storageMap, facts, blocks)
-	problemByJob := make(map[string]string, len(plan.Problems))
-	for _, problem := range plan.Problems {
-		problemByJob[problem.JobID] = problem.Code
-		job, token, loadErr := repository.Load(problem.JobID)
-		if loadErr != nil {
-			return loadErr
-		}
-		if job.ProblemCode != problem.Code {
-			job.ProblemCode = problem.Code
-			if _, saveErr := repository.SaveCAS(job, token); saveErr != nil {
-				return saveErr
-			}
+	byGID := make(map[string][]aria2.SessionBlock)
+	for _, block := range blocks {
+		if gid, ok := block.Option("gid"); ok {
+			byGID[gid] = append(byGID[gid], block)
 		}
 	}
-	for _, job := range manifests {
-		if _, failed := problemByJob[job.ID]; failed || !transientStartupProblem(job.ProblemCode) {
+	boundCounts := make(map[string]int)
+	for _, item := range scanned {
+		if item.Err == nil && item.Job.Execution != nil {
+			boundCounts[item.Job.Execution.GID]++
+		}
+	}
+	var owned []aria2.SessionBlock
+	for _, item := range scanned {
+		if item.Err != nil {
+			fmt.Fprintf(os.Stderr, "aria2s: ignored corrupt managed manifest %s: %v\n", item.ID, item.Err)
 			continue
 		}
-		currentJob, token, loadErr := repository.Load(job.ID)
-		if loadErr != nil {
-			return loadErr
-		}
-		if transientStartupProblem(currentJob.ProblemCode) {
-			currentJob.ProblemCode = ""
-			if _, saveErr := repository.SaveCAS(currentJob, token); saveErr != nil {
-				return saveErr
+		var saved *aria2.SessionBlock
+		duplicate := false
+		if item.Job.Execution != nil {
+			matches := byGID[item.Job.Execution.GID]
+			duplicate = len(matches) > 1 || boundCounts[item.Job.Execution.GID] > 1
+			if len(matches) == 1 {
+				block := matches[0]
+				saved = &block
 			}
 		}
+		result, reconcileErr := app.ReconcileJob(ctx, item.ID, ReconcileInput{Mode: ReconcileStartup, SavedBlock: saved, SavedDuplicate: duplicate})
+		if reconcileErr != nil {
+			fmt.Fprintf(os.Stderr, "aria2s: omitted managed job %s: %v\n", item.ID, reconcileErr)
+			continue
+		}
+		if result.StartupBlock != nil {
+			owned = append(owned, *result.StartupBlock)
+		}
 	}
-	encoded, err := aria2.EncodeSession(plan.Blocks)
+	encoded, err := aria2.EncodeSession(owned)
 	if err != nil {
 		return err
 	}
@@ -200,126 +155,6 @@ func storageIdentityMatches(scope jobs.StorageScope, job jobs.Job) bool {
 	return err == nil && target.MountID == job.TargetIdentity.MountID && target.ObjectID == job.TargetIdentity.ObjectID
 }
 
-func reconcilePublishing(ctx context.Context, repository *jobs.Repository, job jobs.Job, token jobs.Token, scope jobs.StorageScope) (jobs.Job, jobs.Token, error) {
-	unlock, err := repository.LockPublication(ctx)
-	if err != nil {
-		return job, token, err
-	}
-	defer unlock()
-
-	source := filepath.Join(jobs.WorkDir(scope, job.ID), job.PayloadRoot)
-	destination := filepath.Join(job.TargetDir, job.FinalRoot())
-	sourceIdentity, sourceErr := publication.Identify(source)
-	destinationIdentity, destinationErr := publication.Identify(destination)
-	sourceExists, sourceUncertain := pathPresence(source, sourceErr)
-	destinationExists, destinationUncertain := pathPresence(destination, destinationErr)
-	if sourceExists && destinationExists {
-		root, allocationErr := publication.AvailableRoot(source, job.TargetDir, job.PayloadRoot)
-		if allocationErr != nil {
-			job.ProblemCode = publicationProblem(allocationErr)
-			next, saveErr := repository.SaveCAS(job, token)
-			return job, next, saveErr
-		}
-		job.DestinationRoot = root
-		next, saveErr := repository.SaveCAS(job, token)
-		if saveErr != nil {
-			return job, token, saveErr
-		}
-		token = next
-		destination = filepath.Join(job.TargetDir, job.FinalRoot())
-		destinationIdentity, destinationErr = publication.Identify(destination)
-		destinationExists, destinationUncertain = pathPresence(destination, destinationErr)
-	}
-	if sourceUncertain || destinationUncertain {
-		job.ProblemCode = "PublicationStateUncertain"
-		next, saveErr := repository.SaveCAS(job, token)
-		return job, next, saveErr
-	}
-	if sourceExists && !destinationExists {
-		if job.PayloadIdentity.ReliableAcrossRename && (sourceIdentity.MountID != job.PayloadIdentity.MountID || sourceIdentity.ObjectID != job.PayloadIdentity.ObjectID) {
-			job.ProblemCode = "PublicationPayloadMismatch"
-			next, saveErr := repository.SaveCAS(job, token)
-			return job, next, saveErr
-		}
-		if !job.PayloadIdentity.ReliableAcrossRename {
-			job.PayloadIdentity = jobIdentity(sourceIdentity)
-			next, saveErr := repository.SaveCAS(job, token)
-			if saveErr != nil {
-				return job, token, saveErr
-			}
-			token = next
-		}
-		if move, err := publication.MoveExpected(source, destination, sourceIdentity, publicationIdentity(job.TargetIdentity)); err == nil {
-			finalizeReconciledPublication(repository, &job)
-			if move.DirectorySyncUnsupported && job.ProblemCode == "" {
-				job.ProblemCode = "PowerLossDurabilityUnavailable"
-			}
-			next, saveErr := repository.SaveCAS(job, token)
-			return job, next, saveErr
-		} else {
-			job.ProblemCode = publicationProblem(err)
-		}
-	} else if !sourceExists && destinationExists {
-		if !job.PayloadIdentity.ReliableAcrossRename || (destinationIdentity.MountID == job.PayloadIdentity.MountID && destinationIdentity.ObjectID == job.PayloadIdentity.ObjectID) {
-			finalizeReconciledPublication(repository, &job)
-			next, saveErr := repository.SaveCAS(job, token)
-			return job, next, saveErr
-		} else {
-			job.ProblemCode = "PublicationPayloadMismatch"
-		}
-	} else {
-		job.ProblemCode = "PublicationPayloadMissing"
-	}
-	next, saveErr := repository.SaveCAS(job, token)
-	return job, next, saveErr
-}
-
-func backfillTorrentPayloadLength(repository *jobs.Repository, job jobs.Job, token jobs.Token) (jobs.Job, jobs.Token, error) {
-	if !recoverTorrentPayloadLength(repository, &job) {
-		return job, token, nil
-	}
-	next, err := repository.SaveCAS(job, token)
-	return job, next, err
-}
-
-func finalizeReconciledPublication(repository *jobs.Repository, job *jobs.Job) {
-	job.Phase = jobs.PhasePublished
-	job.ProblemCode = ""
-	recoverTorrentPayloadLength(repository, job)
-	if job.PublicationRenamed() {
-		job.ActivityIntent = jobs.ActivityStopped
-		return
-	}
-	if _, err := readValidatedMetainfo(repository, job.ID); err == nil {
-		return
-	} else if errors.Is(err, os.ErrNotExist) {
-		// Plain HTTP has no retained metainfo and cannot become a final seed. A
-		// crash before the hook commit must converge its intent with the phase.
-		job.ActivityIntent = jobs.ActivityStopped
-	} else {
-		// A descriptor downloaded over HTTP can promote into BitTorrent. Preserve
-		// its seed intent when retained metainfo exists but is no longer valid,
-		// and surface the corruption rather than silently treating it as HTTP.
-		job.ProblemCode = "RestartStateMissing"
-	}
-}
-
-func recoverTorrentPayloadLength(repository *jobs.Repository, job *jobs.Job) bool {
-	if job.PayloadLength != nil {
-		return false
-	}
-	metainfo, err := repository.ReadMetainfo(job.ID)
-	if err != nil {
-		return false
-	}
-	length, err := aria2.MetainfoTotalLength(metainfo)
-	if err != nil {
-		return false
-	}
-	job.PayloadLength = &length
-	return true
-}
-
 func pathPresence(path string, identifyErr error) (exists, uncertain bool) {
 	if identifyErr == nil {
 		return true, false
@@ -349,7 +184,7 @@ func inspectStartupFact(repository *jobs.Repository, job jobs.Job, scope jobs.St
 	}
 	// Published jobs are reconstructed from retained metainfo at the final
 	// target. Their staging directory is no longer part of startup truth.
-	if job.Phase == jobs.PhasePublished {
+	if job.Payload.Location == jobs.PayloadPublished {
 		return fact
 	}
 	workDir := jobs.WorkDir(scope, job.ID)
@@ -381,15 +216,15 @@ func inspectStartupFact(repository *jobs.Repository, job jobs.Job, scope jobs.St
 		roots[name] = struct{}{}
 	}
 	for _, base := range controls {
-		if _, ok := roots[base]; !ok && base != job.PayloadRoot {
+		if _, ok := roots[base]; !ok && base != job.Payload.Root {
 			return fact
 		}
 	}
 	fact.HasControl = len(controls) > 0
-	if job.PayloadRoot != "" {
+	if job.Payload.Root != "" {
 		if len(roots) == 1 {
-			if _, ok := roots[job.PayloadRoot]; ok {
-				fact.InferredRoot = job.PayloadRoot
+			if _, ok := roots[job.Payload.Root]; ok {
+				fact.InferredRoot = job.Payload.Root
 			}
 		}
 		return fact
@@ -400,20 +235,4 @@ func inspectStartupFact(repository *jobs.Repository, job jobs.Job, scope jobs.St
 		}
 	}
 	return fact
-}
-
-func transientStartupProblem(code string) bool {
-	switch code {
-	case "StorageOffline", "RestartStateMissing":
-		return true
-	default:
-		return false
-	}
-}
-
-func managedExecProblem(plan StartupPlan) error {
-	if len(plan.Problems) == 0 {
-		return nil
-	}
-	return fmt.Errorf("managed startup omitted %d job(s)", len(plan.Problems))
 }

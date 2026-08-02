@@ -18,7 +18,7 @@ func newAddCommand(application *app.App) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			fmt.Fprintf(command.OutOrStdout(), "Added managed download.\n\nGID:\n  %s\n", result.Task.GID)
+			fmt.Fprintf(command.OutOrStdout(), "Added managed download.\n\nJob ID:\n  %s\n", result.Task.JobID)
 			if result.Warning != nil {
 				fmt.Fprintf(command.ErrOrStderr(), "warning: %v\n", result.Warning)
 			}

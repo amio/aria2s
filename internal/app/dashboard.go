@@ -38,9 +38,20 @@ func (session *DashboardSession) Snapshot(ctx context.Context, query aria2.Dashb
 	if scanErr != nil {
 		return aria2.DashboardRead{}, scanErr
 	}
+	requestedJobID := query.DetailGID
 	for _, item := range scanned {
-		if item.Err == nil {
-			query.ManagedGIDs = append(query.ManagedGIDs, item.ID)
+		if item.Err != nil {
+			continue
+		}
+		if item.Job.Execution != nil {
+			query.ManagedGIDs = append(query.ManagedGIDs, item.Job.Execution.GID)
+		}
+		if requestedJobID == item.ID {
+			if item.Job.Execution != nil {
+				query.DetailGID = item.Job.Execution.GID
+			} else {
+				query.DetailGID = ""
+			}
 		}
 	}
 	read, err := session.rpc.DashboardSnapshot(ctx, session.identity, query)
@@ -50,16 +61,20 @@ func (session *DashboardSession) Snapshot(ctx context.Context, query aria2.Dashb
 	// ListErr stays nested so the TUI can retain its last complete list. The
 	// independently valid detail result must still receive app-owned status
 	// classification before it is applied.
-	return session.decorateSnapshot(read, scanned, query), nil
+	return session.decorateSnapshot(read, scanned, query, requestedJobID), nil
 }
 
-func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scanned []jobs.ScannedJob, query aria2.DashboardQuery) aria2.DashboardRead {
+func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scanned []jobs.ScannedJob, query aria2.DashboardQuery, requestedJobID ...string) aria2.DashboardRead {
 	managed := make(map[string]jobs.Job)
+	managedByExecution := make(map[string]jobs.Job)
 	for _, item := range scanned {
 		if item.Err == nil {
 			managed[item.ID] = item.Job
+			if item.Job.Execution != nil {
+				managedByExecution[item.Job.Execution.GID] = item.Job
+			}
 		} else {
-			read.Downloads.Stopped = append(read.Downloads.Stopped, aria2.Download{GID: item.ID, Status: "error", Name: "corrupt managed manifest", CanonicalStatus: string(StatusError), Ownership: string(OwnershipManaged), Phase: "corrupt", ProblemCode: "CorruptManifest", Actions: []string{"clear"}})
+			read.Downloads.Stopped = append(read.Downloads.Stopped, aria2.Download{GID: item.ID, Status: "error", Name: "corrupt managed manifest", CanonicalStatus: string(StatusError), Ownership: string(OwnershipManaged), IssueCode: "CorruptManifest", IssueText: issueText("CorruptManifest"), Actions: []string{"clear"}})
 		}
 	}
 	seen := make(map[string]struct{})
@@ -86,17 +101,19 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 	decorate := func(rows []aria2.Download) {
 		for index := range rows {
 			row := &rows[index]
-			job, owned := managed[row.GID]
+			job, owned := managedByExecution[row.GID]
 			fact := ClassificationFact{Managed: owned, NativeStatus: row.Status, NativeSeeder: row.Seeder, NativeMetadata: row.IsMetadata}
 			if owned {
-				fact.Phase, fact.Intent, fact.ProblemCode = job.Phase, job.ActivityIntent, job.ProblemCode
+				fact.Lifecycle, fact.Intent, fact.IssueCode = derivedLifecycle(job), job.ActivityIntent, issueCodeForJob(job)
 				fact.IdentityConflict = session.nativeDirConflict(job, row.Dir)
 				row.AddedAt = job.CreatedAt
-				seen[row.GID] = struct{}{}
+				row.GID = job.ID
+				seen[job.ID] = struct{}{}
 			}
 			classification := ClassifyTask(fact)
-			row.CanonicalStatus, row.Ownership, row.Phase = string(classification.Status), string(classification.Ownership), classification.Phase
-			row.ProblemCode = job.ProblemCode
+			row.CanonicalStatus, row.Ownership = string(classification.Status), string(classification.Ownership)
+			row.IssueCode = issueCodeForJob(job)
+			row.IssueText = issueText(row.IssueCode)
 			row.Actions = session.availableActions(classification, owned, job)
 		}
 	}
@@ -104,21 +121,30 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 	decorate(read.Downloads.Waiting)
 	decorate(read.Downloads.Stopped)
 	if read.Detail != nil {
-		job, owned := managed[read.Detail.GID]
+		job, owned := managedByExecution[read.Detail.GID]
+		if owned {
+			read.Detail.GID = job.ID
+		}
 		session.decorateDetail(read.Detail, job, owned)
 	}
 	for gid, job := range managed {
 		if _, ok := seen[gid]; ok {
 			continue
 		}
-		classification := ClassifyTask(ClassificationFact{Managed: true, Phase: job.Phase, Intent: job.ActivityIntent, ProblemCode: job.ProblemCode, NativeAbsent: true})
-		row := aria2.Download{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.FinalRoot(), job.Source), AddedAt: job.CreatedAt, CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), Phase: classification.Phase, ProblemCode: projectedProblemCode(job, true), Actions: session.availableActions(classification, true, job)}
+		classification := ClassifyTask(ClassificationFact{Managed: true, Lifecycle: derivedLifecycle(job), Intent: job.ActivityIntent, IssueCode: issueCodeForJob(job), NativeAbsent: true})
+		code := projectedIssueCode(job, true)
+		row := aria2.Download{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.FinalRoot(), job.Source), AddedAt: job.CreatedAt, CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), IssueCode: code, IssueText: issueText(code), Actions: session.availableActions(classification, true, job)}
 		applyPublishedMetrics(&row.CompletedLength, &row.TotalLength, &row.LengthKnown, job)
 		read.Downloads.Stopped = append(read.Downloads.Stopped, row)
 	}
-	if query.DetailGID != "" && read.Detail == nil && aria2.IsNotFound(read.DetailErr) {
+	detailJobID := query.DetailGID
+	if len(requestedJobID) > 0 && requestedJobID[0] != "" {
+		detailJobID = requestedJobID[0]
+	}
+	if detailJobID != "" && read.Detail == nil {
 		managedRow, absenceKnown := read.Managed[query.DetailGID]
-		if job, ok := managed[query.DetailGID]; ok && absenceKnown && managedRow == nil {
+		job, ok := managed[detailJobID]
+		if ok && (job.Execution == nil || (aria2.IsNotFound(read.DetailErr) && absenceKnown && managedRow == nil)) {
 			detail := session.manifestDetail(job)
 			read.Detail = &detail
 			read.DetailErr = nil
@@ -130,11 +156,12 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 }
 
 func applyPublishedMetrics(completed, total *int64, known *bool, job jobs.Job) {
-	if job.Phase != jobs.PhasePublished || job.PayloadLength == nil {
+	length := job.Payload.Length
+	if derivedLifecycle(job) != LifecyclePublished || length == nil {
 		return
 	}
-	*completed = *job.PayloadLength
-	*total = *job.PayloadLength
+	*completed = *length
+	*total = *length
 	*known = true
 }
 
@@ -144,9 +171,9 @@ func applyPublishedMetrics(completed, total *int64, known *bool, job jobs.Job) {
 func (session *DashboardSession) manifestDetail(job jobs.Job) aria2.DownloadDetail {
 	classification := ClassifyTask(ClassificationFact{
 		Managed:      true,
-		Phase:        job.Phase,
+		Lifecycle:    derivedLifecycle(job),
 		Intent:       job.ActivityIntent,
-		ProblemCode:  job.ProblemCode,
+		IssueCode:    issueCodeForJob(job),
 		NativeAbsent: true,
 	})
 	detail := aria2.DownloadDetail{
@@ -157,10 +184,10 @@ func (session *DashboardSession) manifestDetail(job jobs.Job) aria2.DownloadDeta
 		DownloadDir:     job.TargetDir,
 		CanonicalStatus: string(classification.Status),
 		Ownership:       string(classification.Ownership),
-		Phase:           classification.Phase,
-		ProblemCode:     projectedProblemCode(job, true),
+		IssueCode:       projectedIssueCode(job, true),
 		Actions:         session.availableActions(classification, true, job),
 	}
+	detail.IssueText = issueText(detail.IssueCode)
 	applyPublishedMetrics(&detail.CompletedLength, &detail.TotalLength, &detail.LengthKnown, job)
 	return detail
 }
@@ -173,24 +200,24 @@ func (session *DashboardSession) decorateDetail(detail *aria2.DownloadDetail, jo
 		NativeMetadata: detail.IsMetadata,
 	}
 	if managed {
-		fact.Phase = job.Phase
+		fact.Lifecycle = derivedLifecycle(job)
 		fact.Intent = job.ActivityIntent
-		fact.ProblemCode = job.ProblemCode
+		fact.IssueCode = issueCodeForJob(job)
 		fact.IdentityConflict = session.nativeDirConflict(job, detail.DownloadDir)
 	}
 	classification := ClassifyTask(fact)
 	detail.CanonicalStatus = string(classification.Status)
 	detail.Ownership = string(classification.Ownership)
-	detail.Phase = classification.Phase
-	detail.ProblemCode = job.ProblemCode
+	detail.IssueCode = issueCodeForJob(job)
+	detail.IssueText = issueText(detail.IssueCode)
 	detail.Actions = session.availableActions(classification, managed, job)
 }
 
-func projectedProblemCode(job jobs.Job, nativeAbsent bool) string {
-	if job.ProblemCode != "" {
-		return job.ProblemCode
+func projectedIssueCode(job jobs.Job, nativeAbsent bool) string {
+	if code := issueCodeForJob(job); code != "" {
+		return code
 	}
-	if nativeAbsent && job.Phase == jobs.PhasePublishing {
+	if nativeAbsent && derivedLifecycle(job) == LifecyclePublishing {
 		return "PublicationRecoveryRequired"
 	}
 	return ""
@@ -226,7 +253,12 @@ func pageManagedHistory(rows []aria2.Download, managed map[string]jobs.Job, page
 }
 
 func (session *DashboardSession) availableActions(classification TaskClassification, managed bool, job jobs.Job) []string {
-	if managed && job.Phase == jobs.PhasePublishing {
+	if managed && job.Issue != nil {
+		if metadata, ok := jobs.LookupIssue(job.Issue.Code); ok && len(metadata.Actions) > 0 {
+			return metadata.Actions
+		}
+	}
+	if managed && derivedLifecycle(job) == LifecyclePublishing {
 		if classification.Status != StatusError {
 			return nil
 		}
@@ -242,7 +274,7 @@ func (session *DashboardSession) availableActions(classification TaskClassificat
 		actions = append(actions, "resume", "remove")
 	case StatusError:
 		actions = append(actions, "retry")
-		if !managed || (job.Phase != jobs.PhasePublishing && job.Phase != jobs.PhaseRemoved) {
+		if !managed || (derivedLifecycle(job) != LifecyclePublishing && !job.Removed) {
 			actions = append(actions, "remove")
 		}
 	case StatusComplete:
@@ -262,11 +294,11 @@ func (session *DashboardSession) hasMetainfo(gid string) bool {
 }
 
 func (session *DashboardSession) nativeDirConflict(job jobs.Job, nativeDir string) bool {
-	if nativeDir == "" || job.Phase == jobs.PhaseRemoved {
+	if nativeDir == "" || job.Removed {
 		return false
 	}
 	expected := job.TargetDir
-	if job.Phase != jobs.PhasePublished {
+	if derivedLifecycle(job) != LifecyclePublished {
 		scope, err := jobs.New(session.app.options.Paths.StateDir).LoadStorage(job.StorageID)
 		if err != nil {
 			return true
@@ -274,6 +306,35 @@ func (session *DashboardSession) nativeDirConflict(job jobs.Job, nativeDir strin
 		expected = jobs.WorkDir(scope, job.ID)
 	}
 	return filepath.Clean(nativeDir) != filepath.Clean(expected)
+}
+
+func issueCodeForJob(job jobs.Job) string {
+	if job.Issue != nil {
+		return job.Issue.Code
+	}
+	return ""
+}
+
+func derivedLifecycle(job jobs.Job) ManagedLifecycle {
+	switch {
+	case job.Removed:
+		return LifecycleRemoved
+	case job.Payload.Location == jobs.PayloadPublished:
+		return LifecyclePublished
+	case job.Payload.FinalRoot != "":
+		return LifecyclePublishing
+	case job.Execution == nil:
+		return LifecyclePending
+	default:
+		return LifecycleStaged
+	}
+}
+
+func issueText(code string) string {
+	if metadata, ok := jobs.LookupIssue(code); ok {
+		return metadata.Text
+	}
+	return ""
 }
 
 func firstNonempty(values ...string) string {
@@ -289,7 +350,14 @@ func (session *DashboardSession) TaskDetail(ctx context.Context, gid string) (ar
 	ctx, cancel := context.WithTimeout(ctx, session.app.options.DashboardReadTimeout)
 	defer cancel()
 	job, _, loadErr := jobs.New(session.app.options.Paths.StateDir).Load(gid)
-	detail, err := session.rpc.TaskDetail(ctx, session.identity, gid)
+	nativeGID := gid
+	if loadErr == nil && job.Execution != nil {
+		nativeGID = job.Execution.GID
+	}
+	if loadErr == nil && job.Execution == nil {
+		return session.manifestDetail(job), nil
+	}
+	detail, err := session.rpc.TaskDetail(ctx, session.identity, nativeGID)
 	if err != nil {
 		if loadErr == nil && aria2.IsNotFound(err) {
 			return session.manifestDetail(job), nil
@@ -297,6 +365,7 @@ func (session *DashboardSession) TaskDetail(ctx context.Context, gid string) (ar
 		return detail, err
 	}
 	if loadErr == nil {
+		detail.GID = job.ID
 		session.decorateDetail(&detail, job, true)
 	} else {
 		session.decorateDetail(&detail, jobs.Job{}, false)
@@ -311,7 +380,7 @@ func (session *DashboardSession) AddURI(ctx context.Context, uri string, options
 	if err != nil {
 		return AddResult{}, err
 	}
-	return AddResult{GID: result.Task.GID, Warning: result.Warning}, nil
+	return AddResult{GID: result.Task.JobID, Warning: result.Warning}, nil
 }
 
 func (session *DashboardSession) RecentDirs(ctx context.Context) ([]string, error) {

@@ -8,25 +8,31 @@ import "github.com/amio/aria2s/internal/jobs"
 type TaskStatus string
 type TaskOwnership string
 type TaskAction string
+type ManagedLifecycle string
 
 const (
-	StatusDownloading  TaskStatus    = "downloading"
-	StatusSeeding      TaskStatus    = "seeding"
-	StatusMetadata     TaskStatus    = "metadata"
-	StatusWaiting      TaskStatus    = "waiting"
-	StatusPaused       TaskStatus    = "paused"
-	StatusComplete     TaskStatus    = "complete"
-	StatusError        TaskStatus    = "error"
-	StatusRemoved      TaskStatus    = "removed"
-	OwnershipManaged   TaskOwnership = "managed"
-	OwnershipUnmanaged TaskOwnership = "unmanaged"
+	StatusDownloading   TaskStatus       = "downloading"
+	StatusSeeding       TaskStatus       = "seeding"
+	StatusMetadata      TaskStatus       = "metadata"
+	StatusWaiting       TaskStatus       = "waiting"
+	StatusPaused        TaskStatus       = "paused"
+	StatusComplete      TaskStatus       = "complete"
+	StatusError         TaskStatus       = "error"
+	StatusRemoved       TaskStatus       = "removed"
+	OwnershipManaged    TaskOwnership    = "managed"
+	OwnershipUnmanaged  TaskOwnership    = "unmanaged"
+	LifecyclePending    ManagedLifecycle = "pending"
+	LifecycleStaged     ManagedLifecycle = "staged"
+	LifecyclePublishing ManagedLifecycle = "publishing"
+	LifecyclePublished  ManagedLifecycle = "published"
+	LifecycleRemoved    ManagedLifecycle = "removed"
 )
 
 type ClassificationFact struct {
 	Managed          bool
-	Phase            jobs.JobPhase
+	Lifecycle        ManagedLifecycle
 	Intent           jobs.ActivityIntent
-	ProblemCode      string
+	IssueCode        string
 	NativeStatus     string
 	NativeSeeder     bool
 	NativeMetadata   bool
@@ -37,26 +43,29 @@ type ClassificationFact struct {
 type TaskClassification struct {
 	Status    TaskStatus
 	Ownership TaskOwnership
-	Phase     string
 	Actions   []TaskAction
 }
 
 func ClassifyTask(fact ClassificationFact) TaskClassification {
 	result := TaskClassification{Ownership: OwnershipUnmanaged}
+	issueIsError := false
+	if fact.IssueCode != "" {
+		metadata, known := jobs.LookupIssue(fact.IssueCode)
+		issueIsError = !known || metadata.Severity == "error"
+	}
 	if fact.Managed {
 		result.Ownership = OwnershipManaged
-		result.Phase = string(fact.Phase)
 	}
 	switch {
 	case fact.Managed && fact.IdentityConflict:
 		result.Status = StatusError
-	case fact.Managed && fact.Phase == jobs.PhaseRemoved && fact.ProblemCode != "":
+	case fact.Managed && fact.Lifecycle == LifecycleRemoved && issueIsError:
 		result.Status = StatusError
-	case fact.Managed && fact.Phase == jobs.PhaseRemoved:
+	case fact.Managed && fact.Lifecycle == LifecycleRemoved:
 		result.Status = StatusRemoved
-	case fact.Managed && fact.ProblemCode != "" && fact.ProblemCode != "PowerLossDurabilityUnavailable":
+	case fact.Managed && issueIsError:
 		result.Status = StatusError
-	case fact.Managed && fact.Phase == jobs.PhasePublishing && fact.NativeAbsent:
+	case fact.Managed && fact.Lifecycle == LifecyclePublishing && fact.NativeAbsent:
 		result.Status = StatusError
 	case fact.NativeStatus == "active" && fact.NativeMetadata:
 		result.Status = StatusMetadata
@@ -68,7 +77,7 @@ func ClassifyTask(fact ClassificationFact) TaskClassification {
 		result.Status = StatusWaiting
 	case fact.NativeStatus == "paused":
 		result.Status = StatusPaused
-	case fact.Managed && fact.Phase == jobs.PhaseStaged && fact.NativeStatus == "complete" && fact.NativeMetadata:
+	case fact.Managed && fact.Lifecycle == LifecycleStaged && fact.NativeStatus == "complete" && fact.NativeMetadata:
 		result.Status = StatusMetadata
 	case fact.NativeStatus == "complete":
 		result.Status = StatusComplete
@@ -76,11 +85,11 @@ func ClassifyTask(fact ClassificationFact) TaskClassification {
 		result.Status = StatusError
 	case fact.NativeStatus == "removed":
 		result.Status = StatusRemoved
-	case fact.Managed && fact.Intent == jobs.ActivityStopped && fact.Phase != jobs.PhasePublished:
+	case fact.Managed && fact.Intent == jobs.ActivityStopped && fact.Lifecycle != LifecyclePublished:
 		result.Status = StatusPaused
-	case fact.Managed && fact.Intent == jobs.ActivityStopped && fact.Phase == jobs.PhasePublished:
+	case fact.Managed && fact.Intent == jobs.ActivityStopped && fact.Lifecycle == LifecyclePublished:
 		result.Status = StatusComplete
-	case fact.Managed && fact.Phase == jobs.PhasePublishing:
+	case fact.Managed && fact.Lifecycle == LifecyclePublishing:
 		result.Status = StatusDownloading
 	default:
 		result.Status = StatusError

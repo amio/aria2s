@@ -25,14 +25,43 @@ type dashboardRPCStub struct {
 	cleanupErr  error
 	detail      aria2.DownloadDetail
 	detailErr   error
+	queries     []aria2.DashboardQuery
+	detailGIDs  []string
 }
 
-func (rpc *dashboardRPCStub) DashboardSnapshot(_ context.Context, current state.State, _ aria2.DashboardQuery) (aria2.DashboardRead, error) {
+func (rpc *dashboardRPCStub) DashboardSnapshot(_ context.Context, current state.State, query aria2.DashboardQuery) (aria2.DashboardRead, error) {
 	rpc.identities = append(rpc.identities, current)
+	rpc.queries = append(rpc.queries, query)
 	return rpc.snapshot, rpc.snapshotErr
 }
-func (rpc *dashboardRPCStub) TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error) {
+func (rpc *dashboardRPCStub) TaskDetail(_ context.Context, _ state.State, gid string) (aria2.DownloadDetail, error) {
+	rpc.detailGIDs = append(rpc.detailGIDs, gid)
 	return rpc.detail, rpc.detailErr
+}
+
+func TestDashboardMapsStableJobIDToReplaceableExecutionOnlyAtRPCBoundary(t *testing.T) {
+	const jobID, executionGID = "1010101010101010", "2020202020202020"
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	if err := state.Save(servicePaths.StateFile, state.State{RPCSecret: "secret"}); err != nil {
+		t.Fatal(err)
+	}
+	job := jobs.Job{ID: jobID, Source: "https://example.test/x", TargetDir: filepath.Join(root, "downloads"), TargetIdentity: jobs.ObjectIdentity{MountID: 1, ObjectID: 1}, StorageID: "3030303030303030", ActivityIntent: jobs.ActivityRunning, Payload: jobs.PayloadState{Location: jobs.PayloadStaging}, Execution: &jobs.ExecutionBinding{GID: executionGID}}
+	if _, err := jobs.New(servicePaths.StateDir).Create(job); err != nil {
+		t.Fatal(err)
+	}
+	rpc := &dashboardRPCStub{snapshot: aria2.DashboardRead{Downloads: aria2.DownloadSnapshot{Active: []aria2.Download{{GID: executionGID, Status: "active"}}}, Detail: &aria2.DownloadDetail{GID: executionGID, Status: "active"}}}
+	session := &DashboardSession{app: New(Options{Paths: servicePaths, DashboardReadTimeout: time.Second}), rpc: rpc}
+	read, err := session.Snapshot(context.Background(), aria2.DashboardQuery{DetailGID: jobID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rpc.queries) != 1 || rpc.queries[0].DetailGID != executionGID || len(rpc.queries[0].ManagedGIDs) != 1 || rpc.queries[0].ManagedGIDs[0] != executionGID {
+		t.Fatalf("RPC query did not use execution binding: %+v", rpc.queries)
+	}
+	if len(read.Downloads.Active) != 1 || read.Downloads.Active[0].GID != jobID || read.Detail == nil || read.Detail.GID != jobID {
+		t.Fatalf("Dashboard exposed replaceable execution identity: %+v", read)
+	}
 }
 
 func TestDashboardTaskDetailFallsBackToPublishedManifestAfterNativeDetach(t *testing.T) {
@@ -41,17 +70,14 @@ func TestDashboardTaskDetailFallsBackToPublishedManifestAfterNativeDetach(t *tes
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	length := int64(1234)
 	job := jobs.Job{
-		ID:              gid,
-		Source:          "https://example.test/payload.bin",
-		TargetDir:       filepath.Join(root, "downloads"),
-		TargetIdentity:  jobs.ObjectIdentity{MountID: 1, ObjectID: 1},
-		StorageID:       "928cecc78f5f8414",
-		Phase:           jobs.PhasePublished,
-		ActivityIntent:  jobs.ActivityStopped,
-		PayloadRoot:     "payload.bin",
-		DestinationRoot: "payload (1).bin",
-		PayloadIdentity: jobs.ObjectIdentity{MountID: 1, ObjectID: 2},
-		PayloadLength:   &length,
+		ID:             gid,
+		Source:         "https://example.test/payload.bin",
+		TargetDir:      filepath.Join(root, "downloads"),
+		TargetIdentity: jobs.ObjectIdentity{MountID: 1, ObjectID: 1},
+		StorageID:      "928cecc78f5f8414",
+		ActivityIntent: jobs.ActivityStopped,
+		Payload: jobs.PayloadState{Location: jobs.PayloadPublished, Root: "payload.bin", FinalRoot: "payload (1).bin",
+			Identity: jobs.ObjectIdentity{MountID: 1, ObjectID: 2}, Length: &length},
 	}
 	if _, err := jobs.New(servicePaths.StateDir).Create(job); err != nil {
 		t.Fatal(err)
@@ -63,10 +89,36 @@ func TestDashboardTaskDetailFallsBackToPublishedManifestAfterNativeDetach(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if detail.DownloadDir != job.TargetDir || detail.Name != job.DestinationRoot ||
+	if detail.DownloadDir != job.TargetDir || detail.Name != job.Payload.FinalRoot ||
 		detail.CanonicalStatus != string(StatusComplete) || detail.CompletedLength != length ||
 		detail.TotalLength != length || !detail.LengthKnown {
 		t.Fatalf("manifest detail = %#v", detail)
+	}
+}
+
+func TestDashboardSnapshotDoesNotQueryNativeDetailForManifestOnlyJob(t *testing.T) {
+	const jobID = "9292929292929292"
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	job := jobs.Job{
+		ID: jobID, Source: "https://example.test/x", TargetDir: filepath.Join(root, "downloads"),
+		TargetIdentity: jobs.ObjectIdentity{MountID: 1, ObjectID: 1}, StorageID: "9393939393939393",
+		ActivityIntent: jobs.ActivityRunning, Payload: jobs.PayloadState{Location: jobs.PayloadStaging},
+	}
+	if _, err := jobs.New(servicePaths.StateDir).Create(job); err != nil {
+		t.Fatal(err)
+	}
+	rpc := &dashboardRPCStub{}
+	session := &DashboardSession{app: New(Options{Paths: servicePaths, DashboardReadTimeout: time.Second}), rpc: rpc}
+	read, err := session.Snapshot(context.Background(), aria2.DashboardQuery{DetailGID: jobID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rpc.queries) != 1 || rpc.queries[0].DetailGID != "" {
+		t.Fatalf("manifest-only JobID leaked to native detail query: %+v", rpc.queries)
+	}
+	if read.Detail == nil || read.Detail.GID != jobID {
+		t.Fatalf("manifest detail was not projected: %+v", read.Detail)
 	}
 }
 func (*dashboardRPCStub) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
@@ -176,15 +228,16 @@ func TestDashboardSnapshotDecoratesDetailWhenListFails(t *testing.T) {
 }
 
 func TestDashboardDecoratesManagedDetail(t *testing.T) {
-	const gid = "928cecc78f5f8415"
+	const jobID, executionGID = "928cecc78f5f8415", "928cecc78f5f8416"
 	job := jobs.Job{
-		ID:             gid,
+		ID:             jobID,
 		TargetDir:      "/downloads",
-		Phase:          jobs.PhasePublished,
 		ActivityIntent: jobs.ActivityRunning,
+		Payload:        jobs.PayloadState{Location: jobs.PayloadPublished},
+		Execution:      &jobs.ExecutionBinding{GID: executionGID},
 	}
 	detail := aria2.DownloadDetail{
-		GID:         gid,
+		GID:         executionGID,
 		Status:      "active",
 		DownloadDir: job.TargetDir,
 	}
@@ -192,33 +245,33 @@ func TestDashboardDecoratesManagedDetail(t *testing.T) {
 
 	got := session.decorateSnapshot(
 		aria2.DashboardRead{Detail: &detail},
-		[]jobs.ScannedJob{{ID: gid, Job: job}},
-		aria2.DashboardQuery{DetailGID: gid},
+		[]jobs.ScannedJob{{ID: jobID, Job: job}},
+		aria2.DashboardQuery{DetailGID: executionGID},
 	)
 
 	if got.Detail == nil || got.Detail.CanonicalStatus != string(StatusDownloading) ||
 		got.Detail.Ownership != string(OwnershipManaged) ||
-		got.Detail.Phase != string(jobs.PhasePublished) ||
 		!reflect.DeepEqual(got.Detail.Actions, []string{"pause", "remove"}) {
 		t.Fatalf("managed detail classification = %#v", got.Detail)
 	}
 }
 
 func TestDashboardKeepsCompletedManagedMetadataInMetadataStateUntilPromotion(t *testing.T) {
-	const gid = "928cecc78f5f8415"
+	const jobID, executionGID = "928cecc78f5f8415", "928cecc78f5f8416"
 	job := jobs.Job{
-		ID:             gid,
+		ID:             jobID,
 		TargetDir:      "/downloads",
-		Phase:          jobs.PhaseStaged,
 		ActivityIntent: jobs.ActivityRunning,
+		Payload:        jobs.PayloadState{Location: jobs.PayloadStaging},
+		Execution:      &jobs.ExecutionBinding{GID: executionGID},
 	}
 	metadata := aria2.Download{
-		GID:        gid,
+		GID:        executionGID,
 		Status:     "complete",
 		IsMetadata: true,
 	}
 	detail := aria2.DownloadDetail{
-		GID:        gid,
+		GID:        executionGID,
 		Status:     "complete",
 		IsMetadata: true,
 	}
@@ -227,10 +280,10 @@ func TestDashboardKeepsCompletedManagedMetadataInMetadataStateUntilPromotion(t *
 	got := session.decorateSnapshot(
 		aria2.DashboardRead{
 			Detail:  &detail,
-			Managed: map[string]*aria2.Download{gid: &metadata},
+			Managed: map[string]*aria2.Download{executionGID: &metadata},
 		},
-		[]jobs.ScannedJob{{ID: gid, Job: job}},
-		aria2.DashboardQuery{DetailGID: gid},
+		[]jobs.ScannedJob{{ID: jobID, Job: job}},
+		aria2.DashboardQuery{DetailGID: executionGID},
 	)
 
 	if len(got.Downloads.Stopped) != 1 || got.Downloads.Stopped[0].CanonicalStatus != string(StatusMetadata) ||
@@ -249,9 +302,9 @@ func TestDashboardProjectsDetachedPublishingAsRecoverableManifestDetail(t *testi
 		ID:             gid,
 		Source:         "magnet:?xt=urn:btih:example",
 		TargetDir:      "/downloads",
-		Phase:          jobs.PhasePublishing,
 		ActivityIntent: jobs.ActivityRunning,
-		PayloadRoot:    "payload.cbr",
+		Payload: jobs.PayloadState{Location: jobs.PayloadStaging, Root: "payload.cbr", FinalRoot: "payload.cbr",
+			Identity: jobs.ObjectIdentity{MountID: 1, ObjectID: 2}},
 	}
 	session := &DashboardSession{}
 	read := aria2.DashboardRead{
@@ -264,11 +317,11 @@ func TestDashboardProjectsDetachedPublishingAsRecoverableManifestDetail(t *testi
 		t.Fatalf("manifest row count = %d", len(got.Downloads.Stopped))
 	}
 	row := got.Downloads.Stopped[0]
-	if row.CanonicalStatus != string(StatusError) || row.ProblemCode != "PublicationRecoveryRequired" || !reflect.DeepEqual(row.Actions, []string{"retry"}) {
+	if row.CanonicalStatus != string(StatusError) || row.IssueCode != "PublicationRecoveryRequired" || row.IssueText == "" || !reflect.DeepEqual(row.Actions, []string{"retry"}) {
 		t.Fatalf("manifest recovery row = %#v", row)
 	}
 	if got.Detail == nil || got.Detail.GID != gid || got.Detail.CanonicalStatus != string(StatusError) ||
-		got.Detail.ProblemCode != "PublicationRecoveryRequired" ||
+		got.Detail.IssueCode != "PublicationRecoveryRequired" ||
 		got.Detail.PrimaryURI != job.Source || got.Detail.DownloadDir != job.TargetDir ||
 		!reflect.DeepEqual(got.Detail.Actions, []string{"retry"}) ||
 		got.DetailErr != nil || got.DetailSourceErr != nil {
@@ -282,14 +335,12 @@ func TestDashboardProjectsPublishedPayloadMetricsInRowAndDetail(t *testing.T) {
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	length := int64(1234)
 	job := jobs.Job{
-		ID:              gid,
-		Source:          "https://example.test/payload.bin",
-		TargetDir:       filepath.Join(root, "downloads"),
-		Phase:           jobs.PhasePublished,
-		ActivityIntent:  jobs.ActivityStopped,
-		PayloadRoot:     "payload.bin",
-		DestinationRoot: "payload (1).bin",
-		PayloadLength:   &length,
+		ID:             gid,
+		Source:         "https://example.test/payload.bin",
+		TargetDir:      filepath.Join(root, "downloads"),
+		ActivityIntent: jobs.ActivityStopped,
+		Payload: jobs.PayloadState{Location: jobs.PayloadPublished, Root: "payload.bin", FinalRoot: "payload (1).bin",
+			Identity: jobs.ObjectIdentity{MountID: 1, ObjectID: 2}, Length: &length},
 	}
 	session := &DashboardSession{app: New(Options{Paths: servicePaths})}
 	notFound := &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "GID is not found"}
@@ -304,18 +355,18 @@ func TestDashboardProjectsPublishedPayloadMetricsInRowAndDetail(t *testing.T) {
 	}
 	row := got.Downloads.Stopped[0]
 	if row.CanonicalStatus != string(StatusComplete) ||
-		row.Name != job.DestinationRoot ||
+		row.Name != job.Payload.FinalRoot ||
 		row.CompletedLength != length || row.TotalLength != length || !row.LengthKnown {
 		t.Fatalf("published row = %#v", row)
 	}
 	if got.Detail == nil || got.Detail.CanonicalStatus != string(StatusComplete) ||
-		got.Detail.Name != job.DestinationRoot ||
+		got.Detail.Name != job.Payload.FinalRoot ||
 		got.Detail.CompletedLength != length || got.Detail.TotalLength != length ||
 		!got.Detail.LengthKnown {
 		t.Fatalf("published detail = %#v", got.Detail)
 	}
 
-	job.PayloadLength = nil
+	job.Payload.Length = nil
 	unknown := session.decorateSnapshot(
 		aria2.DashboardRead{Managed: map[string]*aria2.Download{gid: nil}},
 		[]jobs.ScannedJob{{ID: gid, Job: job}},
@@ -329,21 +380,22 @@ func TestDashboardProjectsPublishedPayloadMetricsInRowAndDetail(t *testing.T) {
 }
 
 func TestDashboardKeepsNativeMetricsAuthoritativeForManagedTask(t *testing.T) {
-	const gid = "928cecc78f5f8415"
+	const jobID, executionGID = "928cecc78f5f8415", "928cecc78f5f8416"
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	manifestLength := int64(1234)
 	createdAt := time.Date(2026, time.July, 20, 10, 0, 0, 0, time.UTC)
 	job := jobs.Job{
-		ID:             gid,
+		ID:             jobID,
 		TargetDir:      filepath.Join(root, "downloads"),
-		Phase:          jobs.PhasePublished,
 		ActivityIntent: jobs.ActivityStopped,
-		PayloadLength:  &manifestLength,
-		CreatedAt:      createdAt,
+		Payload: jobs.PayloadState{Location: jobs.PayloadPublished, Root: "payload.bin", FinalRoot: "payload.bin",
+			Identity: jobs.ObjectIdentity{MountID: 1, ObjectID: 2}, Length: &manifestLength},
+		Execution: &jobs.ExecutionBinding{GID: executionGID},
+		CreatedAt: createdAt,
 	}
 	row := aria2.Download{
-		GID:               gid,
+		GID:               executionGID,
 		Status:            "complete",
 		Dir:               job.TargetDir,
 		CompletedLength:   99,
@@ -353,7 +405,7 @@ func TestDashboardKeepsNativeMetricsAuthoritativeForManagedTask(t *testing.T) {
 		UploadLengthKnown: true,
 	}
 	detail := aria2.DownloadDetail{
-		GID:             gid,
+		GID:             executionGID,
 		Status:          "complete",
 		DownloadDir:     job.TargetDir,
 		CompletedLength: 99,
@@ -365,10 +417,10 @@ func TestDashboardKeepsNativeMetricsAuthoritativeForManagedTask(t *testing.T) {
 		aria2.DashboardRead{
 			Downloads: aria2.DownloadSnapshot{Stopped: []aria2.Download{row}},
 			Detail:    &detail,
-			Managed:   map[string]*aria2.Download{gid: &row},
+			Managed:   map[string]*aria2.Download{executionGID: &row},
 		},
-		[]jobs.ScannedJob{{ID: gid, Job: job}},
-		aria2.DashboardQuery{DetailGID: gid},
+		[]jobs.ScannedJob{{ID: jobID, Job: job}},
+		aria2.DashboardQuery{DetailGID: executionGID},
 	)
 
 	if len(got.Downloads.Stopped) != 1 ||

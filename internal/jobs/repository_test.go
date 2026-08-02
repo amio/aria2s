@@ -5,11 +5,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 func validJob(root string) Job {
-	return Job{ID: "0123456789abcdef", Source: "https://example.test/file", TargetDir: filepath.Join(root, "target"), TargetIdentity: ObjectIdentity{MountID: 1, ObjectID: 1}, StorageID: "fedcba9876543210", Phase: PhasePending, ActivityIntent: ActivityRunning}
+	return Job{ID: "0123456789abcdef", Source: "https://example.test/file", TargetDir: filepath.Join(root, "target"), TargetIdentity: ObjectIdentity{MountID: 1, ObjectID: 1}, StorageID: "fedcba9876543210", ActivityIntent: ActivityRunning, Payload: PayloadState{Location: PayloadStaging}}
 }
 
 func TestDeleteCorruptRemovesManifestDirectoryWithoutLeavingScanRow(t *testing.T) {
@@ -41,7 +42,7 @@ func TestRepositoryCASAndCorruptScan(t *testing.T) {
 	if err != nil || loadedToken != token {
 		t.Fatalf("load: token=%v err=%v", loadedToken, err)
 	}
-	loaded.Phase = PhaseStaged
+	loaded.Execution = &ExecutionBinding{GID: "1111111111111111"}
 	next, err := repository.SaveCAS(loaded, token)
 	if err != nil {
 		t.Fatal(err)
@@ -104,11 +105,9 @@ func TestLoadStorageIgnoresLegacyPublicationCapability(t *testing.T) {
 func TestJobPayloadLengthIsOptionalAndRoundTripsZero(t *testing.T) {
 	repository := New(t.TempDir())
 	job := validJob(t.TempDir())
-	job.Phase = PhasePublished
-	job.PayloadRoot = "empty.bin"
-	job.PayloadIdentity = ObjectIdentity{MountID: 1, ObjectID: 2}
+	job.Payload = PayloadState{Location: PayloadPublished, Root: "empty.bin", FinalRoot: "empty.bin", Identity: ObjectIdentity{MountID: 1, ObjectID: 2}}
 	length := int64(0)
-	job.PayloadLength = &length
+	job.Payload.Length = &length
 	if _, err := repository.Create(job); err != nil {
 		t.Fatal(err)
 	}
@@ -116,8 +115,8 @@ func TestJobPayloadLengthIsOptionalAndRoundTripsZero(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.PayloadLength == nil || *loaded.PayloadLength != 0 {
-		t.Fatalf("payload length = %v, want known zero", loaded.PayloadLength)
+	if loaded.Payload.Length == nil || *loaded.Payload.Length != 0 {
+		t.Fatalf("payload length = %v, want known zero", loaded.Payload.Length)
 	}
 
 	legacy := validJob(t.TempDir())
@@ -129,19 +128,16 @@ func TestJobPayloadLengthIsOptionalAndRoundTripsZero(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.PayloadLength != nil {
-		t.Fatalf("legacy payload length = %v, want unknown", loaded.PayloadLength)
+	if loaded.Payload.Length != nil {
+		t.Fatalf("legacy payload length = %v, want unknown", loaded.Payload.Length)
 	}
 }
 
 func TestRenamedPublishedRootRoundTripsAndRequiresStoppedIntent(t *testing.T) {
 	repository := New(t.TempDir())
 	job := validJob(t.TempDir())
-	job.Phase = PhasePublished
 	job.ActivityIntent = ActivityStopped
-	job.PayloadRoot = "Comics"
-	job.DestinationRoot = "Comics (1)"
-	job.PayloadIdentity = ObjectIdentity{MountID: 1, ObjectID: 2}
+	job.Payload = PayloadState{Location: PayloadPublished, Root: "Comics", FinalRoot: "Comics (1)", Identity: ObjectIdentity{MountID: 1, ObjectID: 2}}
 	if _, err := repository.Create(job); err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +145,7 @@ func TestRenamedPublishedRootRoundTripsAndRequiresStoppedIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.FinalRoot() != job.DestinationRoot || !loaded.PublicationRenamed() {
+	if loaded.FinalRoot() != job.Payload.FinalRoot || !loaded.PublicationRenamed() {
 		t.Fatalf("renamed publication facts=%+v", loaded)
 	}
 
@@ -157,5 +153,67 @@ func TestRenamedPublishedRootRoundTripsAndRequiresStoppedIntent(t *testing.T) {
 	job.ActivityIntent = ActivityRunning
 	if _, err := repository.Create(job); err == nil {
 		t.Fatal("running renamed publication was accepted")
+	}
+}
+
+func TestMixedManifestVersionsMigrateLazilyWithoutChangingStorageSchema(t *testing.T) {
+	root := t.TempDir()
+	repository := New(root)
+	legacyID := "1111111111111111"
+	legacyDir := filepath.Join(root, "jobs", legacyID)
+	if err := os.MkdirAll(legacyDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"version":1,"id":"1111111111111111","source":"https://example.test/x","targetDir":"/tmp/target","targetIdentity":{"mountId":1,"objectId":2,"reliableAcrossRename":true},"storageId":"2222222222222222","phase":"staged","activityIntent":"running","problemCode":"RestartStateMissing","createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}`
+	manifest := filepath.Join(legacyDir, "manifest.json")
+	if err := os.WriteFile(manifest, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	job, token, err := repository.Load(legacyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Version != CurrentManifestVersion || job.Execution == nil || job.Execution.GID != legacyID || job.Issue == nil {
+		t.Fatalf("v1 conversion = %+v", job)
+	}
+	if _, err := repository.SaveCAS(job, token); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(data)
+	if !strings.Contains(encoded, `"version": 2`) || strings.Contains(encoded, `"phase"`) || strings.Contains(encoded, `"problemCode"`) {
+		t.Fatalf("lazy v2 write retained legacy workflow fields: %s", encoded)
+	}
+	scope := StorageScope{ID: "3333333333333333", MountPoint: "/tmp", StagingAnchor: "/tmp", Marker: ObjectIdentity{MountID: 1, ObjectID: 3}}
+	if err := repository.SaveStorage(scope); err != nil {
+		t.Fatal(err)
+	}
+	storage, err := os.ReadFile(filepath.Join(root, "storages", scope.ID+".json"))
+	if err != nil || !strings.Contains(string(storage), `"version": 1`) {
+		t.Fatalf("storage schema changed: %s err=%v", storage, err)
+	}
+}
+
+func TestRepositoryRejectsInvalidLegacyPhaseAndStorageVersion(t *testing.T) {
+	root := t.TempDir()
+	repository := New(root)
+	id := "4444444444444444"
+	directory := filepath.Join(root, "jobs", id)
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	manifest := `{"version":1,"id":"4444444444444444","source":"https://example.test/x","targetDir":"/tmp/target","targetIdentity":{"mountId":1,"objectId":2},"storageId":"5555555555555555","phase":"unknown","activityIntent":"running"}`
+	if err := os.WriteFile(filepath.Join(directory, "manifest.json"), []byte(manifest), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repository.Load(id); err == nil {
+		t.Fatal("invalid legacy phase was accepted")
+	}
+	scope := StorageScope{Version: 2, ID: "6666666666666666", MountPoint: "/tmp", StagingAnchor: "/tmp"}
+	if err := repository.SaveStorage(scope); err == nil {
+		t.Fatal("unsupported storage version was written")
 	}
 }

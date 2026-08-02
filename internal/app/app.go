@@ -683,8 +683,8 @@ func (app *App) guardUnmanagedTasks(ctx context.Context, current state.State, di
 	}
 	managed := make(map[string]struct{}, len(scanned))
 	for _, job := range scanned {
-		if job.Err == nil {
-			managed[job.ID] = struct{}{}
+		if job.Err == nil && job.Job.Execution != nil {
+			managed[job.Job.Execution.GID] = struct{}{}
 		}
 	}
 	for _, task := range native {

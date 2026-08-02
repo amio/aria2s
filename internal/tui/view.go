@@ -224,11 +224,12 @@ func (model Model) detailView() string {
 	if detail.Ownership != "" {
 		lines = appendDetailLabelLines(lines, "Ownership", detail.Ownership, contentWidth)
 	}
-	if detail.Phase != "" {
-		lines = appendDetailLabelLines(lines, "Phase", detail.Phase, contentWidth)
-	}
-	if detail.ProblemCode != "" {
-		lines = appendDetailErrorLines(lines, "Problem", detail.ProblemCode, contentWidth)
+	if detail.IssueCode != "" {
+		message := detail.IssueText
+		if message == "" {
+			message = detail.IssueCode
+		}
+		lines = appendDetailErrorLines(lines, "Issue", message, contentWidth)
 	}
 	if detail.InfoHash != "" {
 		lines = appendDetailLabelLines(lines, "Info Hash", detail.InfoHash, contentWidth)
@@ -475,8 +476,8 @@ func (model Model) downloadRow(width int, download aria2.Download, selected bool
 	}
 	add(status, l.statusWidth, false)
 	name := download.Name
-	if download.ProblemCode != "" {
-		name += " [" + download.ProblemCode + "]"
+	if download.IssueCode != "" {
+		name += " [" + download.IssueCode + "]"
 	}
 	add(name, l.nameWidth, false)
 	add(formatTaskBytes(download.TotalLength, download.LengthKnown), l.sizeWidth, true)

@@ -1,6 +1,6 @@
-// Package app owns crash-safe managed task lifecycle workflows. Durable
-// manifest intent precedes RPC and filesystem mutations; removed tasks may
-// restart only after native absence and staging cleanup are proven.
+// Package app owns crash-safe convergence between managed manifests, aria2,
+// and publication. Every lifecycle entry point records intent and delegates to
+// ReconcileJob; no caller owns a parallel phase-specific workflow.
 package app
 
 import (
@@ -34,601 +34,596 @@ type managedRPC interface {
 	SaveSession(context.Context, state.State) error
 }
 
-func (app *App) SetActivity(ctx context.Context, gid string, running bool) error {
+type ReconcileMode string
+
+const (
+	ReconcileLive    ReconcileMode = "live"
+	ReconcileStartup ReconcileMode = "startup"
+)
+
+// ReconcileInput contains only environment-specific native observations. The
+// lifecycle policy is shared between live commands/hooks and managed startup.
+type ReconcileInput struct {
+	Mode           ReconcileMode
+	SavedBlock     *aria2.SessionBlock
+	SavedDuplicate bool
+	ExpectedGID    string
+	retryRemoved   bool
+}
+
+type ReconcileResult struct {
+	StartupBlock *aria2.SessionBlock
+	Warning      error
+}
+
+type liveEnvironment struct {
+	rpc     managedRPC
+	current state.State
+}
+
+func (app *App) ReconcileJob(ctx context.Context, jobID string, input ReconcileInput) (ReconcileResult, error) {
 	repository := jobs.New(app.options.Paths.StateDir)
-	unlock, err := repository.Lock(ctx, gid)
+	unlock, err := repository.Lock(ctx, jobID)
 	if err != nil {
-		return err
+		return ReconcileResult{}, err
 	}
 	defer unlock()
-	job, token, err := repository.Load(gid)
+	job, token, err := repository.Load(jobID)
 	if err != nil {
-		return err
+		return ReconcileResult{}, err
 	}
-	if job.Phase == jobs.PhaseRemoved || job.Phase == jobs.PhasePublishing {
-		return errors.New("activity cannot change in the current publication phase")
+	if input.ExpectedGID != "" && (job.Execution == nil || job.Execution.GID != input.ExpectedGID) {
+		return ReconcileResult{}, nil // stale hook
 	}
-	if running && job.Phase == jobs.PhasePublished && job.PublicationRenamed() {
-		return errors.New("renamed published torrents cannot restart seeding")
+	if job.Execution != nil {
+		unique, scanErr := executionBindingUnique(repository, job)
+		if scanErr != nil {
+			return ReconcileResult{}, scanErr
+		}
+		if !unique {
+			conflict := errors.New("ManagedIdentityConflict: execution GID is bound by multiple manifests")
+			return ReconcileResult{}, persistIssue(repository, job, token, "ManagedIdentityConflict", conflict)
+		}
 	}
-	intent := jobs.ActivityStopped
-	if running {
-		intent = jobs.ActivityRunning
+	if input.Mode == "" {
+		input.Mode = ReconcileLive
 	}
-	job.ActivityIntent = intent
-	token, err = repository.SaveCAS(job, token)
-	if err != nil {
-		return err
+	if input.Mode == ReconcileStartup {
+		return app.reconcileStartupLocked(ctx, repository, job, token, input.SavedBlock, input.SavedDuplicate)
 	}
 	current, err := state.Load(app.options.Paths.StateFile)
 	if err != nil {
-		return err
+		return ReconcileResult{}, err
 	}
 	rpc, ok := app.options.RPC.(managedRPC)
 	if !ok {
-		return errors.New("configured RPC does not support managed activity")
+		return ReconcileResult{}, errors.New("configured RPC does not support managed reconciliation")
 	}
-	if job.Phase == jobs.PhaseStaged {
-		if running {
-			err = rpc.Resume(ctx, current, gid)
-		} else {
-			err = rpc.Pause(ctx, current, gid)
+	env := liveEnvironment{rpc: rpc, current: current}
+	if input.retryRemoved && job.Removed {
+		if _, err := app.reconcileRemovedLive(ctx, repository, env, job, token); err != nil {
+			return ReconcileResult{}, err
 		}
-		if err != nil && !aria2.IsNotFound(err) {
-			return err
+		job, token, err = repository.Load(jobID)
+		if err != nil {
+			return ReconcileResult{}, err
 		}
-		if checkpointErr := rpc.SaveSession(ctx, current); checkpointErr != nil {
-			return fmt.Errorf("RestartCheckpointFailed: %w", checkpointErr)
-		}
-		return nil
-	}
-	if job.Phase == jobs.PhasePublished {
-		if running {
-			return app.resumeOrStartFinalSeedWithoutLock(ctx, repository, rpc, current, job)
-		}
-		return detachManagedNative(ctx, rpc, current, gid)
-	}
-	return nil
-}
-
-func (app *App) RemoveManaged(ctx context.Context, gid string) error {
-	repository := jobs.New(app.options.Paths.StateDir)
-	unlock, err := repository.Lock(ctx, gid)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	job, token, err := repository.Load(gid)
-	if err != nil {
-		return err
-	}
-	if job.Phase == jobs.PhasePublishing {
-		return errors.New("uncertain publication must reconcile before removal")
-	}
-	previous := job.Phase
-	job.Phase = jobs.PhaseRemoved
-	job.ActivityIntent = jobs.ActivityStopped
-	token, err = repository.SaveCAS(job, token)
-	if err != nil {
-		return err
-	}
-	current, err := state.Load(app.options.Paths.StateFile)
-	if err != nil {
-		return err
-	}
-	rpc, ok := app.options.RPC.(managedRPC)
-	if !ok {
-		return errors.New("configured RPC does not support managed removal")
-	}
-	if err := detachManagedNative(ctx, rpc, current, gid); err != nil {
-		return err
-	}
-	if previous == jobs.PhasePending || previous == jobs.PhaseStaged {
-		scope, loadErr := repository.LoadStorage(job.StorageID)
-		if loadErr != nil {
-			return loadErr
-		}
-		if !storageMatches(scope, job) {
-			return persistJobProblem(repository, job, token, "CleanupFailed", errors.New("StorageMismatch: refusing staging cleanup on changed storage"))
-		}
-		if removeErr := removeWorkDir(jobs.WorkDir(scope, gid)); removeErr != nil {
-			return persistJobProblem(repository, job, token, "CleanupFailed", removeErr)
-		}
-	}
-	return nil
-}
-
-func (app *App) ClearManaged(ctx context.Context, gid string) error {
-	repository := jobs.New(app.options.Paths.StateDir)
-	unlock, err := repository.Lock(ctx, gid)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	job, token, err := repository.Load(gid)
-	if err != nil {
-		if !repository.Exists(gid) {
-			return err
-		}
-		current, stateErr := state.Load(app.options.Paths.StateFile)
-		if stateErr != nil {
-			return stateErr
-		}
-		rpc, ok := app.options.RPC.(managedRPC)
-		if !ok {
-			return errors.New("cannot prove native absence for corrupt managed metadata")
-		}
-		if native, statusErr := rpc.LifecycleStatus(ctx, current, gid); statusErr == nil && native.GID != "" {
-			return errors.New("corrupt managed task is still present in aria2")
-		} else if statusErr != nil && !aria2.IsNotFound(statusErr) {
-			return statusErr
-		}
-		return repository.DeleteCorrupt(gid)
-	}
-	current, err := state.Load(app.options.Paths.StateFile)
-	if err != nil {
-		return err
-	}
-	rpc, rpcOK := app.options.RPC.(managedRPC)
-	if rpcOK {
-		if native, statusErr := rpc.LifecycleStatus(ctx, current, gid); statusErr == nil && native.GID != "" {
-			return errors.New("managed task is still present in aria2")
-		} else if statusErr != nil && !aria2.IsNotFound(statusErr) {
-			return statusErr
-		}
-	}
-	if job.Phase == jobs.PhasePublishing {
-		if !rpcOK {
-			return errors.New("cannot prove native absence for publication recovery")
-		}
-		return errors.New("publication must reconcile with Retry before Clear")
-	}
-	if job.ProblemCode == "CleanupFailed" {
-		return errors.New("managed cleanup must succeed before Clear")
-	}
-	if job.Phase == jobs.PhaseRemoved && job.ProblemCode != "" {
-		return errors.New("removed task cleanup must succeed before Clear")
-	}
-	if job.Phase == jobs.PhaseRemoved {
-		scope, loadErr := repository.LoadStorage(job.StorageID)
-		if loadErr != nil {
-			return loadErr
-		}
-		if _, workErr := os.Lstat(jobs.WorkDir(scope, gid)); workErr == nil {
-			return errors.New("removed staging artifacts must be cleaned with Retry before Clear")
-		} else if !errors.Is(workErr, os.ErrNotExist) {
-			return workErr
-		}
-	}
-	return repository.DeleteCAS(gid, token)
-}
-
-func (app *App) RetryManaged(ctx context.Context, gid string) error {
-	repository := jobs.New(app.options.Paths.StateDir)
-	unlock, err := repository.Lock(ctx, gid)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	job, token, err := repository.Load(gid)
-	if err != nil {
-		return err
-	}
-	scope, err := repository.LoadStorage(job.StorageID)
-	if err != nil {
-		return err
-	}
-	if !storageIdentityMatches(scope, job) {
-		return errors.New("StorageOffline: registered storage is unavailable or mismatched")
-	}
-	if job.Phase == jobs.PhaseRemoved {
-		current, loadErr := state.Load(app.options.Paths.StateFile)
-		if loadErr != nil {
-			return loadErr
-		}
-		rpc, ok := app.options.RPC.(managedRPC)
-		if !ok {
-			return errors.New("configured RPC does not support removed-task Retry")
-		}
-		if err := detachManagedNative(ctx, rpc, current, gid); err != nil {
-			return err
-		}
-		workDir := jobs.WorkDir(scope, gid)
-		var cleanupErr error
-		if job.PayloadIdentity.ObjectID == 0 {
-			cleanupErr = removeWorkDir(workDir)
-		} else {
-			cleanupErr = cleanupPublishedWorkDir(workDir, job.PayloadRoot)
-		}
-		if cleanupErr != nil {
-			return persistJobProblem(repository, job, token, "CleanupFailed", cleanupErr)
-		}
+		job.Removed = false
 		job.ActivityIntent = jobs.ActivityRunning
-		job.ProblemCode = ""
-		if job.PayloadRoot != "" {
-			job.Phase = jobs.PhasePublished
-			if job.PublicationRenamed() {
-				job.ActivityIntent = jobs.ActivityStopped
-				_, err = repository.SaveCAS(job, token)
-				return err
-			}
-			if _, err = repository.SaveCAS(job, token); err != nil {
-				return err
-			}
-			return app.startFinalSeedWithoutLock(ctx, repository, job)
+		if job.Payload.Location == jobs.PayloadPublished && job.PublicationRenamed() {
+			job.ActivityIntent = jobs.ActivityStopped
 		}
-		if err := os.Mkdir(workDir, 0o700); err != nil {
-			return err
-		}
-		job.Phase = jobs.PhasePending
 		token, err = repository.SaveCAS(job, token)
 		if err != nil {
-			return err
+			return ReconcileResult{}, err
 		}
-		return retryPendingWithoutLock(ctx, repository, rpc, current, job, token, scope)
 	}
-	if job.Phase == jobs.PhaseStaged {
-		return app.retryStagedWithoutLock(ctx, repository, job, token, scope)
-	}
-	if job.Phase == jobs.PhasePublished && job.ProblemCode != "" && job.ProblemCode != "PowerLossDurabilityUnavailable" {
-		if job.ActivityIntent == jobs.ActivityRunning {
-			current, loadErr := state.Load(app.options.Paths.StateFile)
-			if loadErr != nil {
-				return loadErr
-			}
-			rpc, ok := app.options.RPC.(managedRPC)
-			if !ok {
-				return errors.New("configured RPC does not support final-seed Retry")
-			}
-			native, statusErr := rpc.LifecycleStatus(ctx, current, gid)
-			destination := filepath.Join(job.TargetDir, job.FinalRoot())
-			switch {
-			case statusErr == nil:
-				if native.GID != gid || filepath.Clean(native.Dir) != filepath.Clean(job.TargetDir) || !publishedFilesMatch(native.Files, destination) {
-					return errors.New("ManagedIdentityConflict: existing final seed does not match the published payload")
-				}
-			case aria2.IsNotFound(statusErr):
-				if err := app.setActivityWithoutLock(ctx, repository, job, true); err != nil {
-					return err
-				}
-			default:
-				return statusErr
-			}
-		}
-		job, token, err = repository.Load(gid)
-		if err != nil {
-			return err
-		}
-		if cleanupErr := cleanupPublishedWorkDir(jobs.WorkDir(scope, gid), job.PayloadRoot); cleanupErr != nil {
-			return persistJobProblem(repository, job, token, "CleanupFailed", cleanupErr)
-		}
-		job.ProblemCode = ""
-		_, err = repository.SaveCAS(job, token)
-		return err
-	}
-	if job.Phase == jobs.PhasePublishing {
-		current, loadErr := state.Load(app.options.Paths.StateFile)
-		if loadErr != nil {
-			return loadErr
-		}
-		rpc, ok := app.options.RPC.(managedRPC)
-		if !ok {
-			return errors.New("cannot prove native absence before publication Retry")
-		}
-		if native, statusErr := rpc.LifecycleStatus(ctx, current, gid); statusErr == nil && native.GID != "" {
-			if err := detachManagedNative(ctx, rpc, current, gid); err != nil {
-				return err
-			}
-		} else if statusErr != nil && !aria2.IsNotFound(statusErr) {
-			return statusErr
-		}
-		job, token, err = reconcilePublishing(ctx, repository, job, token, scope)
-		if err != nil {
-			return err
-		}
-		if job.Phase != jobs.PhasePublished {
-			return errors.New(job.ProblemCode + ": publication remains unresolved")
-		}
-		if job.ActivityIntent == jobs.ActivityRunning {
-			if _, metainfoErr := os.Lstat(repository.MetainfoPath(gid)); metainfoErr == nil {
-				return app.setActivityWithoutLock(ctx, repository, job, true)
-			} else if !errors.Is(metainfoErr, os.ErrNotExist) {
-				return metainfoErr
-			}
-			job.ActivityIntent = jobs.ActivityStopped
-			_, err = repository.SaveCAS(job, token)
-			return err
-		}
-		return nil
-	}
-	if job.Phase != jobs.PhasePending {
-		return errors.New("Retry is not applicable to this managed phase")
-	}
-	current, err := state.Load(app.options.Paths.StateFile)
-	if err != nil {
-		return err
-	}
-	rpc, ok := app.options.RPC.(managedRPC)
-	if !ok {
-		return errors.New("configured RPC does not support managed Retry")
-	}
-	return retryPendingWithoutLock(ctx, repository, rpc, current, job, token, scope)
+	return app.reconcileLiveLocked(ctx, repository, env, job, token)
 }
 
-func retryPendingWithoutLock(ctx context.Context, repository *jobs.Repository, rpc managedRPC, current state.State, job jobs.Job, token jobs.Token, scope jobs.StorageScope) error {
-	gid := job.ID
-	native, statusErr := rpc.LifecycleStatus(ctx, current, gid)
-	workDir := jobs.WorkDir(scope, gid)
+func (app *App) reconcileLiveLocked(ctx context.Context, repository *jobs.Repository, env liveEnvironment, job jobs.Job, token jobs.Token) (ReconcileResult, error) {
+	if job.Removed {
+		return app.reconcileRemovedLive(ctx, repository, env, job, token)
+	}
+	scope, err := repository.LoadStorage(job.StorageID)
+	if err != nil || !storageIdentityMatches(scope, job) {
+		return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("registered storage is unavailable or mismatched"), err))
+	}
+	if job.Payload.Location == jobs.PayloadStaging && job.Payload.FinalRoot != "" {
+		if job.Execution != nil {
+			if err := validateAndDetach(ctx, env, job, scope); err != nil {
+				return ReconcileResult{}, persistIssue(repository, job, token, issueCode(err, "PublicationRecoveryRequired"), err)
+			}
+			job.Execution = nil
+			token, err = repository.SaveCAS(job, token)
+			if err != nil {
+				return ReconcileResult{}, err
+			}
+		}
+		job, token, err = reconcilePreparedPublication(ctx, repository, job, token, scope)
+		if err != nil || job.Payload.Location != jobs.PayloadPublished {
+			return ReconcileResult{}, err
+		}
+	}
+	if job.Payload.Location == jobs.PayloadPublished {
+		return app.reconcilePublishedLive(ctx, repository, env, job, token, scope)
+	}
+	return app.reconcileStagedLive(ctx, repository, env, job, token, scope)
+}
+
+func (app *App) reconcileStagedLive(ctx context.Context, repository *jobs.Repository, env liveEnvironment, job jobs.Job, token jobs.Token, scope jobs.StorageScope) (ReconcileResult, error) {
+	workDir := jobs.WorkDir(scope, job.ID)
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		return ReconcileResult{}, err
+	}
+	if job.Execution == nil {
+		gid, err := randomExecutionID(job.ID)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+		job.Execution = &jobs.ExecutionBinding{GID: gid}
+		token, err = repository.SaveCAS(job, token) // binding always precedes Add
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+	}
+	gid := job.Execution.GID
+	native, statusErr := env.rpc.LifecycleStatus(ctx, env.current, gid)
+	if statusErr == nil && native.GID == "" {
+		statusErr = &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "not found"}
+	}
 	if statusErr == nil {
-		if native.GID != gid || filepath.Clean(native.Dir) != filepath.Clean(workDir) {
-			return errors.New("ManagedIdentityConflict: live GID points outside its work directory")
+		if err := validateNative(job, scope, native); err != nil {
+			return ReconcileResult{}, persistIssue(repository, job, token, "ManagedIdentityConflict", err)
 		}
-		job.Phase, job.ProblemCode = jobs.PhaseStaged, ""
-	} else {
-		if !aria2.IsNotFound(statusErr) {
-			return statusErr
+		if native.Status == "error" || native.Status == "removed" {
+			if err := detachManagedNative(ctx, env.rpc, env.current, gid); err != nil {
+				return ReconcileResult{}, err
+			}
+			job.Execution = nil
+			next, saveErr := repository.SaveCAS(job, token)
+			if saveErr != nil {
+				return ReconcileResult{}, saveErr
+			}
+			return app.reconcileStagedLive(ctx, repository, env, job, next, scope)
 		}
-		entries, err := os.ReadDir(workDir)
-		if err != nil || len(entries) != 0 {
-			return errors.New("RestartStateMissing: pending Add cannot be retried beside staged artifacts")
+		if descriptor, promoted, err := completedDescriptor(workDir, native); err != nil {
+			return ReconcileResult{}, err
+		} else if promoted {
+			return app.promoteDescriptor(ctx, repository, env, job, token, scope, descriptor)
 		}
-		options := aria2.AddOptions{Dir: workDir, GID: gid, Managed: true}
+		if transferComplete(native) {
+			return app.prepareAndPublish(ctx, repository, env, job, token, scope, native)
+		}
+		if err := convergeActivity(ctx, env, gid, native.Status, job.ActivityIntent); err != nil {
+			return ReconcileResult{}, err
+		}
+		return checkpointAndClearIssue(ctx, repository, env, job, token)
+	}
+	if !aria2.IsNotFound(statusErr) {
+		return ReconcileResult{}, statusErr
+	}
+	// A previous definite/unknown Add failure is authoritatively absent. Retire
+	// that attempt and allocate a fresh execution before retrying.
+	if job.Issue != nil || gid == job.ID {
+		job.Execution = nil
+		token, statusErr = repository.SaveCAS(job, token)
+		if statusErr != nil {
+			return ReconcileResult{}, statusErr
+		}
+		gid, statusErr = randomExecutionID(job.ID)
+		if statusErr != nil {
+			return ReconcileResult{}, statusErr
+		}
+		job.Execution = &jobs.ExecutionBinding{GID: gid}
+		token, statusErr = repository.SaveCAS(job, token)
+		if statusErr != nil {
+			return ReconcileResult{}, statusErr
+		}
+	}
+	fact := inspectStartupFact(repository, job, scope, true)
+	options := stagedAddOptions(job, workDir, fact)
+	var added string
+	var addErr error
+	if fact.Torrent && fact.HasMetainfo {
+		metainfo, readErr := readValidatedMetainfo(repository, job.ID)
+		if readErr != nil {
+			return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", readErr)
+		}
+		added, addErr = env.rpc.AddTorrent(ctx, env.current, metainfo, options)
+	} else if fact.WorkEmpty && completeSubmittedSource(job.Source) {
 		if strings.HasPrefix(job.Source, "magnet:") {
 			options.MetadataOnly, options.SaveMetadata = true, true
 		}
-		added, err := rpc.AddURI(ctx, current, job.Source, options)
-		if err != nil {
-			return err
-		}
-		if added != gid {
-			return errors.New("ManagedIdentityConflict: Retry changed GID")
-		}
-		job.Phase, job.ProblemCode = jobs.PhaseStaged, ""
+		added, addErr = env.rpc.AddURI(ctx, env.current, job.Source, options)
+	} else {
+		return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", errors.New("staged artifacts have no safe restart state"))
 	}
-	nextToken, err := repository.SaveCAS(job, token)
-	if err != nil {
-		return err
+	if err := confirmManagedAdd(ctx, env.rpc, env.current, gid, workDir, added, addErr); err != nil {
+		return ReconcileResult{}, persistIssue(repository, job, token, "AddFailed", err)
 	}
-	if err := rpc.SaveSession(ctx, current); err != nil {
-		return persistJobProblem(repository, job, nextToken, "RestartCheckpointFailed", err)
-	}
-	return nil
+	return checkpointAndClearIssue(ctx, repository, env, job, token)
 }
 
-func (app *App) retryStagedWithoutLock(ctx context.Context, repository *jobs.Repository, job jobs.Job, token jobs.Token, scope jobs.StorageScope) error {
-	current, err := state.Load(app.options.Paths.StateFile)
+func (app *App) promoteDescriptor(ctx context.Context, repository *jobs.Repository, env liveEnvironment, job jobs.Job, token jobs.Token, scope jobs.StorageScope, metainfo []byte) (ReconcileResult, error) {
+	if err := repository.WriteMetainfo(job.ID, metainfo); err != nil {
+		return ReconcileResult{}, err
+	}
+	if err := validateAndDetach(ctx, env, job, scope); err != nil {
+		return ReconcileResult{}, err
+	}
+	job.Execution = nil
+	job.Issue = nil
+	token, err := repository.SaveCAS(job, token)
 	if err != nil {
-		return err
+		return ReconcileResult{}, err
 	}
-	rpc, ok := app.options.RPC.(managedRPC)
-	if !ok {
-		return errors.New("configured RPC does not support staged Retry")
-	}
+	return app.reconcileStagedLive(ctx, repository, env, job, token, scope)
+}
+
+func (app *App) prepareAndPublish(ctx context.Context, repository *jobs.Repository, env liveEnvironment, job jobs.Job, token jobs.Token, scope jobs.StorageScope, native aria2.LifecycleStatus) (ReconcileResult, error) {
 	workDir := jobs.WorkDir(scope, job.ID)
-	native, statusErr := rpc.LifecycleStatus(ctx, current, job.ID)
-	reconstruct := false
-	if statusErr == nil {
-		if native.GID != job.ID || filepath.Clean(native.Dir) != filepath.Clean(workDir) {
-			return errors.New("ManagedIdentityConflict: live staged GID points outside its work directory")
-		}
-		if native.Status == "error" || native.Status == "removed" || native.Status == "complete" {
-			if err := detachManagedNative(ctx, rpc, current, job.ID); err != nil {
-				return err
-			}
-			reconstruct = true
-		}
-		if !reconstruct && job.ActivityIntent == jobs.ActivityStopped && native.Status != "paused" {
-			if err := rpc.Pause(ctx, current, job.ID); err != nil {
-				return err
-			}
-		} else if !reconstruct && job.ActivityIntent == jobs.ActivityRunning && native.Status == "paused" {
-			if err := rpc.Resume(ctx, current, job.ID); err != nil {
-				return err
-			}
-		}
-	} else if aria2.IsNotFound(statusErr) {
-		reconstruct = true
-	} else {
-		return statusErr
+	root, err := payloadRoot(workDir, native.Files)
+	if err != nil {
+		return ReconcileResult{}, err
 	}
-	if reconstruct {
-		fact := inspectStartupFact(repository, job, scope, true)
-		options := aria2.AddOptions{Dir: workDir, GID: job.ID, Managed: true, Pause: job.ActivityIntent == jobs.ActivityStopped}
-		var added string
-		var addErr error
-		if fact.Torrent && fact.HasMetainfo {
-			metainfo, readErr := readValidatedMetainfo(repository, job.ID)
-			if readErr != nil {
-				return persistJobProblem(repository, job, token, "RestartStateMissing", readErr)
-			}
-			if stagedIntegrityRequired(fact) {
-				value := true
-				options.CheckIntegrity = &value
-			}
-			added, addErr = rpc.AddTorrent(ctx, current, metainfo, options)
-		} else if fact.WorkEmpty && completeSubmittedSource(job.Source) {
-			if strings.HasPrefix(job.Source, "magnet:") {
-				options.MetadataOnly, options.SaveMetadata = true, true
-			}
-			added, addErr = rpc.AddURI(ctx, current, job.Source, options)
-		} else {
-			cause := errors.New("RestartStateMissing: staged artifacts require the preserved native session block and a managed restart")
-			return persistJobProblem(repository, job, token, "RestartStateMissing", cause)
-		}
-		if err := confirmManagedAdd(ctx, rpc, current, job.ID, workDir, added, addErr); err != nil {
-			return persistJobProblem(repository, job, token, "AddFailed", err)
+	source, identity, err := publication.ValidatePayloadRoot(workDir, root)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	if native.InfoHash != "" {
+		if _, err := readValidatedMetainfo(repository, job.ID); err != nil {
+			return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", errors.New("torrent publication requires retained metainfo"))
 		}
 	}
-	job.ProblemCode = ""
+	unlockPublication, err := repository.LockPublication(ctx)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	locked := true
+	defer func() {
+		if locked {
+			_ = unlockPublication()
+		}
+	}()
+	finalRoot, err := publication.AvailableRoot(source, job.TargetDir, root)
+	if err != nil {
+		return ReconcileResult{}, persistIssue(repository, job, token, publicationProblem(err), err)
+	}
+	length := native.TotalLength
+	job.Payload = jobs.PayloadState{Location: jobs.PayloadStaging, Root: root, FinalRoot: finalRoot, Identity: jobIdentity(identity), Length: &length}
+	token, err = repository.SaveCAS(job, token) // publication intent precedes detach/move
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	if err := validateAndDetach(ctx, env, job, scope); err != nil {
+		return ReconcileResult{}, persistIssue(repository, job, token, "PublicationRecoveryRequired", err)
+	}
+	job.Execution = nil
 	token, err = repository.SaveCAS(job, token)
 	if err != nil {
-		return err
+		return ReconcileResult{}, err
 	}
-	if err := rpc.SaveSession(ctx, current); err != nil {
-		return persistJobProblem(repository, job, token, "RestartCheckpointFailed", err)
+	job, token, err = reconcilePreparedPublicationUnderLock(repository, job, token, scope)
+	if err != nil || job.Payload.Location != jobs.PayloadPublished {
+		return ReconcileResult{}, err
 	}
-	return nil
+	if err := unlockPublication(); err != nil {
+		return ReconcileResult{}, err
+	}
+	locked = false
+	return app.reconcilePublishedLive(ctx, repository, env, job, token, scope)
 }
 
-func detachManagedNative(ctx context.Context, rpc managedRPC, current state.State, gid string) error {
-	native, err := rpc.LifecycleStatus(ctx, current, gid)
-	if aria2.IsNotFound(err) {
-		return nil
+func (app *App) reconcilePublishedLive(ctx context.Context, repository *jobs.Repository, env liveEnvironment, job jobs.Job, token jobs.Token, scope jobs.StorageScope) (ReconcileResult, error) {
+	destination, identity, err := publication.ValidatePayloadRoot(job.TargetDir, job.FinalRoot())
+	if err != nil || identity.MountID != job.Payload.Identity.MountID || (job.Payload.Identity.ReliableAcrossRename && identity.ObjectID != job.Payload.Identity.ObjectID) {
+		return ReconcileResult{}, persistIssue(repository, job, token, "FinalSeedPathMismatch", errors.Join(errors.New("published payload identity changed"), err))
 	}
-	if err != nil {
-		return err
+	metainfo, metaErr := readValidatedMetainfo(repository, job.ID)
+	if job.PublicationRenamed() || errors.Is(metaErr, os.ErrNotExist) {
+		job.ActivityIntent = jobs.ActivityStopped
 	}
-	if native.GID != gid {
-		return errors.New("ManagedIdentityConflict: lifecycle status returned a different GID")
-	}
-	switch native.Status {
-	case "active", "waiting", "paused":
-		if err := rpc.ForceRemove(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
-			return err
+	if job.Execution != nil {
+		native, statusErr := env.rpc.LifecycleStatus(ctx, env.current, job.Execution.GID)
+		if statusErr == nil && native.GID == "" {
+			statusErr = &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "not found"}
 		}
-	case "complete", "error", "removed":
-		// Completed/error results are already inactive and reject forceRemove.
-	default:
-		return fmt.Errorf("cannot detach managed GID from native status %q", native.Status)
-	}
-	return waitForManagedNativeAbsence(ctx, rpc, current, gid)
-}
-
-func waitForManagedNativeAbsence(ctx context.Context, rpc managedRPC, current state.State, gid string) error {
-	const (
-		pollInterval = 25 * time.Millisecond
-		pollTimeout  = 3 * time.Second
-	)
-	timeout := time.NewTimer(pollTimeout)
-	defer timeout.Stop()
-	for {
-		native, err := rpc.LifecycleStatus(ctx, current, gid)
-		if aria2.IsNotFound(err) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if native.GID != gid {
-			return errors.New("ManagedIdentityConflict: detach status returned a different GID")
-		}
-		switch native.Status {
-		case "complete", "error", "removed":
-			if err := rpc.RemoveDownloadResult(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
-				return err
+		if aria2.IsNotFound(statusErr) {
+			job.Execution = nil
+			token, err = repository.SaveCAS(job, token)
+			if err != nil {
+				return ReconcileResult{}, err
 			}
-		case "active", "waiting", "paused":
-			// forceRemove acknowledges before aria2 necessarily retires the task.
-		default:
-			return fmt.Errorf("cannot confirm managed GID absence from native status %q", native.Status)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-timeout.C:
-			return errors.New("managed GID remains present after detach timeout")
-		case <-time.After(pollInterval):
+		} else if statusErr != nil {
+			return ReconcileResult{}, statusErr
+		} else {
+			if native.GID != job.Execution.GID || filepath.Clean(native.Dir) != filepath.Clean(job.TargetDir) || !publishedFilesMatch(native.Files, destination) {
+				return ReconcileResult{}, persistIssue(repository, job, token, "FinalSeedPathMismatch", errors.New("native seed does not match published payload"))
+			}
+			if native.Status == "complete" {
+				job.ActivityIntent = jobs.ActivityStopped
+				if err := detachManagedNative(ctx, env.rpc, env.current, native.GID); err != nil {
+					return ReconcileResult{}, err
+				}
+				job.Execution = nil
+				token, err = repository.SaveCAS(job, token)
+				if err != nil {
+					return ReconcileResult{}, err
+				}
+			} else if native.Status == "error" || native.Status == "removed" {
+				if err := detachManagedNative(ctx, env.rpc, env.current, native.GID); err != nil {
+					return ReconcileResult{}, err
+				}
+				job.Execution = nil
+				token, err = repository.SaveCAS(job, token)
+				if err != nil {
+					return ReconcileResult{}, err
+				}
+			} else {
+				if err := convergeActivity(ctx, env, native.GID, native.Status, job.ActivityIntent); err != nil {
+					return ReconcileResult{}, persistIssue(repository, job, token, "FinalSeedStartFailed", err)
+				}
+				return checkpointAndClearIssue(ctx, repository, env, job, token)
+			}
 		}
 	}
+	if job.ActivityIntent == jobs.ActivityRunning && !job.PublicationRenamed() {
+		if metaErr != nil {
+			return ReconcileResult{}, persistIssue(repository, job, token, "FinalSeedStartFailed", metaErr)
+		}
+		gid, err := randomExecutionID(job.ID)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+		job.Execution = &jobs.ExecutionBinding{GID: gid}
+		token, err = repository.SaveCAS(job, token)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+		check := false
+		removeControl := true
+		added, addErr := env.rpc.AddTorrent(ctx, env.current, metainfo, aria2.AddOptions{Dir: job.TargetDir, GID: gid, Managed: true, SeedUnverified: true, CheckIntegrity: &check, ForceSave: &check, RemoveControlFile: &removeControl})
+		if err := confirmManagedAdd(ctx, env.rpc, env.current, gid, job.TargetDir, added, addErr); err != nil {
+			return ReconcileResult{}, persistIssue(repository, job, token, "FinalSeedStartFailed", err)
+		}
+		seed, err := env.rpc.LifecycleStatus(ctx, env.current, gid)
+		if err != nil || !publishedFilesMatch(seed.Files, destination) {
+			return ReconcileResult{}, persistIssue(repository, job, token, "FinalSeedPathMismatch", errors.Join(errors.New("final seed files do not match payload"), err))
+		}
+	}
+	result, err := checkpointAndClearIssue(ctx, repository, env, job, token)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	if cleanupErr := cleanupPublishedWorkDir(jobs.WorkDir(scope, job.ID), job.Payload.Root); cleanupErr != nil {
+		// Cleanup is deliberately best effort and cannot invalidate publication.
+		result.Warning = errors.Join(result.Warning, cleanupErr)
+	}
+	return result, nil
 }
 
-func (app *App) setActivityWithoutLock(ctx context.Context, repository *jobs.Repository, job jobs.Job, running bool) error {
-	// Retry already owns the job lock. Only the published-seed branch is needed.
-	if !running {
-		return nil
+func (app *App) reconcileRemovedLive(ctx context.Context, repository *jobs.Repository, env liveEnvironment, job jobs.Job, token jobs.Token) (ReconcileResult, error) {
+	if job.Execution != nil {
+		scope, err := repository.LoadStorage(job.StorageID)
+		if err != nil {
+			return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", err)
+		}
+		if err := validateAndDetach(ctx, env, job, scope); err != nil {
+			return ReconcileResult{}, err
+		}
+		job.Execution = nil
+		token, err = repository.SaveCAS(job, token)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
 	}
-	return app.startFinalSeedWithoutLock(ctx, repository, job)
+	if job.Payload.Location == jobs.PayloadStaging {
+		scope, err := repository.LoadStorage(job.StorageID)
+		if err != nil || !storageIdentityMatches(scope, job) {
+			return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("cannot clean changed storage"), err))
+		}
+		if err := removeWorkDir(jobs.WorkDir(scope, job.ID)); err != nil {
+			return ReconcileResult{}, persistIssue(repository, job, token, "CleanupFailed", err)
+		}
+	}
+	job.Issue = nil
+	_, err := repository.SaveCAS(job, token)
+	return ReconcileResult{}, err
 }
 
-func (app *App) startFinalSeedWithoutLock(ctx context.Context, repository *jobs.Repository, job jobs.Job) error {
-	if job.PublicationRenamed() {
-		return errors.New("renamed published torrents cannot restart seeding")
+func (app *App) reconcileStartupLocked(ctx context.Context, repository *jobs.Repository, job jobs.Job, token jobs.Token, saved *aria2.SessionBlock, duplicate bool) (ReconcileResult, error) {
+	if job.Removed {
+		if job.Execution != nil { // exclusive startup lease + omission proves retirement
+			job.Execution = nil
+			_, err := repository.SaveCAS(job, token)
+			return ReconcileResult{}, err
+		}
+		return ReconcileResult{}, nil
 	}
-	current, err := state.Load(app.options.Paths.StateFile)
+	if duplicate {
+		return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", errors.New("duplicate native session blocks for execution GID"))
+	}
+	if job.LegacyPending() && saved == nil {
+		job.Execution = nil
+		_, err := repository.SaveCAS(job, token)
+		return ReconcileResult{}, err
+	}
+	if job.Payload.Location == jobs.PayloadStaging && job.Payload.FinalRoot == "" && job.Execution == nil {
+		// A pending manifest has no native owner. Startup omission is complete
+		// without touching its potentially offline storage.
+		return ReconcileResult{}, nil
+	}
+	scope, err := repository.LoadStorage(job.StorageID)
+	if err != nil || !storageIdentityMatches(scope, job) {
+		return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("registered storage unavailable"), err))
+	}
+	if job.Payload.Location == jobs.PayloadStaging && job.Payload.FinalRoot != "" {
+		if job.Execution != nil {
+			job.Execution = nil // omitting saved block retires it under startup lease
+			token, err = repository.SaveCAS(job, token)
+			if err != nil {
+				return ReconcileResult{}, err
+			}
+		}
+		job, token, err = reconcilePreparedPublication(ctx, repository, job, token, scope)
+		if err != nil || job.Payload.Location != jobs.PayloadPublished {
+			return ReconcileResult{}, err
+		}
+	}
+	if job.Payload.Location == jobs.PayloadPublished {
+		_, identity, identityErr := publication.ValidatePayloadRoot(job.TargetDir, job.FinalRoot())
+		if identityErr != nil || identity.MountID != job.Payload.Identity.MountID ||
+			(job.Payload.Identity.ReliableAcrossRename && identity.ObjectID != job.Payload.Identity.ObjectID) {
+			return ReconcileResult{}, persistIssue(repository, job, token, "FinalSeedPathMismatch",
+				errors.Join(errors.New("published payload identity changed"), identityErr))
+		}
+		if job.PublicationRenamed() || job.ActivityIntent == jobs.ActivityStopped {
+			job.Execution = nil // startup omission is authoritative under the lease
+			job.Issue = nil
+			_, err := repository.SaveCAS(job, token)
+			return ReconcileResult{}, err
+		}
+		metainfo, err := readValidatedMetainfo(repository, job.ID)
+		if err != nil {
+			return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", err)
+		}
+		_ = metainfo // startup block references the retained file
+		gid, err := randomExecutionID(job.ID)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+		job.Execution = &jobs.ExecutionBinding{GID: gid}
+		job.Issue = nil
+		if _, err := repository.SaveCAS(job, token); err != nil {
+			return ReconcileResult{}, err
+		}
+		block := generatedTorrentBlock(job, repository.MetainfoPath(job.ID), job.TargetDir, false, true)
+		return ReconcileResult{StartupBlock: &block}, nil
+	}
+	fact := inspectStartupFact(repository, job, scope, true)
+	workDir := jobs.WorkDir(scope, job.ID)
+	if saved != nil && job.Execution != nil {
+		if savedGID, ok := saved.Option("gid"); !ok || savedGID != job.Execution.GID {
+			return ReconcileResult{}, persistIssue(repository, job, token, "ManagedIdentityConflict", errors.New("saved block GID does not match execution binding"))
+		}
+		block, problem := normalizeStagedBlock(*saved, job, workDir, fact)
+		if problem != "" {
+			return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", errors.New(problem))
+		}
+		applyMissingControlRecovery(&block, fact)
+		job.Issue = nil
+		if _, err := repository.SaveCAS(job, token); err != nil {
+			return ReconcileResult{}, err
+		}
+		return ReconcileResult{StartupBlock: &block}, nil
+	}
+	// No saved owner exists under the startup lease. Retire the old binding and
+	// reconstruct, with a fresh GID, only from safe durable inputs.
+	job.Execution = nil
+	gid, err := randomExecutionID(job.ID)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	job.Execution = &jobs.ExecutionBinding{GID: gid}
+	job.Issue = nil
+	if fact.InferredRoot != "" && job.Payload.Root == "" {
+		job.Payload.Root = fact.InferredRoot
+	}
+	token, err = repository.SaveCAS(job, token)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	var block aria2.SessionBlock
+	if fact.Torrent && fact.HasMetainfo {
+		block = generatedTorrentBlock(job, fact.MetainfoPath, workDir, job.ActivityIntent == jobs.ActivityStopped, false)
+	} else if fact.WorkEmpty && completeSubmittedSource(job.Source) {
+		block = aria2.SessionBlock{URI: job.Source}
+		applyManagedOptions(&block, job, workDir)
+	} else {
+		return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", errors.New("native block is missing beside staged artifacts"))
+	}
+	applyMissingControlRecovery(&block, fact)
+	return ReconcileResult{StartupBlock: &block}, nil
+}
+
+func (app *App) SetActivity(ctx context.Context, jobID string, running bool) error {
+	repository := jobs.New(app.options.Paths.StateDir)
+	unlock, err := repository.Lock(ctx, jobID)
 	if err != nil {
 		return err
 	}
-	rpc, ok := app.options.RPC.(managedRPC)
-	if !ok {
-		return errors.New("configured RPC does not support managed activity")
-	}
-	destination, identity, err := publication.ValidatePayloadRoot(job.TargetDir, job.FinalRoot())
-	if err != nil || identity.MountID != job.PayloadIdentity.MountID ||
-		(job.PayloadIdentity.ReliableAcrossRename && identity.ObjectID != job.PayloadIdentity.ObjectID) {
-		return app.persistCurrentProblem(repository, job.ID, "FinalSeedPathMismatch",
-			errors.Join(errors.New("published payload is missing or its identity changed"), err))
-	}
-	metainfo, err := readValidatedMetainfo(repository, job.ID)
-	if err != nil {
-		return app.persistCurrentProblem(repository, job.ID, "FinalSeedStartFailed", err)
-	}
-	value := false
-	removeControl := true
-	added, addErr := rpc.AddTorrent(ctx, current, metainfo, aria2.AddOptions{Dir: job.TargetDir, GID: job.ID, Managed: true, SeedUnverified: true, CheckIntegrity: &value, ForceSave: &value, RemoveControlFile: &removeControl})
-	if err := confirmManagedAdd(ctx, rpc, current, job.ID, job.TargetDir, added, addErr); err != nil {
-		return app.persistCurrentProblem(repository, job.ID, "FinalSeedStartFailed", err)
-	}
-	seed, statusErr := rpc.LifecycleStatus(ctx, current, job.ID)
-	if statusErr != nil || !publishedFilesMatch(seed.Files, destination) {
-		return app.persistCurrentProblem(repository, job.ID, "FinalSeedPathMismatch",
-			errors.Join(errors.New("final seed files do not match the published payload"), statusErr))
-	}
-	return nil
-}
-
-func (app *App) resumeOrStartFinalSeedWithoutLock(ctx context.Context, repository *jobs.Repository, rpc managedRPC, current state.State, job jobs.Job) error {
-	destination, identity, err := publication.ValidatePayloadRoot(job.TargetDir, job.FinalRoot())
-	if err != nil || identity.MountID != job.PayloadIdentity.MountID ||
-		(job.PayloadIdentity.ReliableAcrossRename && identity.ObjectID != job.PayloadIdentity.ObjectID) {
-		return app.persistCurrentProblem(repository, job.ID, "FinalSeedPathMismatch",
-			errors.Join(errors.New("published payload is missing or its identity changed"), err))
-	}
-	native, statusErr := rpc.LifecycleStatus(ctx, current, job.ID)
-	if aria2.IsNotFound(statusErr) {
-		return app.startFinalSeedWithoutLock(ctx, repository, job)
-	}
-	if statusErr != nil {
-		return statusErr
-	}
-	if native.GID != job.ID || filepath.Clean(native.Dir) != filepath.Clean(job.TargetDir) || !publishedFilesMatch(native.Files, destination) {
-		return app.persistCurrentProblem(repository, job.ID, "FinalSeedPathMismatch",
-			errors.New("ManagedIdentityConflict: existing final seed does not match the published payload"))
-	}
-	switch native.Status {
-	case "active", "waiting":
-		return nil
-	case "paused":
-		if err := rpc.Resume(ctx, current, job.ID); err != nil {
-			return app.persistCurrentProblem(repository, job.ID, "FinalSeedStartFailed", err)
+	job, token, err := repository.Load(jobID)
+	if err == nil {
+		job.ActivityIntent = jobs.ActivityStopped
+		if running {
+			job.ActivityIntent = jobs.ActivityRunning
 		}
-		return nil
-	case "complete", "error", "removed":
-		if err := detachManagedNative(ctx, rpc, current, job.ID); err != nil {
-			return err
-		}
-		return app.startFinalSeedWithoutLock(ctx, repository, job)
-	default:
-		return fmt.Errorf("cannot resume final seed from native status %q", native.Status)
+		_, err = repository.SaveCAS(job, token)
 	}
-}
-
-func (app *App) persistCurrentProblem(repository *jobs.Repository, gid, code string, cause error) error {
-	currentJob, token, err := repository.Load(gid)
+	if unlockErr := unlock(); err == nil {
+		err = unlockErr
+	}
 	if err != nil {
-		return errors.Join(cause, err)
+		return err
 	}
-	return persistJobProblem(repository, currentJob, token, code, cause)
+	result, err := app.ReconcileJob(ctx, jobID, ReconcileInput{Mode: ReconcileLive})
+	return reconcileCommandError(result, err)
 }
 
-type AddRequest struct {
-	Source    string
-	TargetDir string
+func (app *App) RemoveManaged(ctx context.Context, jobID string) error {
+	repository := jobs.New(app.options.Paths.StateDir)
+	unlock, err := repository.Lock(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	job, token, err := repository.Load(jobID)
+	if err == nil {
+		job.Removed, job.ActivityIntent = true, jobs.ActivityStopped
+		_, err = repository.SaveCAS(job, token)
+	}
+	if unlockErr := unlock(); err == nil {
+		err = unlockErr
+	}
+	if err != nil {
+		return err
+	}
+	result, err := app.ReconcileJob(ctx, jobID, ReconcileInput{Mode: ReconcileLive})
+	return reconcileCommandError(result, err)
 }
 
+func (app *App) RetryManaged(ctx context.Context, jobID string) error {
+	result, err := app.ReconcileJob(ctx, jobID, ReconcileInput{Mode: ReconcileLive, retryRemoved: true})
+	return reconcileCommandError(result, err)
+}
+
+func (app *App) ClearManaged(ctx context.Context, jobID string) error {
+	repository := jobs.New(app.options.Paths.StateDir)
+	unlock, err := repository.Lock(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	job, token, err := repository.Load(jobID)
+	if err != nil {
+		if repository.Exists(jobID) {
+			return errors.New("cannot Clear corrupt managed metadata because its execution binding is unknown")
+		}
+		return err
+	}
+	if job.Execution != nil {
+		return errors.New("managed execution must retire before Clear")
+	}
+	if job.Payload.Location == jobs.PayloadStaging && !job.Removed {
+		return errors.New("active managed task cannot be cleared")
+	}
+	return repository.DeleteCAS(jobID, token)
+}
+
+type AddRequest struct{ Source, TargetDir string }
 type TaskRef struct {
-	GID string
+	JobID string
 }
-
 type ManagedAddResult struct {
 	Task    TaskRef
 	Warning error
@@ -638,7 +633,7 @@ func (app *App) AddManaged(ctx context.Context, request AddRequest) (ManagedAddR
 	if request.TargetDir == "" {
 		request.TargetDir = app.defaultDownloadDir()
 	}
-	if !strings.HasPrefix(request.Source, "http://") && !strings.HasPrefix(request.Source, "https://") && !strings.HasPrefix(request.Source, "magnet:") {
+	if !completeSubmittedSource(request.Source) {
 		return ManagedAddResult{}, errors.New("managed source must be HTTP(S) or magnet")
 	}
 	current, err := state.Load(app.options.Paths.StateFile)
@@ -647,10 +642,6 @@ func (app *App) AddManaged(ctx context.Context, request AddRequest) (ManagedAddR
 	}
 	if current.RuntimeSchemaVersion != 2 {
 		return ManagedAddResult{}, errors.New("UpgradeRequired: install managed runtime v2 before adding tasks")
-	}
-	rpc, ok := app.options.RPC.(managedRPC)
-	if !ok {
-		return ManagedAddResult{}, errors.New("configured RPC does not support managed lifecycle")
 	}
 	target, err := publication.InspectTarget(request.TargetDir)
 	if err != nil {
@@ -661,45 +652,341 @@ func (app *App) AddManaged(ctx context.Context, request AddRequest) (ManagedAddR
 	if err != nil {
 		return ManagedAddResult{}, err
 	}
-	id, err := randomID()
+	jobID, err := randomID()
 	if err != nil {
 		return ManagedAddResult{}, err
 	}
-	workDir := jobs.WorkDir(scope, id)
+	gid, err := randomExecutionID(jobID)
+	if err != nil {
+		return ManagedAddResult{}, err
+	}
+	workDir := jobs.WorkDir(scope, jobID)
 	if err := os.Mkdir(workDir, 0o700); err != nil {
 		return ManagedAddResult{}, err
 	}
-	job := jobs.Job{ID: id, Source: request.Source, TargetDir: target.Path, TargetIdentity: jobIdentity(target.Identity), StorageID: scope.ID, Phase: jobs.PhasePending, ActivityIntent: jobs.ActivityRunning}
-	token, err := repository.Create(job)
-	if err != nil {
+	job := jobs.Job{ID: jobID, Source: request.Source, TargetDir: target.Path, TargetIdentity: jobIdentity(target.Identity), StorageID: scope.ID, ActivityIntent: jobs.ActivityRunning, Payload: jobs.PayloadState{Location: jobs.PayloadStaging}, Execution: &jobs.ExecutionBinding{GID: gid}}
+	if _, err := repository.Create(job); err != nil {
 		return ManagedAddResult{}, errors.Join(err, os.Remove(workDir))
 	}
-	options := aria2.AddOptions{Dir: workDir, GID: id, Managed: true}
-	if strings.HasPrefix(request.Source, "magnet:") {
-		options.MetadataOnly = true
-		options.SaveMetadata = true
-	}
-	confirmedGID, addErr := rpc.AddURI(ctx, current, request.Source, options)
-	if addErr != nil {
-		return ManagedAddResult{}, persistJobProblem(repository, job, token, "AddFailed", addErr)
-	}
-	if confirmedGID != id {
-		conflict := fmt.Errorf("managed GID mismatch: requested %s, got %s", id, confirmedGID)
-		return ManagedAddResult{}, persistJobProblem(repository, job, token, "ManagedIdentityConflict", conflict)
-	}
-	job.Phase = jobs.PhaseStaged
-	job.ProblemCode = ""
-	if _, err := repository.SaveCAS(job, token); err != nil {
+	result := ManagedAddResult{Task: TaskRef{JobID: jobID}}
+	reconciled, err := app.ReconcileJob(ctx, jobID, ReconcileInput{Mode: ReconcileLive})
+	if err != nil {
 		return ManagedAddResult{}, err
 	}
-	result := ManagedAddResult{Task: TaskRef{GID: id}}
-	if err := rpc.SaveSession(ctx, current); err != nil {
-		result.Warning = fmt.Errorf("RestartCheckpointFailed: %w", err)
-	}
+	result.Warning = reconciled.Warning
 	if err := app.recordDir(target.Path); result.Warning == nil && err != nil {
 		result.Warning = err
 	}
 	return result, nil
+}
+
+func (app *App) ManagedHook(ctx context.Context, _ string, gid string) error {
+	if err := closerInheritedLock(); err != nil {
+		return err
+	}
+	if !jobs.ValidID(gid) {
+		return errors.New("invalid managed hook GID")
+	}
+	scanned, err := jobs.New(app.options.Paths.StateDir).Scan()
+	if err != nil {
+		return err
+	}
+	var matches []string
+	for _, item := range scanned {
+		if item.Err == nil && item.Job.Execution != nil && item.Job.Execution.GID == gid {
+			matches = append(matches, item.ID)
+		}
+	}
+	if len(matches) == 0 {
+		return nil
+	}
+	if len(matches) != 1 {
+		return errors.New("ManagedIdentityConflict: execution GID is bound by multiple manifests")
+	}
+	result, err := app.ReconcileJob(ctx, matches[0], ReconcileInput{Mode: ReconcileLive, ExpectedGID: gid})
+	return reconcileCommandError(result, err)
+}
+
+func reconcileCommandError(result ReconcileResult, err error) error {
+	if err != nil {
+		return err
+	}
+	return result.Warning
+}
+
+func validateNative(job jobs.Job, scope jobs.StorageScope, native aria2.LifecycleStatus) error {
+	if job.Execution == nil || native.GID != job.Execution.GID {
+		return errors.New("lifecycle status returned a different GID")
+	}
+	expected := jobs.WorkDir(scope, job.ID)
+	if job.Payload.Location == jobs.PayloadPublished {
+		expected = job.TargetDir
+	}
+	if filepath.Clean(native.Dir) != filepath.Clean(expected) {
+		return errors.New("native execution points outside its managed directory")
+	}
+	return nil
+}
+
+func executionBindingUnique(repository *jobs.Repository, job jobs.Job) (bool, error) {
+	if job.Execution == nil {
+		return true, nil
+	}
+	items, err := repository.Scan()
+	if err != nil {
+		return false, err
+	}
+	for _, item := range items {
+		if item.Err == nil && item.ID != job.ID && item.Job.Execution != nil && item.Job.Execution.GID == job.Execution.GID {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func validateAndDetach(ctx context.Context, env liveEnvironment, job jobs.Job, scope jobs.StorageScope) error {
+	if job.Execution == nil {
+		return nil
+	}
+	native, err := env.rpc.LifecycleStatus(ctx, env.current, job.Execution.GID)
+	if aria2.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := validateNative(job, scope, native); err != nil {
+		return fmt.Errorf("ManagedIdentityConflict: %w", err)
+	}
+	return detachManagedNative(ctx, env.rpc, env.current, job.Execution.GID)
+}
+
+func convergeActivity(ctx context.Context, env liveEnvironment, gid, status string, intent jobs.ActivityIntent) error {
+	if intent == jobs.ActivityStopped && (status == "active" || status == "waiting") {
+		return env.rpc.Pause(ctx, env.current, gid)
+	}
+	if intent == jobs.ActivityRunning && status == "paused" {
+		return env.rpc.Resume(ctx, env.current, gid)
+	}
+	return nil
+}
+
+func stagedAddOptions(job jobs.Job, workDir string, fact StartupFact) aria2.AddOptions {
+	options := aria2.AddOptions{Dir: workDir, GID: job.Execution.GID, Managed: true, Pause: job.ActivityIntent == jobs.ActivityStopped}
+	if stagedIntegrityRequired(fact) {
+		value := true
+		options.CheckIntegrity = &value
+	}
+	return options
+}
+
+func transferComplete(native aria2.LifecycleStatus) bool {
+	if native.InfoHash != "" {
+		return native.Status == "active" && native.Seeder && native.CompletedLength == native.TotalLength
+	}
+	return native.Status == "complete" && native.CompletedLength == native.TotalLength
+}
+
+func checkpointAndClearIssue(ctx context.Context, repository *jobs.Repository, env liveEnvironment, job jobs.Job, token jobs.Token) (ReconcileResult, error) {
+	job.Issue = nil
+	next, err := repository.SaveCAS(job, token)
+	if err != nil {
+		return ReconcileResult{}, err
+	}
+	if err := env.rpc.SaveSession(ctx, env.current); err != nil {
+		job.Issue = &jobs.JobIssue{Code: "RestartCheckpointFailed"}
+		_, saveErr := repository.SaveCAS(job, next)
+		return ReconcileResult{Warning: err}, saveErr
+	}
+	return ReconcileResult{}, nil
+}
+
+func persistIssue(repository *jobs.Repository, job jobs.Job, token jobs.Token, code string, cause error) error {
+	job.Issue = &jobs.JobIssue{Code: code}
+	if _, err := repository.SaveCAS(job, token); err != nil {
+		return errors.Join(cause, fmt.Errorf("persist %s: %w", code, err))
+	}
+	return cause
+}
+
+func issueCode(err error, fallback string) string {
+	if strings.Contains(err.Error(), "ManagedIdentityConflict") {
+		return "ManagedIdentityConflict"
+	}
+	return fallback
+}
+
+func reconcilePreparedPublication(ctx context.Context, repository *jobs.Repository, job jobs.Job, token jobs.Token, scope jobs.StorageScope) (jobs.Job, jobs.Token, error) {
+	unlock, err := repository.LockPublication(ctx)
+	if err != nil {
+		return job, token, err
+	}
+	defer unlock()
+	return reconcilePreparedPublicationUnderLock(repository, job, token, scope)
+}
+
+func reconcilePreparedPublicationUnderLock(repository *jobs.Repository, job jobs.Job, token jobs.Token, scope jobs.StorageScope) (jobs.Job, jobs.Token, error) {
+	if job.Execution != nil {
+		return job, token, errors.New("PublicationRecoveryRequired: execution has not retired")
+	}
+	source := filepath.Join(jobs.WorkDir(scope, job.ID), job.Payload.Root)
+	destination := filepath.Join(job.TargetDir, job.Payload.FinalRoot)
+	sourceIdentity, sourceErr := publication.Identify(source)
+	destinationIdentity, destinationErr := publication.Identify(destination)
+	sourceExists, sourceUncertain := pathPresence(source, sourceErr)
+	destinationExists, destinationUncertain := pathPresence(destination, destinationErr)
+	if sourceExists && destinationExists {
+		root, err := publication.AvailableRoot(source, job.TargetDir, job.Payload.Root)
+		if err != nil {
+			return job, token, persistIssue(repository, job, token, publicationProblem(err), err)
+		}
+		job.Payload.FinalRoot = root
+		var errSave error
+		token, errSave = repository.SaveCAS(job, token)
+		if errSave != nil {
+			return job, token, errSave
+		}
+		destination = filepath.Join(job.TargetDir, root)
+		destinationIdentity, destinationErr = publication.Identify(destination)
+		destinationExists, destinationUncertain = pathPresence(destination, destinationErr)
+	}
+	if sourceUncertain || destinationUncertain {
+		err := errors.New("publication filesystem state is uncertain")
+		return job, token, persistIssue(repository, job, token, "PublicationStateUncertain", err)
+	}
+	if sourceExists && !destinationExists {
+		if job.Payload.Identity.ReliableAcrossRename && !sameJobIdentity(job.Payload.Identity, sourceIdentity) {
+			err := errors.New("prepared source identity changed")
+			return job, token, persistIssue(repository, job, token, "PublicationPayloadMismatch", err)
+		}
+		if !job.Payload.Identity.ReliableAcrossRename {
+			job.Payload.Identity = jobIdentity(sourceIdentity)
+			var err error
+			token, err = repository.SaveCAS(job, token)
+			if err != nil {
+				return job, token, err
+			}
+		}
+		if _, err := publication.MoveExpected(source, destination, sourceIdentity, publicationIdentity(job.TargetIdentity)); err != nil {
+			return job, token, persistIssue(repository, job, token, publicationProblem(err), err)
+		}
+	} else if !sourceExists && destinationExists {
+		if job.Payload.Identity.ReliableAcrossRename && !sameJobIdentity(job.Payload.Identity, destinationIdentity) {
+			err := errors.New("prepared destination identity changed")
+			return job, token, persistIssue(repository, job, token, "PublicationPayloadMismatch", err)
+		}
+	} else {
+		err := errors.New("prepared payload is missing")
+		return job, token, persistIssue(repository, job, token, "PublicationPayloadMissing", err)
+	}
+	job.Payload.Location = jobs.PayloadPublished
+	job.Issue = nil
+	if job.PublicationRenamed() {
+		job.ActivityIntent = jobs.ActivityStopped
+	}
+	if _, err := repository.ReadMetainfo(job.ID); errors.Is(err, os.ErrNotExist) {
+		job.ActivityIntent = jobs.ActivityStopped
+	}
+	next, err := repository.SaveCAS(job, token)
+	return job, next, err
+}
+
+func sameJobIdentity(expected jobs.ObjectIdentity, actual publication.Identity) bool {
+	return expected.MountID == actual.MountID && expected.ObjectID == actual.ObjectID
+}
+
+func publicationProblem(err error) string {
+	switch {
+	case errors.Is(err, publication.ErrConflict):
+		return "PublicationConflict"
+	case errors.Is(err, publication.ErrCrossDevice):
+		return "PublicationUnsupported"
+	default:
+		return "PublicationStateUncertain"
+	}
+}
+
+func detachManagedNative(ctx context.Context, rpc managedRPC, current state.State, gid string) error {
+	native, err := rpc.LifecycleStatus(ctx, current, gid)
+	if aria2.IsNotFound(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	switch native.Status {
+	case "active", "waiting", "paused":
+		if err := rpc.ForceRemove(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
+			return err
+		}
+	case "complete", "error", "removed":
+	default:
+		return fmt.Errorf("cannot detach managed GID from native status %q", native.Status)
+	}
+	return waitForManagedNativeAbsence(ctx, rpc, current, gid)
+}
+
+func waitForManagedNativeAbsence(ctx context.Context, rpc managedRPC, current state.State, gid string) error {
+	timeout := time.NewTimer(3 * time.Second)
+	defer timeout.Stop()
+	for {
+		native, err := rpc.LifecycleStatus(ctx, current, gid)
+		if aria2.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if native.GID != gid {
+			return errors.New("ManagedIdentityConflict: detach returned a different GID")
+		}
+		if native.Status == "complete" || native.Status == "error" || native.Status == "removed" {
+			if err := rpc.RemoveDownloadResult(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
+				return err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout.C:
+			return errors.New("managed GID remains present after detach timeout")
+		case <-time.After(25 * time.Millisecond):
+		}
+	}
+}
+
+func confirmManagedAdd(ctx context.Context, rpc managedRPC, current state.State, gid, expectedDir, added string, addErr error) error {
+	if addErr == nil && added != gid {
+		return errors.New("ManagedIdentityConflict: Add changed GID")
+	}
+	if addErr != nil && !errors.Is(addErr, aria2.ErrOutcomeUnknown) {
+		return addErr
+	}
+	native, statusErr := rpc.LifecycleStatus(ctx, current, gid)
+	if statusErr != nil {
+		if addErr != nil {
+			return addErr
+		}
+		return statusErr
+	}
+	if native.GID != gid || filepath.Clean(native.Dir) != filepath.Clean(expectedDir) {
+		return errors.New("ManagedIdentityConflict: confirmed Add has unexpected ownership")
+	}
+	return nil
+}
+
+func publishedFilesMatch(files []aria2.DownloadFile, publishedRoot string) bool {
+	if len(files) == 0 {
+		return false
+	}
+	root := filepath.Clean(publishedRoot)
+	for _, file := range files {
+		relative, err := filepath.Rel(root, filepath.Clean(file.Path))
+		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+			return false
+		}
+	}
+	return true
 }
 
 func ensureStorageScope(repository *jobs.Repository, target publication.Target) (jobs.StorageScope, error) {
@@ -707,28 +994,22 @@ func ensureStorageScope(repository *jobs.Repository, target publication.Target) 
 	if err != nil {
 		return jobs.StorageScope{}, err
 	}
-	mountPoint := filepath.Clean(target.MountPoint)
-	anchor := mountPoint
+	mountPoint, anchor := filepath.Clean(target.MountPoint), filepath.Clean(target.MountPoint)
 	rootWritable := unix.Access(mountPoint, unix.W_OK) == nil
 	for _, scope := range scopes {
-		if filepath.Clean(scope.MountPoint) != mountPoint {
-			continue
-		}
-		if rootWritable && filepath.Clean(scope.StagingAnchor) != anchor {
+		if filepath.Clean(scope.MountPoint) != mountPoint || (rootWritable && filepath.Clean(scope.StagingAnchor) != anchor) {
 			continue
 		}
 		stagingRoot := filepath.Join(scope.StagingAnchor, ".aria2s_staging", scope.ID)
 		if pathsOverlap(target.Path, stagingRoot) {
-			return jobs.StorageScope{}, errors.New("managed target overlaps the registered staging namespace")
+			return jobs.StorageScope{}, errors.New("managed target overlaps staging namespace")
 		}
 		marker, identifyErr := publication.Identify(stagingRoot)
-		if identifyErr != nil || !publication.SameObject(marker, publication.Identity{MountID: scope.Marker.MountID, ObjectID: scope.Marker.ObjectID, ReliableAcrossRename: scope.Marker.ReliableAcrossRename}) {
+		if identifyErr != nil || !publication.SameObject(marker, publicationIdentity(scope.Marker)) {
 			return jobs.StorageScope{}, errors.New("StorageMismatch: registered staging marker changed")
 		}
 		return scope, nil
 	}
-	// New jobs use one canonical mount-root scope when the user can write there.
-	// Existing jobs remain pinned to their registered scope through StorageID.
 	if !rootWritable {
 		anchor = filepath.Dir(target.Path)
 	}
@@ -738,7 +1019,7 @@ func ensureStorageScope(repository *jobs.Repository, target publication.Target) 
 	}
 	root := filepath.Join(anchor, ".aria2s_staging", id)
 	if pathsOverlap(target.Path, root) {
-		return jobs.StorageScope{}, errors.New("managed target overlaps the staging namespace")
+		return jobs.StorageScope{}, errors.New("managed target overlaps staging namespace")
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return jobs.StorageScope{}, err
@@ -770,257 +1051,19 @@ func randomID() (string, error) {
 	return hex.EncodeToString(data), nil
 }
 
+func randomExecutionID(jobID string) (string, error) {
+	for {
+		gid, err := randomID()
+		if err != nil || gid != jobID {
+			return gid, err
+		}
+	}
+}
 func jobIdentity(identity publication.Identity) jobs.ObjectIdentity {
 	return jobs.ObjectIdentity{MountID: identity.MountID, ObjectID: identity.ObjectID, ReliableAcrossRename: identity.ReliableAcrossRename}
 }
-
 func publicationIdentity(identity jobs.ObjectIdentity) publication.Identity {
 	return publication.Identity{MountID: identity.MountID, ObjectID: identity.ObjectID, ReliableAcrossRename: identity.ReliableAcrossRename}
-}
-
-func (app *App) ManagedHook(ctx context.Context, event, gid string) error {
-	if err := closerInheritedLock(); err != nil {
-		return err
-	}
-	if !jobs.ValidID(gid) {
-		return errors.New("invalid managed hook GID")
-	}
-	repository := jobs.New(app.options.Paths.StateDir)
-	unlock, err := repository.Lock(ctx, gid)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	job, token, err := repository.Load(gid)
-	if err != nil {
-		return err
-	}
-	current, err := state.Load(app.options.Paths.StateFile)
-	if err != nil {
-		return err
-	}
-	rpc, ok := app.options.RPC.(managedRPC)
-	if !ok {
-		return errors.New("configured RPC does not support managed hooks")
-	}
-	native, err := rpc.LifecycleStatus(ctx, current, gid)
-	if err != nil {
-		if job.Phase == jobs.PhasePublished || job.Phase == jobs.PhaseRemoved {
-			return nil
-		}
-		return err
-	}
-	scope, err := repository.LoadStorage(job.StorageID)
-	if err != nil {
-		return err
-	}
-	if !storageMatches(scope, job) {
-		return errors.New("StorageMismatch: hook storage identity changed")
-	}
-	workDir := jobs.WorkDir(scope, gid)
-	if native.GID != gid {
-		return errors.New("ManagedIdentityConflict: hook status returned a different GID")
-	}
-	expectedDir := workDir
-	if job.Phase == jobs.PhasePublished {
-		expectedDir = job.TargetDir
-	}
-	if filepath.Clean(native.Dir) != filepath.Clean(expectedDir) {
-		return errors.New("ManagedIdentityConflict: native GID points outside its managed directory")
-	}
-	if job.Phase == jobs.PhasePending {
-		job.Phase, job.ProblemCode = jobs.PhaseStaged, ""
-		token, err = repository.SaveCAS(job, token)
-		if err != nil {
-			return err
-		}
-	}
-	if event == "on-download-complete" && job.Phase == jobs.PhaseStaged && (isMetadataStatus(native) || native.InfoHash == "") {
-		metainfo, descriptor, err := completedDescriptor(workDir, native)
-		if err != nil {
-			return err
-		}
-		if descriptor {
-			if err := repository.WriteMetainfo(gid, metainfo); err != nil {
-				return err
-			}
-			if err := rpc.RemoveDownloadResult(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
-				return err
-			}
-			added, addErr := rpc.AddTorrent(ctx, current, metainfo, aria2.AddOptions{Dir: workDir, GID: gid, Managed: true})
-			if err := confirmManagedAdd(ctx, rpc, current, gid, workDir, added, addErr); err != nil {
-				return fmt.Errorf("descriptor promotion: %w", err)
-			}
-			return nil
-		}
-	}
-	if event == "on-download-complete" && job.Phase == jobs.PhasePublished && job.ActivityIntent == jobs.ActivityRunning && native.InfoHash != "" {
-		job.ActivityIntent = jobs.ActivityStopped
-		if _, err := repository.SaveCAS(job, token); err != nil {
-			return err
-		}
-		if err := rpc.RemoveDownloadResult(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
-			return err
-		}
-		return nil
-	}
-	if job.Phase != jobs.PhaseStaged {
-		return nil
-	}
-	isTorrent := native.InfoHash != ""
-	if isTorrent && event != "on-bt-download-complete" {
-		return nil
-	}
-	if !isTorrent && event != "on-download-complete" {
-		return nil
-	}
-	if isTorrent {
-		if native.Status != "active" || !native.Seeder || native.CompletedLength != native.TotalLength {
-			return errors.New("publication guard rejected incomplete torrent completion event")
-		}
-	} else if native.Status != "complete" || native.CompletedLength != native.TotalLength {
-		return errors.New("publication guard rejected incomplete HTTP completion event")
-	}
-	root, err := payloadRoot(workDir, native.Files)
-	if err != nil {
-		return err
-	}
-	source, identity, err := publication.ValidatePayloadRoot(workDir, root)
-	if err != nil {
-		return err
-	}
-	var metainfo []byte
-	if isTorrent {
-		metainfo, err = readValidatedMetainfo(repository, gid)
-		if err != nil {
-			return errors.New("torrent publication requires retained metainfo")
-		}
-	}
-	job.PayloadRoot = root
-	unlockPublication, err := repository.LockPublication(ctx)
-	if err != nil {
-		return err
-	}
-	defer unlockPublication()
-	destinationRoot, allocationErr := publication.AvailableRoot(source, job.TargetDir, root)
-	job.Phase = jobs.PhasePublishing
-	job.DestinationRoot = destinationRoot
-	job.PayloadIdentity = jobIdentity(identity)
-	payloadLength := native.TotalLength
-	job.PayloadLength = &payloadLength
-	if allocationErr != nil {
-		// Persist a deterministic legacy-compatible destination so explicit
-		// Retry can repeat allocation without detaching the only live payload.
-		job.DestinationRoot = root
-		job.ProblemCode = publicationProblem(allocationErr)
-		if _, saveErr := repository.SaveCAS(job, token); saveErr != nil {
-			return errors.Join(allocationErr, saveErr)
-		}
-		return allocationErr
-	}
-	token, err = repository.SaveCAS(job, token)
-	if err != nil {
-		return err
-	}
-	if isTorrent {
-		if err := detachManagedNative(ctx, rpc, current, gid); err != nil {
-			return err
-		}
-	} else if err := rpc.RemoveDownloadResult(ctx, current, gid); err != nil && !aria2.IsNotFound(err) {
-		return err
-	}
-	destination := filepath.Join(job.TargetDir, job.FinalRoot())
-	currentIdentity, err := publication.Identify(source)
-	if err != nil || !publication.SameObject(identity, currentIdentity) {
-		return errors.New("PublicationPayloadMismatch: payload identity changed before publication")
-	}
-	move, err := publication.MoveExpected(source, destination, identity, publicationIdentity(job.TargetIdentity))
-	if err != nil {
-		return persistJobProblem(repository, job, token, publicationProblem(err), err)
-	}
-	job.Phase = jobs.PhasePublished
-	job.ProblemCode = ""
-	if !isTorrent || job.PublicationRenamed() {
-		job.ActivityIntent = jobs.ActivityStopped
-	}
-	if move.DirectorySyncUnsupported {
-		job.ProblemCode = "PowerLossDurabilityUnavailable"
-	}
-	token, err = repository.SaveCAS(job, token)
-	if err != nil {
-		return err
-	}
-	if isTorrent && job.ActivityIntent == jobs.ActivityRunning {
-		value := false
-		removeControl := true
-		added, addErr := rpc.AddTorrent(ctx, current, metainfo, aria2.AddOptions{Dir: job.TargetDir, GID: gid, Managed: true, SeedUnverified: true, CheckIntegrity: &value, ForceSave: &value, RemoveControlFile: &removeControl})
-		if err := confirmManagedAdd(ctx, rpc, current, gid, job.TargetDir, added, addErr); err != nil {
-			return persistJobProblem(repository, job, token, "FinalSeedStartFailed", fmt.Errorf("final seed: %w", err))
-		}
-		seed, statusErr := rpc.LifecycleStatus(ctx, current, gid)
-		if statusErr != nil || !publishedFilesMatch(seed.Files, destination) {
-			conflict := errors.New("ManagedIdentityConflict: final seed files do not match the published payload")
-			return persistJobProblem(repository, job, token, "FinalSeedPathMismatch", errors.Join(conflict, statusErr))
-		}
-	}
-	if cleanupErr := cleanupPublishedWorkDir(workDir, root); cleanupErr != nil {
-		return persistJobProblem(repository, job, token, "CleanupFailed", cleanupErr)
-	}
-	return nil
-}
-
-func publicationProblem(err error) string {
-	switch {
-	case errors.Is(err, publication.ErrConflict):
-		return "PublicationConflict"
-	case errors.Is(err, publication.ErrCrossDevice):
-		return "PublicationUnsupported"
-	default:
-		return "PublicationStateUncertain"
-	}
-}
-
-func persistJobProblem(repository *jobs.Repository, job jobs.Job, token jobs.Token, code string, cause error) error {
-	job.ProblemCode = code
-	if _, err := repository.SaveCAS(job, token); err != nil {
-		return errors.Join(cause, fmt.Errorf("persist %s: %w", code, err))
-	}
-	return cause
-}
-
-func confirmManagedAdd(ctx context.Context, rpc managedRPC, current state.State, gid, expectedDir, added string, addErr error) error {
-	if addErr == nil && added != gid {
-		return errors.New("ManagedIdentityConflict: Add changed GID")
-	}
-	if addErr != nil && !errors.Is(addErr, aria2.ErrOutcomeUnknown) {
-		return addErr
-	}
-	native, statusErr := rpc.LifecycleStatus(ctx, current, gid)
-	if statusErr != nil {
-		if addErr != nil {
-			return addErr
-		}
-		return statusErr
-	}
-	if native.GID != gid || filepath.Clean(native.Dir) != filepath.Clean(expectedDir) {
-		return errors.New("ManagedIdentityConflict: confirmed Add has unexpected ownership")
-	}
-	return nil
-}
-
-func publishedFilesMatch(files []aria2.DownloadFile, publishedRoot string) bool {
-	if len(files) == 0 {
-		return false
-	}
-	root := filepath.Clean(publishedRoot)
-	for _, file := range files {
-		path := filepath.Clean(file.Path)
-		relative, err := filepath.Rel(root, path)
-		if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
-			return false
-		}
-	}
-	return true
 }
 
 var closerInheritedLock = managedruntime.CloseInheritedLock
@@ -1042,8 +1085,7 @@ func findResolvedMetainfo(workDir, infoHash string) ([]byte, error) {
 	if decodeErr != nil || len(decoded) != 20 {
 		return nil, errors.New("descriptor has no info hash")
 	}
-	path := filepath.Join(workDir, strings.ToLower(infoHash)+".torrent")
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(filepath.Join(workDir, strings.ToLower(infoHash)+".torrent"))
 	if err != nil {
 		return nil, err
 	}
@@ -1054,8 +1096,8 @@ func findResolvedMetainfo(workDir, infoHash string) ([]byte, error) {
 	return data, nil
 }
 
-func readValidatedMetainfo(repository *jobs.Repository, gid string) ([]byte, error) {
-	metainfo, err := repository.ReadMetainfo(gid)
+func readValidatedMetainfo(repository *jobs.Repository, jobID string) ([]byte, error) {
+	metainfo, err := repository.ReadMetainfo(jobID)
 	if err != nil {
 		return nil, err
 	}
@@ -1140,9 +1182,6 @@ func isPublishedCleanupArtifact(name, root string) bool {
 	if name == root+".aria2" || strings.HasSuffix(name, ".torrent") || name == ".DS_Store" || name == "._.DS_Store" {
 		return true
 	}
-	// macOS stores extended attributes in AppleDouble companions on filesystems
-	// such as exFAT. Only companions of already-managed transients are safe to
-	// remove; unrelated sidecars must retain the same cleanup guard as user data.
 	companion, found := strings.CutPrefix(name, "._")
 	return found && (companion == root+".aria2" || strings.HasSuffix(companion, ".torrent"))
 }

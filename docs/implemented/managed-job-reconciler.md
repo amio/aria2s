@@ -1,6 +1,6 @@
 # Managed Job Reconciler
 
-Status: Active design
+Status: Implemented
 
 ## Context & Goals
 

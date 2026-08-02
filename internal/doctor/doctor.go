@@ -175,8 +175,8 @@ func Check(ctx context.Context, options Options) Report {
 				addIssue("Task "+item.ID, lifecycleProblem("CorruptManifest", item.ID, item.Err.Error()))
 				continue
 			}
-			if item.Job.ProblemCode != "" {
-				addIssue("Task "+item.ID, lifecycleProblem(item.Job.ProblemCode, item.ID, "managed manifest"))
+			if item.Job.Issue != nil {
+				addIssue("Task "+item.ID, lifecycleProblem(item.Job.Issue.Code, item.ID, "managed manifest"))
 			}
 		}
 	}
@@ -187,45 +187,38 @@ func problem(code, summary, evidence, recovery string) Issue {
 	return Issue{Code: code, Severity: "error", Summary: summary, Message: summary, Explanation: summary, Evidence: evidence, Recovery: []string{recovery}}
 }
 
-func lifecycleProblem(code, gid, evidence string) Issue {
+func lifecycleProblem(code, jobID, evidence string) Issue {
 	summary := "managed task requires recovery"
+	severity := "error"
+	if metadata, ok := jobs.LookupIssue(code); ok {
+		summary = metadata.Text
+		severity = metadata.Severity
+	}
 	recovery := "Open Dashboard and use Retry after correcting the reported condition."
 	switch code {
 	case "StorageOffline", "StorageMismatch":
-		summary = "managed storage is unavailable or changed"
 		recovery = "Reconnect the original storage, verify the target, then use Retry."
 	case "PublicationConflict":
-		summary = "publication destination already exists"
 		recovery = "Use Retry to publish the retained staging payload under the next available suffixed name."
 	case "PublicationRecoveryRequired", "PublicationPayloadMismatch", "PublicationPayloadMissing", "PublicationStateUncertain":
-		summary = "publication outcome requires manual reconciliation"
 		recovery = "Inspect staging and target, preserve the only payload, then use Retry or explicit Clear."
 	case "RestartStateMissing":
-		summary = "safe restart state is missing"
 		recovery = "Restore the original session/metainfo or inspect retained staging before Retry."
 	case "CorruptManifest":
-		summary = "managed manifest is corrupt"
 		recovery = "Confirm the GID is absent from aria2, then Clear the corrupt Dashboard row."
 	case "ManagedIdentityConflict", "FinalSeedPathMismatch":
-		summary = "managed GID or payload identity conflicts with observed state"
 		recovery = "Stop external RPC changes and inspect the GID/path before retrying."
 	case "RestartCheckpointFailed":
-		summary = "aria2 session checkpoint failed"
 		recovery = "Keep the service running, repair RPC/session access, and retry the operation."
 	case "CleanupFailed":
-		summary = "published task cleanup is incomplete"
 		recovery = "Restore storage access, run `aria2s dashboard`, select this task, and choose Retry; the published payload is retained."
 	case "AddFailed", "FinalSeedStartFailed":
-		summary = "managed Add outcome needs reconciliation"
 		recovery = "Restore RPC availability and use Retry; do not submit a duplicate manually."
 	case "PowerLossDurabilityUnavailable":
-		summary = "storage does not support directory durability sync"
 		recovery = "No action is required for process-crash safety; avoid relying on host power-loss durability."
 	}
-	issue := problem(code, summary, fmt.Sprintf("gid=%s; %s", gid, evidence), recovery)
-	if code == "PowerLossDurabilityUnavailable" {
-		issue.Severity = "warning"
-	}
+	issue := problem(code, summary, fmt.Sprintf("job=%s; %s", jobID, evidence), recovery)
+	issue.Severity = severity
 	return issue
 }
 
@@ -243,11 +236,11 @@ func currentFileAllocationGID(logTail []byte, scanned []jobs.ScannedJob) string 
 	prefix := strings.ToLower(string(matches[len(matches)-1][1]))
 	matched := ""
 	for _, item := range scanned {
-		if strings.HasPrefix(item.ID, prefix) {
+		if item.Err == nil && item.Job.Execution != nil && strings.HasPrefix(item.Job.Execution.GID, prefix) {
 			if matched != "" {
 				return prefix
 			}
-			matched = item.ID
+			matched = item.Job.Execution.GID
 		}
 	}
 	if matched != "" {
