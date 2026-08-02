@@ -145,6 +145,9 @@ func TestStartPreflightsStateConfigAndWaitsForRPC(t *testing.T) {
 		RPCReadyTimeout: time.Second,
 		RPCPollInterval: time.Nanosecond,
 	})
+	if err := os.WriteFile(servicePaths.StartupProgressFile, []byte("waiting-rpc\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := application.Start(context.Background()); err != nil {
 		t.Fatalf("start: %v", err)
@@ -155,6 +158,9 @@ func TestStartPreflightsStateConfigAndWaitsForRPC(t *testing.T) {
 	}
 	if rpc.versionCalls != 2 {
 		t.Fatalf("expected RPC readiness polling, got %d calls", rpc.versionCalls)
+	}
+	if _, err := os.Lstat(servicePaths.StartupProgressFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("successful start left startup progress: %v", err)
 	}
 }
 

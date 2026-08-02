@@ -30,6 +30,11 @@ type presentableTestError struct{}
 func (presentableTestError) Error() string       { return "internal diagnostic" }
 func (presentableTestError) UserMessage() string { return "restore the files and retry" }
 
+type startupTestError struct{ message string }
+
+func (err startupTestError) Error() string          { return "connection refused" }
+func (err startupTestError) StartupMessage() string { return err.message }
+
 func keySpecial(code rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: code} }
 
 func (service *fakeService) Snapshot(ctx context.Context, query aria2.DashboardQuery) (aria2.DashboardRead, error) {
@@ -460,6 +465,34 @@ func TestInitialFailureRendersUnavailablePlaceholder(t *testing.T) {
 	model.list.LastError = errors.New("offline")
 	if view := model.View().Content; !strings.Contains(view, "aria2 is unavailable") {
 		t.Fatalf("unavailable placeholder missing:\n%s", view)
+	}
+}
+
+func TestInitialStartupHintKeepsSpinnerAndSuppressesUnavailable(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	query := model.query()
+	updated, _ := model.Update(snapshotResultMsg{
+		generation: 1,
+		query:      query,
+		err:        startupTestError{message: "Checking task 3 of 10…"},
+	})
+	model = updated.(Model)
+	view := ansi.Strip(model.View().Content)
+	if !strings.Contains(view, "Checking task 3 of 10…") || strings.Contains(view, "UNAVAILABLE") || strings.Contains(view, "aria2 is unavailable") {
+		t.Fatalf("startup view =\n%s", view)
+	}
+	frame := model.loadingFrame
+	updated, cmd := model.Update(loadingTickMsg{})
+	model = updated.(Model)
+	if model.loadingFrame != frame+1 || cmd == nil {
+		t.Fatal("startup hint did not keep the spinner active")
+	}
+
+	model.refreshState.InFlight = true
+	updated, _ = model.Update(snapshotResultMsg{generation: 1, query: query})
+	model = updated.(Model)
+	if model.startupMessage != "" || !model.list.HasSnapshot {
+		t.Fatalf("RPC success did not replace startup state: %#v", model.list)
 	}
 }
 

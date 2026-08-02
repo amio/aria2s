@@ -56,8 +56,12 @@ func (session *DashboardSession) Snapshot(ctx context.Context, query aria2.Dashb
 	}
 	read, err := session.rpc.DashboardSnapshot(ctx, session.identity, query)
 	if err != nil {
+		if progress, progressErr := readStartupProgress(session.app.options.Paths.StartupProgressFile); progressErr == nil {
+			return read, &dashboardStartupError{cause: err, progress: progress}
+		}
 		return read, err
 	}
+	_ = clearStartupProgress(session.app.options.Paths.StartupProgressFile)
 	// ListErr stays nested so the TUI can retain its last complete list. The
 	// independently valid detail result must still receive app-owned status
 	// classification before it is applied.

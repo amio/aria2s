@@ -110,6 +110,7 @@ type Model struct {
 	detailScroll    int
 	loaded          bool
 	loadingFrame    int
+	startupMessage  string
 	version         string
 	notice          string
 	noticeID        uint64
@@ -191,7 +192,7 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		model.detailState.LoadingVisible = true
 	case loadingTickMsg:
-		if model.loaded {
+		if model.loaded && model.startupMessage == "" {
 			return model, nil
 		}
 		model.loadingFrame++
@@ -313,11 +314,16 @@ func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 		model.list.Attempted = true
 		if msg.err != nil {
 			model.list.LastError = msg.err
+			model.startupMessage = ""
+			if !model.list.HasSnapshot {
+				model.startupMessage = startupMessage(msg.err)
+			}
 			if msg.query.DetailGID != "" {
 				model.detailState.LastError = msg.err
 				model.detailState.LoadingVisible = true
 			}
 		} else {
+			model.startupMessage = ""
 			if msg.read.ListErr != nil {
 				model.list.LastError = msg.read.ListErr
 			} else {
@@ -836,6 +842,14 @@ func outcomeMessage(err error) error {
 		return errors.New(userMessage.UserMessage())
 	}
 	return err
+}
+
+func startupMessage(err error) string {
+	var progress interface{ StartupMessage() string }
+	if errors.As(err, &progress) {
+		return progress.StartupMessage()
+	}
+	return ""
 }
 
 const loadingTickInterval = 80 * time.Millisecond

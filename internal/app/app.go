@@ -606,6 +606,7 @@ func (app *App) PrepareDashboard(ctx context.Context) (*DashboardSession, error)
 
 func (app *App) startSupervisor(ctx context.Context) error {
 	if app.options.Service != nil && !app.options.Service.IsRunning(ctx) {
+		_ = clearStartupProgress(app.options.Paths.StartupProgressFile)
 		return app.options.Service.Start(ctx)
 	}
 	return nil
@@ -881,6 +882,7 @@ func (app *App) waitForRPC(ctx context.Context, current state.State) error {
 	var lastErr error
 	for {
 		if _, err := app.options.RPC.Version(readyCtx, current); err == nil {
+			_ = clearStartupProgress(app.options.Paths.StartupProgressFile)
 			return nil
 		} else {
 			lastErr = err

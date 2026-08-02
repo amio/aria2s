@@ -56,6 +56,14 @@ func (app *App) ManagedExec(ctx context.Context) error {
 		return err
 	}
 	defer lease.Close()
+	progressPath := app.options.Paths.StartupProgressFile
+	cleanupProgress := true
+	defer func() {
+		if cleanupProgress {
+			_ = clearStartupProgress(progressPath)
+		}
+	}()
+	_ = persistStartupProgress(progressPath, startupProgress{phase: startupPhaseStarting})
 	repository := jobs.New(app.options.Paths.StateDir)
 	scanned, err := repository.Scan()
 	if err != nil {
@@ -87,7 +95,8 @@ func (app *App) ManagedExec(ctx context.Context) error {
 		}
 	}
 	var owned []aria2.SessionBlock
-	for _, item := range scanned {
+	for index, item := range scanned {
+		_ = persistStartupProgress(progressPath, startupProgress{phase: startupPhaseChecking, current: index + 1, total: len(scanned)})
 		if item.Err != nil {
 			fmt.Fprintf(os.Stderr, "aria2s: ignored corrupt managed manifest %s: %v\n", item.ID, item.Err)
 			continue
@@ -129,7 +138,12 @@ func (app *App) ManagedExec(ctx context.Context) error {
 	}
 	args := managedRuntimeArgs(current, app.options.Paths.HooksDir, safeStartup)
 	environment := append(os.Environ(), lease.Environment())
-	return managedExec(current.Aria2cPath, args, environment)
+	_ = persistStartupProgress(progressPath, startupProgress{phase: startupPhaseWaitingRPC})
+	if err := managedExec(current.Aria2cPath, args, environment); err != nil {
+		return err
+	}
+	cleanupProgress = false
+	return nil
 }
 
 func managedRuntimeArgs(current state.State, hooksDir string, safeStartup bool) []string {

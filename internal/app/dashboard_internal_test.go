@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -194,6 +195,35 @@ func TestDashboardSessionBindsRPCIdentityButReadsFreshRecentDirs(t *testing.T) {
 	}
 	if rpc.identities[0].RPCSecret != "bound" || !reflect.DeepEqual(dirs, []string{"/new"}) {
 		t.Fatalf("identity/metadata ownership mismatch: identity=%q dirs=%v", rpc.identities[0].RPCSecret, dirs)
+	}
+}
+
+func TestDashboardSnapshotReportsStartupHintWithoutHidingRPCCause(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	progress := startupProgress{phase: startupPhaseChecking, current: 3, total: 10}
+	if err := writeStartupProgress(servicePaths.StartupProgressFile, progress); err != nil {
+		t.Fatal(err)
+	}
+	rpcErr := errors.New("connection refused")
+	rpc := &dashboardRPCStub{snapshotErr: rpcErr}
+	session := &DashboardSession{app: New(Options{Paths: servicePaths, DashboardReadTimeout: time.Second}), rpc: rpc}
+
+	_, err := session.Snapshot(context.Background(), aria2.DashboardQuery{})
+	if !errors.Is(err, rpcErr) {
+		t.Fatalf("snapshot error lost RPC cause: %v", err)
+	}
+	var hint interface{ StartupMessage() string }
+	if !errors.As(err, &hint) || hint.StartupMessage() != "Checking task 3 of 10…" {
+		t.Fatalf("startup hint = %T %v", err, err)
+	}
+
+	rpc.snapshotErr = nil
+	if _, err := session.Snapshot(context.Background(), aria2.DashboardQuery{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(servicePaths.StartupProgressFile); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("successful snapshot left startup hint: %v", err)
 	}
 }
 

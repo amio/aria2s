@@ -93,7 +93,7 @@ func (model Model) listView() string {
 	if model.list.LastError != nil {
 		if model.list.HasSnapshot {
 			leftSide += "  " + colorizeForeground("STALE — last success "+model.list.LastSuccessAt.Format("15:04:05")+"; reconnecting", errorTextColor, false)
-		} else if model.list.Attempted {
+		} else if model.list.Attempted && model.startupMessage == "" {
 			leftSide += "  " + colorizeForeground("UNAVAILABLE — retrying; run aria2s doctor or check logs", errorTextColor, false)
 		}
 	}
@@ -371,7 +371,7 @@ func (model Model) listBody(width int, height int) []string {
 		return body[:height]
 	}
 	if len(items) == 0 {
-		if !model.loaded {
+		if !model.loaded || model.startupMessage != "" {
 			return model.loadingBody(width, height)
 		}
 		if model.list.Attempted && !model.list.HasSnapshot && model.list.LastError != nil {
@@ -442,7 +442,11 @@ var loadingFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "�
 
 func (model Model) loadingBody(width int, height int) []string {
 	frame := loadingFrames[model.loadingFrame%len(loadingFrames)]
-	indicator := frame + " Connecting..."
+	message := model.startupMessage
+	if message == "" {
+		message = "Connecting..."
+	}
+	indicator := frame + " " + message
 	return model.centeredMessageBody(width, height, indicator)
 }
 
