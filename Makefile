@@ -1,5 +1,6 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -s -w -X github.com/amio/aria2s/cmd.Version=$(VERSION)
+MACOS_CODESIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development:/ { print $$2; exit }')
 
 .DEFAULT_GOAL := help
 
@@ -11,6 +12,10 @@ help: ## Show available development commands
 
 build: ## Build the aria2s binary
 	go build -ldflags "$(LDFLAGS)" -o bin/aria2s .
+	@if [ "$$(uname -s)" = "Darwin" ] && [ -n "$(MACOS_CODESIGN_IDENTITY)" ]; then \
+		codesign --force --sign "$(MACOS_CODESIGN_IDENTITY)" \
+			--identifier io.github.amio.aria2s bin/aria2s; \
+	fi
 
 test: ## Run the full Go test suite
 	go test ./...
@@ -48,5 +53,4 @@ _bump:
 	git tag -a "v$${NEW}" -m "v$${NEW}"; \
 	BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
 	git push origin "$${BRANCH}" "v$${NEW}"
-
 
