@@ -76,6 +76,10 @@ func (service *fakeService) Remove(_ context.Context, gid string) error {
 	service.actions = append(service.actions, "remove:"+gid)
 	return nil
 }
+func (service *fakeService) Delete(_ context.Context, gid string) error {
+	service.actions = append(service.actions, "delete:"+gid)
+	return nil
+}
 func (service *fakeService) ClearStopped(_ context.Context, gid string) error {
 	service.actions = append(service.actions, "clear:"+gid)
 	return nil
@@ -568,6 +572,33 @@ func TestListResumeKeyDispatchesAdvertisedAction(t *testing.T) {
 				t.Fatal("pending action not recorded")
 			}
 		})
+	}
+}
+
+func TestListRemoveKeyPermanentlyDeletesMetadata(t *testing.T) {
+	service := &fakeService{}
+	model := NewModel(context.Background(), service, time.Second, "dev")
+	model.snapshot.Active = []aria2.Download{{
+		GID:             "metadata",
+		Status:          "active",
+		CanonicalStatus: "metadata",
+		Actions:         []string{"pause", "delete"},
+	}}
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("metadata delete did not dispatch a command")
+	}
+	msg, ok := cmd().(actionResultMsg)
+	if !ok || msg.kind != actionDelete || msg.err != nil {
+		t.Fatalf("metadata delete result = %#v", msg)
+	}
+	if len(service.actions) != 1 || service.actions[0] != "delete:metadata" {
+		t.Fatalf("metadata d action = %v", service.actions)
+	}
+	if pendingStatus(model.pending["metadata"]) != "Deleting..." {
+		t.Fatalf("metadata pending action = %q", pendingStatus(model.pending["metadata"]))
 	}
 }
 

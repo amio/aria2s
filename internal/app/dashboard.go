@@ -270,8 +270,10 @@ func (session *DashboardSession) availableActions(classification TaskClassificat
 	}
 	var actions []string
 	switch classification.Status {
-	case StatusDownloading, StatusSeeding, StatusMetadata:
+	case StatusDownloading, StatusSeeding:
 		actions = append(actions, "pause", "remove")
+	case StatusMetadata:
+		actions = append(actions, "pause", "delete")
 	case StatusWaiting:
 		actions = append(actions, "pause", "remove")
 	case StatusPaused:
@@ -412,6 +414,18 @@ func (session *DashboardSession) Remove(ctx context.Context, gid string) error {
 		return session.app.RemoveManaged(ctx, gid)
 	}
 	return session.mutate(ctx, func(ctx context.Context) error { return session.rpc.Remove(ctx, session.identity, gid) })
+}
+
+func (session *DashboardSession) Delete(ctx context.Context, gid string) error {
+	if session.managed(gid) {
+		return session.app.DeleteManaged(ctx, gid)
+	}
+	return session.mutate(ctx, func(ctx context.Context) error {
+		if err := session.rpc.Remove(ctx, session.identity, gid); err != nil {
+			return err
+		}
+		return session.rpc.ClearStopped(ctx, session.identity, gid)
+	})
 }
 
 func (session *DashboardSession) managed(gid string) bool {

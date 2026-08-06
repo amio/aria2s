@@ -135,10 +135,32 @@ func (rpc *dashboardRPCStub) AddURIs(context.Context, state.State, []string, ari
 	rpc.calls = append(rpc.calls, "add")
 	return rpc.addGID, rpc.addErr
 }
-func (*dashboardRPCStub) Remove(context.Context, state.State, string) error { return nil }
+func (rpc *dashboardRPCStub) Remove(context.Context, state.State, string) error {
+	rpc.calls = append(rpc.calls, "remove")
+	return nil
+}
 func (rpc *dashboardRPCStub) ClearStopped(context.Context, state.State, string) error {
 	rpc.calls = append(rpc.calls, "cleanup")
 	return rpc.cleanupErr
+}
+
+func TestDashboardDeleteRemovesUnmanagedMetadataAndItsResult(t *testing.T) {
+	rpc := &dashboardRPCStub{}
+	session := &DashboardSession{
+		app: New(Options{
+			Paths:                    paths.NewDarwin(t.TempDir()),
+			DashboardMutationTimeout: time.Second,
+		}),
+		identity: state.State{RPCSecret: "bound"},
+		rpc:      rpc,
+	}
+
+	if err := session.Delete(context.Background(), "metadata"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(rpc.calls, []string{"remove", "cleanup"}) {
+		t.Fatalf("metadata delete order = %v", rpc.calls)
+	}
 }
 
 func TestDashboardRetryAddsBeforeCleanupAndPreservesConfirmedReplacement(t *testing.T) {
@@ -252,7 +274,7 @@ func TestDashboardSnapshotDecoratesDetailWhenListFails(t *testing.T) {
 	}
 	if read.Detail == nil || read.Detail.CanonicalStatus != string(StatusMetadata) ||
 		read.Detail.Ownership != string(OwnershipUnmanaged) ||
-		!reflect.DeepEqual(read.Detail.Actions, []string{"pause", "remove"}) {
+		!reflect.DeepEqual(read.Detail.Actions, []string{"pause", "delete"}) {
 		t.Fatalf("detail classification = %#v", read.Detail)
 	}
 }
@@ -317,11 +339,11 @@ func TestDashboardKeepsCompletedManagedMetadataInMetadataStateUntilPromotion(t *
 	)
 
 	if len(got.Downloads.Stopped) != 1 || got.Downloads.Stopped[0].CanonicalStatus != string(StatusMetadata) ||
-		!reflect.DeepEqual(got.Downloads.Stopped[0].Actions, []string{"pause", "remove"}) {
+		!reflect.DeepEqual(got.Downloads.Stopped[0].Actions, []string{"pause", "delete"}) {
 		t.Fatalf("managed metadata row classification = %#v", got.Downloads.Stopped)
 	}
 	if got.Detail == nil || got.Detail.CanonicalStatus != string(StatusMetadata) ||
-		!reflect.DeepEqual(got.Detail.Actions, []string{"pause", "remove"}) {
+		!reflect.DeepEqual(got.Detail.Actions, []string{"pause", "delete"}) {
 		t.Fatalf("managed metadata detail classification = %#v", got.Detail)
 	}
 }

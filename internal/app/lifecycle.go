@@ -592,6 +592,15 @@ func (app *App) RemoveManaged(ctx context.Context, jobID string) error {
 	return reconcileCommandError(result, err)
 }
 
+// DeleteManaged fully retires a disposable managed task. Removal owns native
+// and staging cleanup; Clear then removes the durable manifest projection.
+func (app *App) DeleteManaged(ctx context.Context, jobID string) error {
+	if err := app.RemoveManaged(ctx, jobID); err != nil {
+		return err
+	}
+	return app.ClearManaged(ctx, jobID)
+}
+
 func (app *App) RetryManaged(ctx context.Context, jobID string) error {
 	result, err := app.ReconcileJob(ctx, jobID, ReconcileInput{Mode: ReconcileLive, retryRemoved: true})
 	return reconcileCommandError(result, err)

@@ -34,6 +34,7 @@ type DashboardService interface {
 	Resume(context.Context, string) error
 	Retry(context.Context, string) (app.RetryResult, error)
 	Remove(context.Context, string) error
+	Delete(context.Context, string) error
 	ClearStopped(context.Context, string) error
 }
 
@@ -81,6 +82,7 @@ const (
 	actionResume actionKind = "resume"
 	actionRetry  actionKind = "retry"
 	actionRemove actionKind = "remove"
+	actionDelete actionKind = "delete"
 	actionClear  actionKind = "clear"
 )
 
@@ -451,6 +453,9 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if hasTaskAction(model.Selected(), "clear") {
 			return model.startAction(actionClear)
 		}
+		if hasTaskAction(model.Selected(), "delete") {
+			return model.startAction(actionDelete)
+		}
 		if hasTaskAction(model.Selected(), "remove") {
 			return model.startAction(actionRemove)
 		}
@@ -632,6 +637,8 @@ func (model Model) startAction(kind actionKind) (tea.Model, tea.Cmd) {
 			err = model.service.Resume(model.ctx, gid)
 		case actionRemove:
 			err = model.service.Remove(model.ctx, gid)
+		case actionDelete:
+			err = model.service.Delete(model.ctx, gid)
 		case actionClear:
 			err = model.service.ClearStopped(model.ctx, gid)
 		case actionRetry:
@@ -781,6 +788,8 @@ func pendingStatus(kind actionKind) string {
 		return "Retrying..."
 	case actionRemove:
 		return "Removing..."
+	case actionDelete:
+		return "Deleting..."
 	case actionClear:
 		return "Clearing..."
 	default:

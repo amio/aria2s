@@ -740,6 +740,42 @@ func TestRemoveManagedRetriesCleanupWithoutRestarting(t *testing.T) {
 	}
 }
 
+func TestDeleteManagedRemovesNativeStagingAndManifest(t *testing.T) {
+	application, repository, rpc, target := newReconcilerTestApp(t)
+	result, err := application.AddManaged(context.Background(), AddRequest{
+		Source:    "magnet:?xt=urn:btih:test",
+		TargetDir: target,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := repository.Load(result.Task.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := repository.LoadStorage(job.StorageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workDir := jobs.WorkDir(scope, job.ID)
+
+	if err := application.DeleteManaged(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if repository.Exists(job.ID) {
+		t.Fatal("metadata manifest survived permanent delete")
+	}
+	if _, err := os.Stat(workDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("metadata staging directory survived permanent delete: %v", err)
+	}
+	if len(rpc.forceCalls) != 1 || rpc.forceCalls[0] != job.Execution.GID {
+		t.Fatalf("metadata native execution was not detached: %v", rpc.forceCalls)
+	}
+	if len(rpc.removeCalls) != 1 || rpc.removeCalls[0] != job.Execution.GID {
+		t.Fatalf("metadata native result was not cleared: %v", rpc.removeCalls)
+	}
+}
+
 func TestRetryRemovedRenamedPublicationRemainsStopped(t *testing.T) {
 	application, repository, _, target := newReconcilerTestApp(t)
 	targetFact, _ := publication.InspectTarget(target)
