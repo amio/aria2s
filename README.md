@@ -62,6 +62,7 @@ aria2s                     # ensure install/start, open the terminal dashboard
 | `aria2s start` / `stop` / `restart` | Control the background service. `start` returns immediately when the service is already healthy. Stop & restart save the session first. |
 | `aria2s status` | Show service state, port, version, and log paths at a glance. |
 | `aria2s doctor` | Check for common issues (missing binary, port conflicts, unloaded or stopped supervisor). |
+| `aria2s upgrade` | Download the latest GitHub release, require its published checksum, verify the new binary, and atomically replace the current CLI. Running downloads are not restarted. |
 | `aria2s version` / `-v` / `--version` | Print the aria2s version. |
 | `aria2s logs` | Print recent log output. |
 | `aria2s add <url-or-magnet>` | Submit a download via RPC — no need to remember the port or token. |

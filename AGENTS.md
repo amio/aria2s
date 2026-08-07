@@ -37,6 +37,7 @@
 - The local JSON-RPC boundary is the sole control and observation channel between aria2s and the managed aria2c process.
 - Durable manifests use a stable aria2s JobID plus orthogonal payload, replaceable execution-GID, removal, activity-intent, and single-issue facts; manifest schema v2 is independent from storage schema v1 and v1 manifests migrate lazily on their next locked save. Aria2's session remains the transport-resume artifact and is normalized by the reconciler before every managed exec. See `docs/implemented/managed-job-reconciler.md`.
 - Filesystem publication is one guarded, portable same-filesystem rename of a single payload root; `publication` owns path/identity/filesystem facts while `app` owns destination allocation and the detach/move/rehydrate transaction. Managed publications serialize briefly, auto-suffix observed conflicts, and clean only owned control/metainfo plus exact filesystem-metadata transients; renamed torrents stop instead of seeding paths that differ from metainfo, while concurrent external target writers remain outside the guarantee.
+- `internal/upgrade` owns latest-release resolution, mandatory checksum verification, candidate execution, and atomic CLI replacement; GoReleaser publishes a raw platform binary for this path while retaining archives for the installer, and Homebrew-owned binaries remain package-manager controlled.
 
 ## Cross-Layer Contracts
 
@@ -65,5 +66,5 @@
 - **Lifecycle reconciliation, publication boundary, and managed runtime**: `internal/app/lifecycle.go`, `internal/app/managedexec.go`, `internal/app/startup_progress.go`, `internal/publication/publication.go`, `internal/runtime/runtime.go`
 - **Service supervisor adapters**: `internal/service/backend.go`, `internal/service/launchd.go`, `internal/service/systemd.go`
 - **Terminal dashboard state and rendering**: `internal/tui/model.go`, `internal/tui/view.go`, `internal/tui/addform.go`
-- **CLI command and release installer surface**: `cmd/root.go`, `cmd/install.go`, `cmd/start.go`, `cmd/dashboard.go`, `install.sh`
+- **CLI command, release installation, and self-upgrade**: `cmd/root.go`, `cmd/install.go`, `cmd/upgrade.go`, `internal/upgrade/upgrade.go`, `install.sh`
 - **Runtime diagnostics**: `internal/doctor/doctor.go`, `cmd/doctor.go`, `cmd/status.go`, `cmd/logs.go`

@@ -203,6 +203,27 @@ func (app *App) Install(ctx context.Context, start bool) error {
 	return app.InstallManaged(ctx, InstallRequest{Start: start})
 }
 
+// RebindManagedController refreshes the committed identity of an existing v2
+// controller after its executable is atomically upgraded. It deliberately
+// leaves a running supervisor process undisturbed.
+func (app *App) RebindManagedController(ctx context.Context) (bool, error) {
+	current, err := state.Load(app.options.Paths.StateFile)
+	if errors.Is(err, os.ErrNotExist) || (err == nil && current.RuntimeSchemaVersion != 2) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("load managed state: %w", err)
+	}
+	desired, err := app.desiredManagedState(current.Aria2cPath)
+	if err != nil {
+		return false, err
+	}
+	if _, err := app.reconcileManagedRuntime(ctx, desired); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (app *App) InstallManaged(ctx context.Context, request InstallRequest) error {
 	if err := app.legacyInstallGate(ctx, request.DiscardLegacyTasks); err != nil {
 		return err

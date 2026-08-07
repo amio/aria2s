@@ -857,6 +857,70 @@ func TestInstallLeavesExistingConfigUntouchedWhenAlreadyInstalled(t *testing.T) 
 	}
 }
 
+func TestRebindManagedControllerRefreshesIdentityWithoutRestart(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	current := writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	current.ControllerIdentity = strings.Repeat("0", 64)
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatal(err)
+	}
+	if err := touch0600ForTest(servicePaths.SessionFile); err != nil {
+		t.Fatal(err)
+	}
+	serviceFile, err := service.RenderLaunchAgent(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, []byte(serviceFile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backend := &recordingService{loaded: true, running: true}
+	application := newTestApp(servicePaths, aria2c, backend, fixedRPC{version: "1.37.0"}, app.Options{})
+
+	bound, err := application.RebindManagedController(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bound {
+		t.Fatal("existing v2 controller was not rebound")
+	}
+	if len(backend.calls) != 0 || !backend.running {
+		t.Fatalf("running service was disturbed: calls=%v running=%v", backend.calls, backend.running)
+	}
+	updated, err := state.Load(servicePaths.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controllerData, err := os.ReadFile(updated.ControllerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantIdentity := fmt.Sprintf("%x", sha256.Sum256(controllerData))
+	if updated.ControllerIdentity != wantIdentity {
+		t.Fatalf("controller identity = %q, want %q", updated.ControllerIdentity, wantIdentity)
+	}
+}
+
+func TestRebindManagedControllerLeavesUninstalledCLIAlone(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	backend := &recordingService{}
+	application := newTestApp(servicePaths, aria2c, backend, fixedRPC{version: "1.37.0"}, app.Options{})
+	bound, err := application.RebindManagedController(context.Background())
+	if err != nil || bound {
+		t.Fatalf("bound=%v err=%v", bound, err)
+	}
+	if len(backend.calls) != 0 {
+		t.Fatalf("uninstalled CLI mutated service: %v", backend.calls)
+	}
+}
+
 func writeExecutable(t *testing.T, path string) string {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
