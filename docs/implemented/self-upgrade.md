@@ -15,16 +15,17 @@ or updates of package-manager-owned installations.
 ## Requirements & Invariants
 
 - Only release builds with a strict `v?MAJOR.MINOR.PATCH` version may self-upgrade;
-  development builds never overwrite themselves.
+  GoReleaser provides it through ldflags, `go install` provides it through Go build
+  metadata, and development builds never overwrite themselves.
 - The selected binary must match the running `GOOS` and `GOARCH` and the existing
   GoReleaser asset naming contract.
 - `checksums.txt` is mandatory and its SHA-256 entry must match before publication.
 - The raw platform binary has a bounded download size and is never interpreted as an
   archive or written to the authoritative path before verification.
 - The replacement candidate is written and synced beside the installed executable,
-  executed to verify its reported version, then committed with one same-filesystem
-  rename and a parent-directory sync. Before the rename, every failure leaves the old
-  executable authoritative.
+  executed with bounded time and output to verify its reported version, then committed
+  with one same-filesystem rename and a parent-directory sync. Before the rename, every
+  failure leaves the old executable authoritative.
 - A non-writable installation directory may re-run the same command through `sudo`;
   package-manager-owned Homebrew Cellar binaries are refused with package-manager
   guidance.
@@ -88,11 +89,11 @@ the versioned installer rebinds the identity to the restored binary.
 
 ## Validation & Rollout
 
-Tests cover version ordering, redirect/tag validation, platform asset selection,
-missing/duplicate/mismatched checksums, empty or oversized downloads, candidate
-version verification, successful replacement, no-op upgrades, and preservation of the
-old executable on pre-commit failures. CLI tests cover output,
-development builds, and the narrow sudo handoff.
+Tests cover release identity from Go build metadata, version ordering, redirect/tag
+validation, platform asset selection, missing/duplicate/mismatched checksums, empty or
+oversized downloads, candidate version verification, successful replacement, no-op
+updates, preservation of the old executable on pre-commit failures, and bounded candidate
+execution. CLI tests cover output, development builds, and the narrow sudo handoff.
 
 The feature has no durable-state migration and can be rolled back by reinstalling an
 earlier release through the existing versioned installer.

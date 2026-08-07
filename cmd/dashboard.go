@@ -73,7 +73,7 @@ func defaultDashboardRunner(ctx context.Context, session *app.DashboardSession) 
 	defer cancel()
 	output := newTerminalOutput(os.Stdout, cancel)
 	program := tea.NewProgram(
-		tui.NewModel(sessionCtx, session, time.Second, Version),
+		tui.NewModel(sessionCtx, session, time.Second, currentVersion()),
 		tea.WithContext(sessionCtx),
 		tea.WithOutput(output),
 	)

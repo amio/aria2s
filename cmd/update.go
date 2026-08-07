@@ -26,7 +26,7 @@ func newUpdateCommandWith(workflow updateWorkflow, rebind controllerRebinder, el
 		Short: "Update aria2s to the latest release",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			result, err := workflow(command.Context(), upgrade.Options{CurrentVersion: Version})
+			result, err := workflow(command.Context(), upgrade.Options{CurrentVersion: currentVersion()})
 			var privilegeFailure *upgrade.PrivilegeError
 			if errors.As(err, &privilegeFailure) && effectiveUID() != 0 {
 				fmt.Fprintln(command.OutOrStdout(), "Administrator permission is required; retrying with sudo.")
@@ -57,7 +57,7 @@ func newUpdateReplaceCommand() *cobra.Command {
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			result, err := upgrade.Run(command.Context(), upgrade.Options{CurrentVersion: Version})
+			result, err := upgrade.Run(command.Context(), upgrade.Options{CurrentVersion: currentVersion()})
 			if err != nil {
 				return err
 			}

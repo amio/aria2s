@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strings"
 	"testing"
 	"time"
@@ -17,6 +18,19 @@ import (
 	"github.com/amio/aria2s/internal/service"
 	"github.com/amio/aria2s/internal/state"
 )
+
+func TestResolveVersionUsesGoInstallBuildMetadata(t *testing.T) {
+	info := &debug.BuildInfo{Main: debug.Module{Version: "v1.2.3"}}
+	if got := resolveVersion("dev", info, true); got != "v1.2.3" {
+		t.Fatalf("resolved version = %q", got)
+	}
+	if got := resolveVersion("1.2.4", info, true); got != "1.2.4" {
+		t.Fatalf("ldflags version = %q", got)
+	}
+	if got := resolveVersion("dev", &debug.BuildInfo{Main: debug.Module{Version: "(devel)"}}, true); got != "dev" {
+		t.Fatalf("development version = %q", got)
+	}
+}
 
 func TestVersionFlagAndCommand(t *testing.T) {
 	application := newTestApp(paths.NewDarwin(t.TempDir()), "", &recordingService{}, &trackingRPC{})
@@ -29,8 +43,8 @@ func TestVersionFlagAndCommand(t *testing.T) {
 			t.Fatalf("execute %v: %v", args, err)
 		}
 		got := strings.TrimSpace(out.String())
-		if !strings.Contains(got, Version) {
-			t.Fatalf("args %v: expected version %q in output %q", args, Version, got)
+		if !strings.Contains(got, currentVersion()) {
+			t.Fatalf("args %v: expected version %q in output %q", args, currentVersion(), got)
 		}
 	}
 }

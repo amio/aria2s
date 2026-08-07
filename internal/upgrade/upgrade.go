@@ -23,9 +23,11 @@ import (
 )
 
 const (
-	defaultRepository = "https://github.com/amio/aria2s"
-	maxChecksumSize   = 1 << 20
-	maxBinarySize     = 128 << 20
+	defaultRepository            = "https://github.com/amio/aria2s"
+	maxChecksumSize              = 1 << 20
+	maxBinarySize                = 128 << 20
+	maxCandidateOutput           = 4 << 10
+	candidateVerificationTimeout = 10 * time.Second
 )
 
 type Options struct {
@@ -136,7 +138,7 @@ func Run(ctx context.Context, options Options) (Result, error) {
 	if err := candidate.Close(); err != nil {
 		return Result{}, fmt.Errorf("close replacement executable: %w", err)
 	}
-	if err := verifyCandidate(ctx, candidatePath, latest); err != nil {
+	if err := verifyCandidate(ctx, candidatePath, latest, candidateVerificationTimeout); err != nil {
 		return Result{}, err
 	}
 	if err := os.Rename(candidatePath, executablePath); err != nil {
@@ -335,13 +337,25 @@ func downloadBinary(ctx context.Context, client *http.Client, address string, de
 	return sum, nil
 }
 
-func verifyCandidate(ctx context.Context, executablePath string, expected version) error {
-	output, err := exec.CommandContext(ctx, executablePath, "version").CombinedOutput()
+func verifyCandidate(ctx context.Context, executablePath string, expected version, timeout time.Duration) error {
+	verificationCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	var output cappedOutput
+	command := exec.CommandContext(verificationCtx, executablePath, "version")
+	command.Stdout = &output
+	command.Stderr = &output
+	err := command.Run()
 	if err != nil {
+		if ctx.Err() != nil {
+			return fmt.Errorf("verify replacement executable: %w", ctx.Err())
+		}
+		if errors.Is(verificationCtx.Err(), context.DeadlineExceeded) {
+			return fmt.Errorf("verify replacement executable: timed out after %s", timeout)
+		}
 		return fmt.Errorf("verify replacement executable: %w", err)
 	}
 	const prefix = "aria2s version "
-	reported := strings.TrimSpace(string(output))
+	reported := strings.TrimSpace(output.String())
 	if !strings.HasPrefix(reported, prefix) {
 		return fmt.Errorf("replacement executable returned unexpected version output %q", reported)
 	}
@@ -350,4 +364,31 @@ func verifyCandidate(ctx context.Context, executablePath string, expected versio
 		return fmt.Errorf("replacement executable reports %q, expected %s", strings.TrimPrefix(reported, prefix), expected.String())
 	}
 	return nil
+}
+
+type cappedOutput struct {
+	data      []byte
+	truncated bool
+}
+
+func (output *cappedOutput) Write(data []byte) (int, error) {
+	written := len(data)
+	remaining := maxCandidateOutput - len(output.data)
+	if remaining > 0 {
+		if len(data) > remaining {
+			data = data[:remaining]
+		}
+		output.data = append(output.data, data...)
+	}
+	if written > remaining {
+		output.truncated = true
+	}
+	return written, nil
+}
+
+func (output *cappedOutput) String() string {
+	if output.truncated {
+		return string(output.data) + "…"
+	}
+	return string(output.data)
 }

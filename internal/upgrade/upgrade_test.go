@@ -13,6 +13,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRunReplacesExecutableWithVerifiedRelease(t *testing.T) {
@@ -131,6 +132,36 @@ func TestRunRejectsEmptyOrIncorrectReleaseBinary(t *testing.T) {
 				t.Fatal("old executable was replaced")
 			}
 		})
+	}
+}
+
+func TestVerifyCandidateHasIndependentTimeout(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aria2s")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nwhile :; do :; done\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	started := time.Now()
+	err := verifyCandidate(context.Background(), path, version{major: 1}, 50*time.Millisecond)
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("error = %v", err)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("verification exceeded bound: %s", elapsed)
+	}
+}
+
+func TestVerifyCandidateCapsOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aria2s")
+	script := "#!/bin/sh\ni=0\nwhile [ \"$i\" -lt 5000 ]; do printf x; i=$((i + 1)); done\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := verifyCandidate(context.Background(), path, version{major: 1}, time.Second)
+	if err == nil || !strings.Contains(err.Error(), "…") {
+		t.Fatalf("error = %v", err)
+	}
+	if len(err.Error()) > maxCandidateOutput+256 {
+		t.Fatalf("verification error is not bounded: %d bytes", len(err.Error()))
 	}
 }
 

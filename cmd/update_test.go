@@ -13,7 +13,7 @@ import (
 
 func TestUpdateCommandReportsReplacement(t *testing.T) {
 	command := newUpdateCommandWith(func(_ context.Context, options upgrade.Options) (upgrade.Result, error) {
-		if options.CurrentVersion != Version {
+		if options.CurrentVersion != currentVersion() {
 			t.Fatalf("current version = %q", options.CurrentVersion)
 		}
 		return upgrade.Result{Current: "1.0.0", Latest: "1.1.0", Updated: true}, nil
