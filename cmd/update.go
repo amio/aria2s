@@ -12,18 +12,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type upgradeWorkflow func(context.Context, upgrade.Options) (upgrade.Result, error)
+type updateWorkflow func(context.Context, upgrade.Options) (upgrade.Result, error)
 type privilegeRunner func(context.Context, string, io.Reader, io.Writer, io.Writer) error
 type controllerRebinder func(context.Context) (bool, error)
 
-func newUpgradeCommand(rebind controllerRebinder) *cobra.Command {
-	return newUpgradeCommandWith(upgrade.Run, rebind, runUpgradeWithSudo, os.Geteuid)
+func newUpdateCommand(rebind controllerRebinder) *cobra.Command {
+	return newUpdateCommandWith(upgrade.Run, rebind, runUpdateWithSudo, os.Geteuid)
 }
 
-func newUpgradeCommandWith(workflow upgradeWorkflow, rebind controllerRebinder, elevate privilegeRunner, effectiveUID func() int) *cobra.Command {
+func newUpdateCommandWith(workflow updateWorkflow, rebind controllerRebinder, elevate privilegeRunner, effectiveUID func() int) *cobra.Command {
 	return &cobra.Command{
-		Use:   "upgrade",
-		Short: "Upgrade aria2s to the latest release",
+		Use:   "update",
+		Short: "Update aria2s to the latest release",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			result, err := workflow(command.Context(), upgrade.Options{CurrentVersion: Version})
@@ -31,7 +31,7 @@ func newUpgradeCommandWith(workflow upgradeWorkflow, rebind controllerRebinder, 
 			if errors.As(err, &privilegeFailure) && effectiveUID() != 0 {
 				fmt.Fprintln(command.OutOrStdout(), "Administrator permission is required; retrying with sudo.")
 				if err := elevate(command.Context(), privilegeFailure.ExecutablePath, command.InOrStdin(), command.OutOrStdout(), command.ErrOrStderr()); err != nil {
-					return fmt.Errorf("upgrade with sudo: %w", err)
+					return fmt.Errorf("update with sudo: %w", err)
 				}
 				return rebindController(command, rebind, true)
 			}
@@ -51,9 +51,9 @@ func newUpgradeCommandWith(workflow upgradeWorkflow, rebind controllerRebinder, 
 	}
 }
 
-func newUpgradeReplaceCommand() *cobra.Command {
+func newUpdateReplaceCommand() *cobra.Command {
 	return &cobra.Command{
-		Use:    "upgrade-replace",
+		Use:    "update-replace",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
@@ -85,8 +85,8 @@ func rebindController(command *cobra.Command, rebind controllerRebinder, binaryC
 	return nil
 }
 
-func runUpgradeWithSudo(ctx context.Context, executablePath string, stdin io.Reader, stdout, stderr io.Writer) error {
-	command := exec.CommandContext(ctx, "sudo", "--", executablePath, "upgrade-replace")
+func runUpdateWithSudo(ctx context.Context, executablePath string, stdin io.Reader, stdout, stderr io.Writer) error {
+	command := exec.CommandContext(ctx, "sudo", "--", executablePath, "update-replace")
 	command.Stdin = stdin
 	command.Stdout = stdout
 	command.Stderr = stderr

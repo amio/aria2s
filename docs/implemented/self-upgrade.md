@@ -6,7 +6,7 @@ aria2s releases one `tar.gz` archive per supported macOS/Linux architecture thro
 GitHub Releases, plus a GoReleaser-generated `checksums.txt`. Releases additionally
 publish a raw binary per platform for the self-update path, while retaining archives for
 the existing installer. Users should be able to replace the currently installed CLI with
-the latest stable release by running `aria2s upgrade`.
+the latest stable release by running `aria2s update`.
 
 The implementation must stay a thin, standard-library-only GitHub client. It does not
 provide background update checks, channels, pre-release selection, downgrade support,
@@ -38,7 +38,7 @@ selection, bounded downloads, checksum validation, candidate
 verification, and atomic publication. Its only public operation accepts the current
 version and returns the previous/latest versions and whether a replacement occurred.
 
-`cmd/upgrade.go` owns Cobra output and privilege escalation. It calls the workflow once;
+`cmd/update.go` owns Cobra output and privilege escalation. It calls the workflow once;
 if and only if candidate creation failed because the executable directory is not
 writable, it re-executes the resolved current executable's hidden replacement-only
 command through `sudo`. The unprivileged parent then refreshes managed controller state,
@@ -59,7 +59,7 @@ are derived from the existing release naming contract.
 1. Add the standard-library upgrade workflow and focused tests using a local HTTP
    release server and disposable executable fixtures.
 2. Publish a checksummed raw binary beside each existing install archive.
-3. Add the setup-group `upgrade` command and privilege/error handling tests.
+3. Add the setup-group `update` command and privilege/error handling tests.
 4. Document the command and validate formatting, unit tests, vet, and release builds.
 
 ## Alternatives Considered

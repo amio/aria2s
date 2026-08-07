@@ -84,10 +84,10 @@ func newRoot(application *app.App, runner dashboardRunner) *cobra.Command {
 	doctorCmd.GroupID = "setup"
 	root.AddCommand(doctorCmd)
 
-	upgradeCmd := newUpgradeCommand(application.RebindManagedController)
-	upgradeCmd.GroupID = "setup"
-	root.AddCommand(upgradeCmd)
-	root.AddCommand(newUpgradeReplaceCommand())
+	updateCmd := newUpdateCommand(application.RebindManagedController)
+	updateCmd.GroupID = "setup"
+	root.AddCommand(updateCmd)
+	root.AddCommand(newUpdateReplaceCommand())
 
 	versionCmd := newVersionCommand()
 	versionCmd.GroupID = "setup"

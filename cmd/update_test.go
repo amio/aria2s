@@ -11,8 +11,8 @@ import (
 	"github.com/amio/aria2s/internal/upgrade"
 )
 
-func TestUpgradeCommandReportsReplacement(t *testing.T) {
-	command := newUpgradeCommandWith(func(_ context.Context, options upgrade.Options) (upgrade.Result, error) {
+func TestUpdateCommandReportsReplacement(t *testing.T) {
+	command := newUpdateCommandWith(func(_ context.Context, options upgrade.Options) (upgrade.Result, error) {
 		if options.CurrentVersion != Version {
 			t.Fatalf("current version = %q", options.CurrentVersion)
 		}
@@ -28,8 +28,8 @@ func TestUpgradeCommandReportsReplacement(t *testing.T) {
 	}
 }
 
-func TestUpgradeCommandReportsCurrentRelease(t *testing.T) {
-	command := newUpgradeCommandWith(func(context.Context, upgrade.Options) (upgrade.Result, error) {
+func TestUpdateCommandReportsCurrentRelease(t *testing.T) {
+	command := newUpdateCommandWith(func(context.Context, upgrade.Options) (upgrade.Result, error) {
 		return upgrade.Result{Current: "1.1.0", Latest: "1.1.0"}, nil
 	}, func(context.Context) (bool, error) { return false, nil }, nil, func() int { return 501 })
 	var output bytes.Buffer
@@ -42,9 +42,9 @@ func TestUpgradeCommandReportsCurrentRelease(t *testing.T) {
 	}
 }
 
-func TestUpgradeCommandRetriesOnlyPrivilegeFailureWithSudo(t *testing.T) {
+func TestUpdateCommandRetriesOnlyPrivilegeFailureWithSudo(t *testing.T) {
 	called := false
-	command := newUpgradeCommandWith(func(context.Context, upgrade.Options) (upgrade.Result, error) {
+	command := newUpdateCommandWith(func(context.Context, upgrade.Options) (upgrade.Result, error) {
 		return upgrade.Result{}, &upgrade.PrivilegeError{ExecutablePath: "/usr/local/bin/aria2s"}
 	}, func(context.Context) (bool, error) { return true, nil }, func(_ context.Context, path string, _ io.Reader, _, _ io.Writer) error {
 		called = true
@@ -63,7 +63,7 @@ func TestUpgradeCommandRetriesOnlyPrivilegeFailureWithSudo(t *testing.T) {
 	}
 }
 
-func TestUpgradeCommandDoesNotRetryOtherOrRootFailures(t *testing.T) {
+func TestUpdateCommandDoesNotRetryOtherOrRootFailures(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		uid  int
@@ -73,7 +73,7 @@ func TestUpgradeCommandDoesNotRetryOtherOrRootFailures(t *testing.T) {
 		{name: "root permission", uid: 0, err: &upgrade.PrivilegeError{ExecutablePath: "/usr/local/bin/aria2s"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			command := newUpgradeCommandWith(func(context.Context, upgrade.Options) (upgrade.Result, error) {
+			command := newUpdateCommandWith(func(context.Context, upgrade.Options) (upgrade.Result, error) {
 				return upgrade.Result{}, test.err
 			}, func(context.Context) (bool, error) { return false, nil }, func(context.Context, string, io.Reader, io.Writer, io.Writer) error {
 				t.Fatal("unexpected sudo retry")
@@ -86,8 +86,8 @@ func TestUpgradeCommandDoesNotRetryOtherOrRootFailures(t *testing.T) {
 	}
 }
 
-func TestUpgradeCommandReportsCommittedBinaryWhenRebindFails(t *testing.T) {
-	command := newUpgradeCommandWith(func(context.Context, upgrade.Options) (upgrade.Result, error) {
+func TestUpdateCommandReportsCommittedBinaryWhenRebindFails(t *testing.T) {
+	command := newUpdateCommandWith(func(context.Context, upgrade.Options) (upgrade.Result, error) {
 		return upgrade.Result{Current: "1.0.0", Latest: "1.1.0", Updated: true}, nil
 	}, func(context.Context) (bool, error) {
 		return false, errors.New("state is locked")

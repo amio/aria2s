@@ -66,5 +66,5 @@
 - **Lifecycle reconciliation, publication boundary, and managed runtime**: `internal/app/lifecycle.go`, `internal/app/managedexec.go`, `internal/app/startup_progress.go`, `internal/publication/publication.go`, `internal/runtime/runtime.go`
 - **Service supervisor adapters**: `internal/service/backend.go`, `internal/service/launchd.go`, `internal/service/systemd.go`
 - **Terminal dashboard state and rendering**: `internal/tui/model.go`, `internal/tui/view.go`, `internal/tui/addform.go`
-- **CLI command, release installation, and self-upgrade**: `cmd/root.go`, `cmd/install.go`, `cmd/upgrade.go`, `internal/upgrade/upgrade.go`, `install.sh`
+- **CLI command, release installation, and self-upgrade**: `cmd/root.go`, `cmd/install.go`, `cmd/update.go`, `internal/upgrade/upgrade.go`, `install.sh`
 - **Runtime diagnostics**: `internal/doctor/doctor.go`, `cmd/doctor.go`, `cmd/status.go`, `cmd/logs.go`
