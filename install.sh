@@ -165,7 +165,18 @@ info "version: ${TAG}  →  ${TARBALL}"
 
 # --- download ---
 TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
+INSTALL_CANDIDATE=""
+cleanup() {
+  if [ -n "$INSTALL_CANDIDATE" ]; then
+    if [ -w "$BINDIR" ]; then
+      rm -f "$INSTALL_CANDIDATE"
+    else
+      sudo rm -f "$INSTALL_CANDIDATE"
+    fi
+  fi
+  rm -rf "$TMPDIR"
+}
+trap cleanup EXIT
 
 info "downloading ${URL}..."
 downloader "$URL" -o "${TMPDIR}/${TARBALL}" || err "failed to download ${TARBALL}"
@@ -204,12 +215,29 @@ info "installing to ${BINDIR}/aria2s..."
 mkdir -p "$BINDIR" 2>/dev/null || true
 
 if [ -w "$BINDIR" ]; then
-  cp "${TMPDIR}/aria2s" "${BINDIR}/aria2s"
+  INSTALL_CANDIDATE="$(mktemp "${BINDIR}/.aria2s-install.XXXXXX")"
+  cp "${TMPDIR}/aria2s" "$INSTALL_CANDIDATE"
+  chmod 755 "$INSTALL_CANDIDATE"
 else
+  need_cmd sudo
   sudo mkdir -p "$BINDIR" 2>/dev/null || true
-  sudo cp "${TMPDIR}/aria2s" "${BINDIR}/aria2s"
+  INSTALL_CANDIDATE="$(sudo mktemp "${BINDIR}/.aria2s-install.XXXXXX")"
+  sudo cp "${TMPDIR}/aria2s" "$INSTALL_CANDIDATE"
+  sudo chmod 755 "$INSTALL_CANDIDATE"
 fi
-chmod +x "${BINDIR}/aria2s"
+
+# Validate the new inode before publishing it. Besides catching incompatible
+# release assets, this avoids macOS retaining stale executable/signature state
+# when an installed binary is overwritten in place.
+"$INSTALL_CANDIDATE" version >/dev/null \
+  || err "downloaded aria2s binary could not run on this system"
+
+if [ -w "$BINDIR" ]; then
+  mv -f "$INSTALL_CANDIDATE" "${BINDIR}/aria2s"
+else
+  sudo mv -f "$INSTALL_CANDIDATE" "${BINDIR}/aria2s"
+fi
+INSTALL_CANDIDATE=""
 
 ok "aria2s ${TAG} installed to ${BINDIR}/aria2s"
 
