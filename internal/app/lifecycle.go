@@ -420,7 +420,7 @@ func (app *App) reconcileRemovedLive(ctx context.Context, repository *jobs.Repos
 	}
 	if job.Payload.Location == jobs.PayloadStaging {
 		scope, err := repository.LoadStorage(job.StorageID)
-		if err != nil || !storageIdentityMatches(scope, job) {
+		if err != nil || !stagingIdentityMatches(scope) {
 			return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("cannot clean changed storage"), err))
 		}
 		if err := removeWorkDir(jobs.WorkDir(scope, job.ID)); err != nil {

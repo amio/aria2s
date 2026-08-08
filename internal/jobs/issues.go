@@ -24,7 +24,7 @@ var issueMetadata = map[string]IssueMetadata{
 	"PowerLossDurabilityUnavailable": {"warning", "storage cannot guarantee directory durability across host power loss", nil},
 	"RestartCheckpointFailed":        {"warning", "aria2 restart state could not be saved", []string{"retry"}},
 	"RestartStateMissing":            {"error", "native restart state is missing or invalid", []string{"retry", "remove"}},
-	"StorageOffline":                 {"error", "registered storage is unavailable or changed", []string{"retry"}},
+	"StorageOffline":                 {"error", "registered storage is unavailable or changed", []string{"retry", "remove"}},
 	"StorageMismatch":                {"error", "registered storage identity changed", []string{"retry"}},
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -650,6 +651,10 @@ func TestIssueMetadataIsDerivedFromSingleCode(t *testing.T) {
 	if len(actions) != 1 || actions[0] != "remove" {
 		t.Fatalf("warning issue actions did not come from metadata: %v", actions)
 	}
+	storageActions := (&DashboardSession{}).availableActions(TaskClassification{Status: StatusError}, true, jobs.Job{Issue: &jobs.JobIssue{Code: "StorageOffline"}})
+	if !slices.Equal(storageActions, []string{"retry", "remove"}) {
+		t.Fatalf("offline storage did not retain its removal action: %v", storageActions)
+	}
 }
 
 func TestSuccessfulAddStillConfirmsNativeDirectory(t *testing.T) {
@@ -773,6 +778,52 @@ func TestDeleteManagedRemovesNativeStagingAndManifest(t *testing.T) {
 	}
 	if len(rpc.removeCalls) != 1 || rpc.removeCalls[0] != job.Execution.GID {
 		t.Fatalf("metadata native result was not cleared: %v", rpc.removeCalls)
+	}
+}
+
+func TestDeleteManagedAfterTargetDirectoryRename(t *testing.T) {
+	application, repository, rpc, target := newReconcilerTestApp(t)
+	result, err := application.AddManaged(context.Background(), AddRequest{
+		Source:    "magnet:?xt=urn:btih:test",
+		TargetDir: target,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := repository.Load(result.Task.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := repository.LoadStorage(job.StorageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workDir := jobs.WorkDir(scope, job.ID)
+	if err := os.Rename(target, target+"-renamed"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.ReconcileJob(context.Background(), job.ID, ReconcileInput{Mode: ReconcileLive}); err == nil {
+		t.Fatal("renamed target did not produce the expected storage issue")
+	}
+	blocked, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if blocked.Issue == nil || blocked.Issue.Code != "StorageOffline" {
+		t.Fatalf("renamed target issue = %+v, want StorageOffline", blocked.Issue)
+	}
+
+	if err := application.DeleteManaged(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if repository.Exists(job.ID) {
+		t.Fatal("metadata manifest survived delete after target rename")
+	}
+	if _, err := os.Stat(workDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("staging directory survived delete after target rename: %v", err)
+	}
+	if len(rpc.forceCalls) != 1 || rpc.forceCalls[0] != job.Execution.GID {
+		t.Fatalf("native execution was not detached after target rename: %v", rpc.forceCalls)
 	}
 }
 

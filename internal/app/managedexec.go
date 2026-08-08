@@ -161,10 +161,15 @@ func storageMatches(scope jobs.StorageScope, job jobs.Job) bool {
 }
 
 func storageIdentityMatches(scope jobs.StorageScope, job jobs.Job) bool {
+	return stagingIdentityMatches(scope) && targetIdentityMatches(job)
+}
+
+func stagingIdentityMatches(scope jobs.StorageScope) bool {
 	marker, err := publication.Identify(filepath.Join(scope.StagingAnchor, ".aria2s_staging", scope.ID))
-	if err != nil || marker.MountID != scope.Marker.MountID || marker.ObjectID != scope.Marker.ObjectID {
-		return false
-	}
+	return err == nil && marker.MountID == scope.Marker.MountID && marker.ObjectID == scope.Marker.ObjectID
+}
+
+func targetIdentityMatches(job jobs.Job) bool {
 	target, err := publication.Identify(job.TargetDir)
 	return err == nil && target.MountID == job.TargetIdentity.MountID && target.ObjectID == job.TargetIdentity.ObjectID
 }
