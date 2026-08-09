@@ -827,6 +827,94 @@ func TestDeleteManagedAfterTargetDirectoryRename(t *testing.T) {
 	}
 }
 
+func TestRetryAdoptsRecreatedTargetForStagedJob(t *testing.T) {
+	application, repository, _, target := newReconcilerTestApp(t)
+	result, err := application.AddManaged(context.Background(), AddRequest{
+		Source:    "https://example.test/x",
+		TargetDir: target,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := repository.Load(result.Task.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(target, target+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := publication.InspectTarget(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if replacement.Identity.ObjectID == job.TargetIdentity.ObjectID {
+		t.Fatal("replacement unexpectedly retained the original target identity")
+	}
+
+	if _, err := application.ReconcileJob(context.Background(), job.ID, ReconcileInput{Mode: ReconcileLive}); err == nil {
+		t.Fatal("ordinary reconciliation adopted a replacement target")
+	}
+	if err := application.RetryManaged(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	loaded, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TargetIdentity.ObjectID != replacement.Identity.ObjectID || loaded.Issue != nil {
+		t.Fatalf("Retry did not adopt the recreated target: %+v", loaded)
+	}
+}
+
+func TestRetryDoesNotAdoptRecreatedTargetAfterPublication(t *testing.T) {
+	application, repository, _, target := newReconcilerTestApp(t)
+	targetFact, err := publication.InspectTarget(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := ensureStorageScope(repository, targetFact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := filepath.Join(target, "x")
+	if err := os.WriteFile(payload, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	identity, err := publication.Identify(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := jobs.Job{
+		ID: "1515151515151515", Source: "https://example.test/x", TargetDir: target,
+		TargetIdentity: jobIdentity(targetFact.Identity), StorageID: scope.ID,
+		ActivityIntent: jobs.ActivityStopped,
+		Payload:        jobs.PayloadState{Location: jobs.PayloadPublished, Root: "x", FinalRoot: "x", Identity: jobIdentity(identity)},
+	}
+	if _, err := repository.Create(job); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(target, target+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := application.RetryManaged(context.Background(), job.ID); err == nil {
+		t.Fatal("Retry adopted a replacement target without its published payload")
+	}
+	loaded, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TargetIdentity.ObjectID != job.TargetIdentity.ObjectID || loaded.Issue == nil || loaded.Issue.Code != "StorageOffline" {
+		t.Fatalf("published target replacement was not rejected: %+v", loaded)
+	}
+}
+
 func TestRetryRemovedRenamedPublicationRemainsStopped(t *testing.T) {
 	application, repository, _, target := newReconcilerTestApp(t)
 	targetFact, _ := publication.InspectTarget(target)

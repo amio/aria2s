@@ -49,6 +49,7 @@ type ReconcileInput struct {
 	SavedDuplicate bool
 	ExpectedGID    string
 	retryRemoved   bool
+	adoptTarget    bool
 }
 
 type ReconcileResult struct {
@@ -100,6 +101,12 @@ func (app *App) ReconcileJob(ctx context.Context, jobID string, input ReconcileI
 		return ReconcileResult{}, errors.New("configured RPC does not support managed reconciliation")
 	}
 	env := liveEnvironment{rpc: rpc, current: current}
+	if input.adoptTarget {
+		job, token, err = adoptRecreatedTarget(repository, job, token)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+	}
 	if input.retryRemoved && job.Removed {
 		if _, err := app.reconcileRemovedLive(ctx, repository, env, job, token); err != nil {
 			return ReconcileResult{}, err
@@ -602,8 +609,31 @@ func (app *App) DeleteManaged(ctx context.Context, jobID string) error {
 }
 
 func (app *App) RetryManaged(ctx context.Context, jobID string) error {
-	result, err := app.ReconcileJob(ctx, jobID, ReconcileInput{Mode: ReconcileLive, retryRemoved: true})
+	result, err := app.ReconcileJob(ctx, jobID, ReconcileInput{Mode: ReconcileLive, retryRemoved: true, adoptTarget: true})
 	return reconcileCommandError(result, err)
+}
+
+// adoptRecreatedTarget lets an explicit Retry accept a replacement for the
+// configured target directory before publication. The registered staging
+// marker remains authoritative, and later lifecycle entry points stay strict.
+func adoptRecreatedTarget(repository *jobs.Repository, job jobs.Job, token jobs.Token) (jobs.Job, jobs.Token, error) {
+	if job.Removed || job.Payload.Location != jobs.PayloadStaging || job.Payload.FinalRoot != "" {
+		return job, token, nil
+	}
+	scope, err := repository.LoadStorage(job.StorageID)
+	if err != nil || !stagingIdentityMatches(scope) {
+		return job, token, nil
+	}
+	target, err := publication.InspectTarget(job.TargetDir)
+	if err != nil || target.Identity.MountID != scope.Marker.MountID || filepath.Clean(target.MountPoint) != filepath.Clean(scope.MountPoint) {
+		return job, token, nil
+	}
+	if target.Identity.MountID == job.TargetIdentity.MountID && target.Identity.ObjectID == job.TargetIdentity.ObjectID {
+		return job, token, nil
+	}
+	job.TargetIdentity = jobIdentity(target.Identity)
+	next, err := repository.SaveCAS(job, token)
+	return job, next, err
 }
 
 func (app *App) ClearManaged(ctx context.Context, jobID string) error {
