@@ -624,8 +624,8 @@ func adoptRecreatedTarget(repository *jobs.Repository, job jobs.Job, token jobs.
 	if err != nil || !stagingIdentityMatches(scope) {
 		return job, token, nil
 	}
-	target, err := publication.InspectTarget(job.TargetDir)
-	if err != nil || target.Identity.MountID != scope.Marker.MountID || filepath.Clean(target.MountPoint) != filepath.Clean(scope.MountPoint) {
+	target, err := retryTarget(scope, job.TargetDir)
+	if err != nil {
 		return job, token, nil
 	}
 	if target.Identity.MountID == job.TargetIdentity.MountID && target.Identity.ObjectID == job.TargetIdentity.ObjectID {
@@ -634,6 +634,54 @@ func adoptRecreatedTarget(repository *jobs.Repository, job jobs.Job, token jobs.
 	job.TargetIdentity = jobIdentity(target.Identity)
 	next, err := repository.SaveCAS(job, token)
 	return job, next, err
+}
+
+func retryTarget(scope jobs.StorageScope, path string) (publication.Target, error) {
+	target, err := publication.InspectTarget(path)
+	if err == nil {
+		return validateRetryTarget(scope, path, target)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return publication.Target{}, err
+	}
+
+	parent, err := filepath.Abs(filepath.Dir(path))
+	if err != nil {
+		return publication.Target{}, err
+	}
+	physicalParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		return publication.Target{}, err
+	}
+	if filepath.Clean(physicalParent) != filepath.Clean(parent) {
+		return publication.Target{}, errors.New("target parent is not a physical directory")
+	}
+	parentIdentity, err := publication.Identify(parent)
+	if err != nil || parentIdentity.MountID != scope.Marker.MountID {
+		return publication.Target{}, errors.Join(errors.New("target parent is outside the registered storage"), err)
+	}
+	if err := os.Mkdir(path, 0o755); err != nil {
+		return publication.Target{}, err
+	}
+	target, err = publication.InspectTarget(path)
+	if err == nil {
+		target, err = validateRetryTarget(scope, path, target)
+	}
+	if err != nil {
+		return publication.Target{}, errors.Join(err, os.Remove(path))
+	}
+	return target, nil
+}
+
+func validateRetryTarget(scope jobs.StorageScope, path string, target publication.Target) (publication.Target, error) {
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return publication.Target{}, err
+	}
+	if filepath.Clean(target.Path) != filepath.Clean(abs) || target.Identity.MountID != scope.Marker.MountID || filepath.Clean(target.MountPoint) != filepath.Clean(scope.MountPoint) {
+		return publication.Target{}, errors.New("target is outside the registered storage or resolves through a symlink")
+	}
+	return target, nil
 }
 
 func (app *App) ClearManaged(ctx context.Context, jobID string) error {

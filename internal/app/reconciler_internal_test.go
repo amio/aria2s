@@ -869,6 +869,58 @@ func TestRetryAdoptsRecreatedTargetForStagedJob(t *testing.T) {
 	}
 }
 
+func TestRetryCreatesMissingTargetForStagedJob(t *testing.T) {
+	application, repository, _, target := newReconcilerTestApp(t)
+	result, err := application.AddManaged(context.Background(), AddRequest{
+		Source:    "https://example.test/x",
+		TargetDir: target,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := repository.Load(result.Task.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(target, target+"-moved"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := application.RetryManaged(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	recreated, err := publication.InspectTarget(target)
+	if err != nil {
+		t.Fatalf("Retry did not recreate the missing target: %v", err)
+	}
+	loaded, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.TargetIdentity.ObjectID != recreated.Identity.ObjectID || loaded.Issue != nil {
+		t.Fatalf("Retry did not adopt the recreated target: %+v", loaded)
+	}
+}
+
+func TestRetryDoesNotCreateTargetThroughSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	realParent := filepath.Join(root, "real")
+	if err := os.Mkdir(realParent, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	linkedParent := filepath.Join(root, "linked")
+	if err := os.Symlink(realParent, linkedParent); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := retryTarget(jobs.StorageScope{}, filepath.Join(linkedParent, "downloads")); err == nil {
+		t.Fatal("Retry created a target through a symlinked parent")
+	}
+	if _, err := os.Stat(filepath.Join(realParent, "downloads")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("unexpected target behind symlink: %v", err)
+	}
+}
+
 func TestRetryDoesNotAdoptRecreatedTargetAfterPublication(t *testing.T) {
 	application, repository, _, target := newReconcilerTestApp(t)
 	targetFact, err := publication.InspectTarget(target)
