@@ -1,6 +1,6 @@
 // Package app owns crash-safe convergence between managed manifests, aria2,
-// and publication. Every lifecycle entry point records intent and delegates to
-// ReconcileJob; no caller owns a parallel phase-specific workflow.
+// and publication. ReconcileJob owns environment-driven convergence; explicit
+// commands prepare their durable intent or recovery facts before entering it.
 package app
 
 import (
@@ -48,8 +48,6 @@ type ReconcileInput struct {
 	SavedBlock     *aria2.SessionBlock
 	SavedDuplicate bool
 	ExpectedGID    string
-	retryRemoved   bool
-	adoptTarget    bool
 }
 
 type ReconcileResult struct {
@@ -76,15 +74,8 @@ func (app *App) ReconcileJob(ctx context.Context, jobID string, input ReconcileI
 	if input.ExpectedGID != "" && (job.Execution == nil || job.Execution.GID != input.ExpectedGID) {
 		return ReconcileResult{}, nil // stale hook
 	}
-	if job.Execution != nil {
-		unique, scanErr := executionBindingUnique(repository, job)
-		if scanErr != nil {
-			return ReconcileResult{}, scanErr
-		}
-		if !unique {
-			conflict := errors.New("ManagedIdentityConflict: execution GID is bound by multiple manifests")
-			return ReconcileResult{}, persistIssue(repository, job, token, "ManagedIdentityConflict", conflict)
-		}
+	if err := ensureExecutionBindingUnique(repository, job, token); err != nil {
+		return ReconcileResult{}, err
 	}
 	if input.Mode == "" {
 		input.Mode = ReconcileLive
@@ -92,40 +83,23 @@ func (app *App) ReconcileJob(ctx context.Context, jobID string, input ReconcileI
 	if input.Mode == ReconcileStartup {
 		return app.reconcileStartupLocked(ctx, repository, job, token, input.SavedBlock, input.SavedDuplicate)
 	}
-	current, err := state.Load(app.options.Paths.StateFile)
+	env, err := app.liveEnvironment()
 	if err != nil {
 		return ReconcileResult{}, err
 	}
+	return app.reconcileLiveLocked(ctx, repository, env, job, token)
+}
+
+func (app *App) liveEnvironment() (liveEnvironment, error) {
+	current, err := state.Load(app.options.Paths.StateFile)
+	if err != nil {
+		return liveEnvironment{}, err
+	}
 	rpc, ok := app.options.RPC.(managedRPC)
 	if !ok {
-		return ReconcileResult{}, errors.New("configured RPC does not support managed reconciliation")
+		return liveEnvironment{}, errors.New("configured RPC does not support managed reconciliation")
 	}
-	env := liveEnvironment{rpc: rpc, current: current}
-	if input.adoptTarget {
-		job, token, err = adoptRecreatedTarget(repository, job, token)
-		if err != nil {
-			return ReconcileResult{}, err
-		}
-	}
-	if input.retryRemoved && job.Removed {
-		if _, err := app.reconcileRemovedLive(ctx, repository, env, job, token); err != nil {
-			return ReconcileResult{}, err
-		}
-		job, token, err = repository.Load(jobID)
-		if err != nil {
-			return ReconcileResult{}, err
-		}
-		job.Removed = false
-		job.ActivityIntent = jobs.ActivityRunning
-		if job.Payload.Location == jobs.PayloadPublished && job.PublicationRenamed() {
-			job.ActivityIntent = jobs.ActivityStopped
-		}
-		token, err = repository.SaveCAS(job, token)
-		if err != nil {
-			return ReconcileResult{}, err
-		}
-	}
-	return app.reconcileLiveLocked(ctx, repository, env, job, token)
+	return liveEnvironment{rpc: rpc, current: current}, nil
 }
 
 func (app *App) reconcileLiveLocked(ctx context.Context, repository *jobs.Repository, env liveEnvironment, job jobs.Job, token jobs.Token) (ReconcileResult, error) {
@@ -609,7 +583,50 @@ func (app *App) DeleteManaged(ctx context.Context, jobID string) error {
 }
 
 func (app *App) RetryManaged(ctx context.Context, jobID string) error {
-	result, err := app.ReconcileJob(ctx, jobID, ReconcileInput{Mode: ReconcileLive, retryRemoved: true, adoptTarget: true})
+	repository := jobs.New(app.options.Paths.StateDir)
+	unlock, err := repository.Lock(ctx, jobID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+
+	job, token, err := repository.Load(jobID)
+	if err != nil {
+		return err
+	}
+	if err := ensureExecutionBindingUnique(repository, job, token); err != nil {
+		return err
+	}
+	env, err := app.liveEnvironment()
+	if err != nil {
+		return err
+	}
+
+	// Removal cleanup remains authoritative until it succeeds. Only then may
+	// Retry revive the task and prepare explicit target recovery.
+	if job.Removed {
+		if _, err := app.reconcileRemovedLive(ctx, repository, env, job, token); err != nil {
+			return err
+		}
+		job, token, err = repository.Load(jobID)
+		if err != nil {
+			return err
+		}
+		job.Removed = false
+		job.ActivityIntent = jobs.ActivityRunning
+		if job.Payload.Location == jobs.PayloadPublished && job.PublicationRenamed() {
+			job.ActivityIntent = jobs.ActivityStopped
+		}
+		token, err = repository.SaveCAS(job, token)
+		if err != nil {
+			return err
+		}
+	}
+	job, token, err = adoptRecreatedTarget(repository, job, token)
+	if err != nil {
+		return err
+	}
+	result, err := app.reconcileLiveLocked(ctx, repository, env, job, token)
 	return reconcileCommandError(result, err)
 }
 
@@ -617,7 +634,7 @@ func (app *App) RetryManaged(ctx context.Context, jobID string) error {
 // configured target directory before publication. The registered staging
 // marker remains authoritative, and later lifecycle entry points stay strict.
 func adoptRecreatedTarget(repository *jobs.Repository, job jobs.Job, token jobs.Token) (jobs.Job, jobs.Token, error) {
-	if job.Removed || job.Payload.Location != jobs.PayloadStaging || job.Payload.FinalRoot != "" {
+	if job.Payload.Location != jobs.PayloadStaging || job.Payload.FinalRoot != "" {
 		return job, token, nil
 	}
 	scope, err := repository.LoadStorage(job.StorageID)
@@ -829,6 +846,15 @@ func executionBindingUnique(repository *jobs.Repository, job jobs.Job) (bool, er
 		}
 	}
 	return true, nil
+}
+
+func ensureExecutionBindingUnique(repository *jobs.Repository, job jobs.Job, token jobs.Token) error {
+	unique, err := executionBindingUnique(repository, job)
+	if err != nil || unique {
+		return err
+	}
+	conflict := errors.New("ManagedIdentityConflict: execution GID is bound by multiple manifests")
+	return persistIssue(repository, job, token, "ManagedIdentityConflict", conflict)
 }
 
 func validateAndDetach(ctx context.Context, env liveEnvironment, job jobs.Job, scope jobs.StorageScope) error {

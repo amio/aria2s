@@ -100,8 +100,9 @@ adding a new service layer.
   does not select a separate recovery implementation.
 - At most one durable issue is retained. The reconciler replaces or clears it
   from current observation; it does not maintain issue history.
-- Retry invokes the same reconciliation path after the user corrects an
-  external condition. It contains no phase-specific recovery logic.
+- Retry may prepare explicit removed-task revival or unpublished-target
+  recovery under the JobID lock, then invokes the same live reconciliation
+  path. It contains no Retry-specific convergence logic.
 - Every destructive or externally visible side effect remains guarded by
   JobID lock, manifest CAS, native identity validation, and the existing
   publication lock where applicable.
@@ -244,8 +245,12 @@ binding. A stopped seed may remain paused with its binding; Resume reuses it.
 - **Pause/Resume** changes only `ActivityIntent`, saves it, and calls live
   reconciliation.
 - **Remove** sets `Removed=true`, saves it, and calls live reconciliation.
-- **Retry** calls live reconciliation. It does not clear an issue in advance;
-  successful observation clears it, while an unchanged blocker remains.
+- **Retry** holds the JobID lock while it first completes any pending removal,
+  revives the durable intent, and validates, creates, or adopts a same-path
+  target for unpublished staging work. It then enters ordinary live
+  reconciliation without a Retry-specific convergence mode. It does not clear
+  an issue in advance; successful observation clears it, while an unchanged
+  blocker remains.
 - **Hook** scans manifests for exactly one `Execution.GID` match and calls live
   reconciliation without pre-acquiring the JobID lock. `ReconcileJob` owns the
   lock and revalidates the binding; a stale hook is a no-op.
