@@ -3,7 +3,156 @@
 // substates of native active work; managed phases remain internal facts.
 package app
 
-import "github.com/amio/aria2s/internal/jobs"
+import (
+	"time"
+
+	"github.com/amio/aria2s/internal/aria2"
+	"github.com/amio/aria2s/internal/jobs"
+)
+
+// DashboardListWindow bounds the waiting and stopped task windows requested by
+// the product UI. It is translated to native RPC offsets only at the app edge.
+type DashboardListWindow struct {
+	WaitingLimit  int
+	StoppedOffset int
+	StoppedLimit  int
+}
+
+type DashboardQuery struct {
+	List                DashboardListWindow
+	DetailGID           string
+	ResolveDetailSource bool
+}
+
+// DashboardRead preserves independent validity for list, detail, and detail
+// source results while exposing only stable product identities.
+type DashboardRead struct {
+	Downloads       TaskSnapshot
+	ListErr         error
+	Detail          *TaskDetail
+	DetailErr       error
+	DetailSourceErr error
+}
+
+type TaskSnapshot struct {
+	Active  []TaskRow
+	Waiting []TaskRow
+	Stopped []TaskRow
+}
+
+type TaskRow struct {
+	GID               string
+	Status            string
+	Dir               string
+	Name              string
+	IsMetadata        bool
+	CompletedLength   int64
+	TotalLength       int64
+	LengthKnown       bool
+	DownloadSpeed     int64
+	UploadSpeed       int64
+	UploadLength      int64
+	UploadLengthKnown bool
+	NumSeeders        int64
+	Connections       int64
+	Seeder            bool
+	InfoHash          string
+	AddedAt           time.Time
+	CanonicalStatus   string
+	Ownership         string
+	IssueCode         string
+	IssueText         string
+	Actions           []string
+}
+
+type TaskDetail struct {
+	GID                    string
+	Status                 string
+	Name                   string
+	IsMetadata             bool
+	CompletedLength        int64
+	TotalLength            int64
+	LengthKnown            bool
+	DownloadSpeed          int64
+	UploadSpeed            int64
+	UploadLength           int64
+	VerifiedLength         int64
+	VerifyIntegrityPending bool
+	InfoHash               string
+	NumSeeders             int64
+	Seeder                 bool
+	PieceLength            int64
+	NumPieces              int64
+	PrimaryURI             string
+	DownloadDir            string
+	Connections            int64
+	ErrorCode              string
+	ErrorMessage           string
+	Files                  []TaskFile
+	CanonicalStatus        string
+	Ownership              string
+	IssueCode              string
+	IssueText              string
+	Actions                []string
+}
+
+type TaskFile struct {
+	Path            string
+	Name            string
+	Length          int64
+	CompletedLength int64
+	Selected        bool
+}
+
+func taskRowFromNative(row aria2.Download) TaskRow {
+	return TaskRow{
+		GID: row.GID, Status: row.Status, Dir: row.Dir, Name: row.Name,
+		IsMetadata: row.IsMetadata, CompletedLength: row.CompletedLength,
+		TotalLength: row.TotalLength, LengthKnown: row.LengthKnown,
+		DownloadSpeed: row.DownloadSpeed, UploadSpeed: row.UploadSpeed,
+		UploadLength: row.UploadLength, UploadLengthKnown: row.UploadLengthKnown,
+		NumSeeders: row.NumSeeders, Connections: row.Connections, Seeder: row.Seeder,
+		InfoHash: row.InfoHash, AddedAt: row.AddedAt,
+	}
+}
+
+func taskRowsFromNative(rows []aria2.Download) []TaskRow {
+	if rows == nil {
+		return nil
+	}
+	result := make([]TaskRow, len(rows))
+	for index, row := range rows {
+		result[index] = taskRowFromNative(row)
+	}
+	return result
+}
+
+func taskSnapshotFromNative(snapshot aria2.DownloadSnapshot) TaskSnapshot {
+	return TaskSnapshot{
+		Active: taskRowsFromNative(snapshot.Active), Waiting: taskRowsFromNative(snapshot.Waiting),
+		Stopped: taskRowsFromNative(snapshot.Stopped),
+	}
+}
+
+func taskDetailFromNative(detail aria2.DownloadDetail) TaskDetail {
+	var files []TaskFile
+	if detail.Files != nil {
+		files = make([]TaskFile, len(detail.Files))
+		for index, file := range detail.Files {
+			files[index] = TaskFile(file)
+		}
+	}
+	return TaskDetail{
+		GID: detail.GID, Status: detail.Status, Name: detail.Name, IsMetadata: detail.IsMetadata,
+		CompletedLength: detail.CompletedLength, TotalLength: detail.TotalLength, LengthKnown: detail.LengthKnown,
+		DownloadSpeed: detail.DownloadSpeed, UploadSpeed: detail.UploadSpeed, UploadLength: detail.UploadLength,
+		VerifiedLength: detail.VerifiedLength, VerifyIntegrityPending: detail.VerifyIntegrityPending,
+		InfoHash: detail.InfoHash, NumSeeders: detail.NumSeeders, Seeder: detail.Seeder,
+		PieceLength: detail.PieceLength, NumPieces: detail.NumPieces, PrimaryURI: detail.PrimaryURI,
+		DownloadDir: detail.DownloadDir, Connections: detail.Connections, ErrorCode: detail.ErrorCode,
+		ErrorMessage: detail.ErrorMessage, Files: files,
+	}
+}
 
 type TaskStatus string
 type TaskOwnership string

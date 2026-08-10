@@ -1,10 +1,52 @@
 package app
 
 import (
+	"reflect"
 	"testing"
+	"time"
 
+	"github.com/amio/aria2s/internal/aria2"
 	"github.com/amio/aria2s/internal/jobs"
 )
+
+func TestNativeDashboardProjectionPreservesProtocolFacts(t *testing.T) {
+	addedAt := time.Unix(123, 0).UTC()
+	nativeRow := aria2.Download{
+		GID: "native", Status: "active", Dir: "/downloads", Name: "payload", IsMetadata: true,
+		CompletedLength: 1, TotalLength: 2, LengthKnown: true, DownloadSpeed: 3, UploadSpeed: 4,
+		UploadLength: 5, UploadLengthKnown: true, NumSeeders: 6, Connections: 7, Seeder: true,
+		InfoHash: "hash", AddedAt: addedAt,
+	}
+	wantRow := TaskRow{
+		GID: "native", Status: "active", Dir: "/downloads", Name: "payload", IsMetadata: true,
+		CompletedLength: 1, TotalLength: 2, LengthKnown: true, DownloadSpeed: 3, UploadSpeed: 4,
+		UploadLength: 5, UploadLengthKnown: true, NumSeeders: 6, Connections: 7, Seeder: true,
+		InfoHash: "hash", AddedAt: addedAt,
+	}
+	if got := taskRowFromNative(nativeRow); !reflect.DeepEqual(got, wantRow) {
+		t.Fatalf("native row projection = %#v, want %#v", got, wantRow)
+	}
+
+	nativeDetail := aria2.DownloadDetail{
+		GID: "native", Status: "active", Name: "payload", IsMetadata: true,
+		CompletedLength: 1, TotalLength: 2, LengthKnown: true, DownloadSpeed: 3, UploadSpeed: 4,
+		UploadLength: 5, VerifiedLength: 6, VerifyIntegrityPending: true, InfoHash: "hash",
+		NumSeeders: 7, Seeder: true, PieceLength: 8, NumPieces: 9, PrimaryURI: "https://example.test/payload",
+		DownloadDir: "/downloads", Connections: 10, ErrorCode: "11", ErrorMessage: "message",
+		Files: []aria2.DownloadFile{{Path: "/downloads/payload", Name: "payload", Length: 12, CompletedLength: 11, Selected: true}},
+	}
+	wantDetail := TaskDetail{
+		GID: "native", Status: "active", Name: "payload", IsMetadata: true,
+		CompletedLength: 1, TotalLength: 2, LengthKnown: true, DownloadSpeed: 3, UploadSpeed: 4,
+		UploadLength: 5, VerifiedLength: 6, VerifyIntegrityPending: true, InfoHash: "hash",
+		NumSeeders: 7, Seeder: true, PieceLength: 8, NumPieces: 9, PrimaryURI: "https://example.test/payload",
+		DownloadDir: "/downloads", Connections: 10, ErrorCode: "11", ErrorMessage: "message",
+		Files: []TaskFile{{Path: "/downloads/payload", Name: "payload", Length: 12, CompletedLength: 11, Selected: true}},
+	}
+	if got := taskDetailFromNative(nativeDetail); !reflect.DeepEqual(got, wantDetail) {
+		t.Fatalf("native detail projection = %#v, want %#v", got, wantDetail)
+	}
+}
 
 func TestCanonicalStatusUsesNativeVocabularyAndActiveSubstates(t *testing.T) {
 	tests := []struct {

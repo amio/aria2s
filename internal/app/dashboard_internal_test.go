@@ -18,7 +18,7 @@ import (
 type dashboardRPCStub struct {
 	calls       []string
 	identities  []state.State
-	snapshot    aria2.DashboardRead
+	snapshot    aria2.ReadBatch
 	snapshotErr error
 	source      aria2.RetrySource
 	addGID      string
@@ -26,11 +26,11 @@ type dashboardRPCStub struct {
 	cleanupErr  error
 	detail      aria2.DownloadDetail
 	detailErr   error
-	queries     []aria2.DashboardQuery
+	queries     []aria2.ReadBatchQuery
 	detailGIDs  []string
 }
 
-func (rpc *dashboardRPCStub) DashboardSnapshot(_ context.Context, current state.State, query aria2.DashboardQuery) (aria2.DashboardRead, error) {
+func (rpc *dashboardRPCStub) ReadBatch(_ context.Context, current state.State, query aria2.ReadBatchQuery) (aria2.ReadBatch, error) {
 	rpc.identities = append(rpc.identities, current)
 	rpc.queries = append(rpc.queries, query)
 	return rpc.snapshot, rpc.snapshotErr
@@ -51,13 +51,13 @@ func TestDashboardMapsStableJobIDToReplaceableExecutionOnlyAtRPCBoundary(t *test
 	if _, err := jobs.New(servicePaths.StateDir).Create(job); err != nil {
 		t.Fatal(err)
 	}
-	rpc := &dashboardRPCStub{snapshot: aria2.DashboardRead{Downloads: aria2.DownloadSnapshot{Active: []aria2.Download{{GID: executionGID, Status: "active"}}}, Detail: &aria2.DownloadDetail{GID: executionGID, Status: "active"}}}
+	rpc := &dashboardRPCStub{snapshot: aria2.ReadBatch{Downloads: aria2.DownloadSnapshot{Active: []aria2.Download{{GID: executionGID, Status: "active"}}}, Detail: &aria2.DownloadDetail{GID: executionGID, Status: "active"}}}
 	session := &DashboardSession{app: New(Options{Paths: servicePaths, DashboardReadTimeout: time.Second}), rpc: rpc}
-	read, err := session.Snapshot(context.Background(), aria2.DashboardQuery{DetailGID: jobID})
+	read, err := session.Snapshot(context.Background(), DashboardQuery{DetailGID: jobID})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rpc.queries) != 1 || rpc.queries[0].DetailGID != executionGID || len(rpc.queries[0].ManagedGIDs) != 1 || rpc.queries[0].ManagedGIDs[0] != executionGID {
+	if len(rpc.queries) != 1 || rpc.queries[0].DetailGID != executionGID || len(rpc.queries[0].ObserveGIDs) != 1 || rpc.queries[0].ObserveGIDs[0] != executionGID {
 		t.Fatalf("RPC query did not use execution binding: %+v", rpc.queries)
 	}
 	if len(read.Downloads.Active) != 1 || read.Downloads.Active[0].GID != jobID || read.Detail == nil || read.Detail.GID != jobID {
@@ -111,7 +111,7 @@ func TestDashboardSnapshotDoesNotQueryNativeDetailForManifestOnlyJob(t *testing.
 	}
 	rpc := &dashboardRPCStub{}
 	session := &DashboardSession{app: New(Options{Paths: servicePaths, DashboardReadTimeout: time.Second}), rpc: rpc}
-	read, err := session.Snapshot(context.Background(), aria2.DashboardQuery{DetailGID: jobID})
+	read, err := session.Snapshot(context.Background(), DashboardQuery{DetailGID: jobID})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +208,7 @@ func TestDashboardSessionBindsRPCIdentityButReadsFreshRecentDirs(t *testing.T) {
 	if err := state.Save(servicePaths.StateFile, updated); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := session.Snapshot(context.Background(), aria2.DashboardQuery{}); err != nil {
+	if _, err := session.Snapshot(context.Background(), DashboardQuery{}); err != nil {
 		t.Fatal(err)
 	}
 	dirs, err := session.RecentDirs(context.Background())
@@ -231,7 +231,7 @@ func TestDashboardSnapshotReportsStartupHintWithoutHidingRPCCause(t *testing.T) 
 	rpc := &dashboardRPCStub{snapshotErr: rpcErr}
 	session := &DashboardSession{app: New(Options{Paths: servicePaths, DashboardReadTimeout: time.Second}), rpc: rpc}
 
-	_, err := session.Snapshot(context.Background(), aria2.DashboardQuery{})
+	_, err := session.Snapshot(context.Background(), DashboardQuery{})
 	if !errors.Is(err, rpcErr) {
 		t.Fatalf("snapshot error lost RPC cause: %v", err)
 	}
@@ -241,7 +241,7 @@ func TestDashboardSnapshotReportsStartupHintWithoutHidingRPCCause(t *testing.T) 
 	}
 
 	rpc.snapshotErr = nil
-	if _, err := session.Snapshot(context.Background(), aria2.DashboardQuery{}); err != nil {
+	if _, err := session.Snapshot(context.Background(), DashboardQuery{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Lstat(servicePaths.StartupProgressFile); !errors.Is(err, os.ErrNotExist) {
@@ -258,14 +258,14 @@ func TestDashboardSnapshotDecoratesDetailWhenListFails(t *testing.T) {
 		Name:       "example.iso",
 		IsMetadata: true,
 	}
-	rpc := &dashboardRPCStub{snapshot: aria2.DashboardRead{
+	rpc := &dashboardRPCStub{snapshot: aria2.ReadBatch{
 		ListErr: errors.New("list unavailable"),
 		Detail:  &detail,
 	}}
 	application := New(Options{Paths: servicePaths, DashboardReadTimeout: time.Second})
 	session := &DashboardSession{app: application, rpc: rpc}
 
-	read, err := session.Snapshot(context.Background(), aria2.DashboardQuery{DetailGID: "a"})
+	read, err := session.Snapshot(context.Background(), DashboardQuery{DetailGID: "a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -295,10 +295,10 @@ func TestDashboardDecoratesManagedDetail(t *testing.T) {
 	}
 	session := &DashboardSession{}
 
-	got := session.decorateSnapshot(
-		aria2.DashboardRead{Detail: &detail},
+	got := session.projectSnapshot(
+		aria2.ReadBatch{Detail: &detail},
 		[]jobs.ScannedJob{{ID: jobID, Job: job}},
-		aria2.DashboardQuery{DetailGID: executionGID},
+		aria2.ReadBatchQuery{DetailGID: executionGID},
 	)
 
 	if got.Detail == nil || got.Detail.CanonicalStatus != string(StatusDownloading) ||
@@ -329,13 +329,13 @@ func TestDashboardKeepsCompletedManagedMetadataInMetadataStateUntilPromotion(t *
 	}
 	session := &DashboardSession{}
 
-	got := session.decorateSnapshot(
-		aria2.DashboardRead{
-			Detail:  &detail,
-			Managed: map[string]*aria2.Download{executionGID: &metadata},
+	got := session.projectSnapshot(
+		aria2.ReadBatch{
+			Detail:   &detail,
+			Observed: map[string]*aria2.Download{executionGID: &metadata},
 		},
 		[]jobs.ScannedJob{{ID: jobID, Job: job}},
-		aria2.DashboardQuery{DetailGID: executionGID},
+		aria2.ReadBatchQuery{DetailGID: executionGID},
 	)
 
 	if len(got.Downloads.Stopped) != 1 || got.Downloads.Stopped[0].CanonicalStatus != string(StatusMetadata) ||
@@ -359,12 +359,12 @@ func TestDashboardProjectsDetachedPublishingAsRecoverableManifestDetail(t *testi
 			Identity: jobs.ObjectIdentity{MountID: 1, ObjectID: 2}},
 	}
 	session := &DashboardSession{}
-	read := aria2.DashboardRead{
-		Managed:         map[string]*aria2.Download{gid: nil},
+	read := aria2.ReadBatch{
+		Observed:        map[string]*aria2.Download{gid: nil},
 		DetailErr:       &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "GID is not found"},
 		DetailSourceErr: &aria2.RPCError{Method: "aria2.getUris", Code: 1, Message: "GID is not found"},
 	}
-	got := session.decorateSnapshot(read, []jobs.ScannedJob{{ID: gid, Job: job}}, aria2.DashboardQuery{DetailGID: gid})
+	got := session.projectSnapshot(read, []jobs.ScannedJob{{ID: gid, Job: job}}, aria2.ReadBatchQuery{DetailGID: gid})
 	if len(got.Downloads.Stopped) != 1 {
 		t.Fatalf("manifest row count = %d", len(got.Downloads.Stopped))
 	}
@@ -396,12 +396,12 @@ func TestDashboardProjectsPublishedPayloadMetricsInRowAndDetail(t *testing.T) {
 	}
 	session := &DashboardSession{app: New(Options{Paths: servicePaths})}
 	notFound := &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "GID is not found"}
-	read := aria2.DashboardRead{
-		Managed:   map[string]*aria2.Download{gid: nil},
+	read := aria2.ReadBatch{
+		Observed:  map[string]*aria2.Download{gid: nil},
 		DetailErr: notFound,
 	}
 
-	got := session.decorateSnapshot(read, []jobs.ScannedJob{{ID: gid, Job: job}}, aria2.DashboardQuery{DetailGID: gid})
+	got := session.projectSnapshot(read, []jobs.ScannedJob{{ID: gid, Job: job}}, aria2.ReadBatchQuery{DetailGID: gid})
 	if len(got.Downloads.Stopped) != 1 {
 		t.Fatalf("manifest row count = %d", len(got.Downloads.Stopped))
 	}
@@ -419,10 +419,10 @@ func TestDashboardProjectsPublishedPayloadMetricsInRowAndDetail(t *testing.T) {
 	}
 
 	job.Payload.Length = nil
-	unknown := session.decorateSnapshot(
-		aria2.DashboardRead{Managed: map[string]*aria2.Download{gid: nil}},
+	unknown := session.projectSnapshot(
+		aria2.ReadBatch{Observed: map[string]*aria2.Download{gid: nil}},
 		[]jobs.ScannedJob{{ID: gid, Job: job}},
-		aria2.DashboardQuery{},
+		aria2.ReadBatchQuery{},
 	)
 	if len(unknown.Downloads.Stopped) != 1 ||
 		unknown.Downloads.Stopped[0].CanonicalStatus != string(StatusComplete) ||
@@ -465,14 +465,14 @@ func TestDashboardKeepsNativeMetricsAuthoritativeForManagedTask(t *testing.T) {
 		LengthKnown:     true,
 	}
 	session := &DashboardSession{app: New(Options{Paths: servicePaths})}
-	got := session.decorateSnapshot(
-		aria2.DashboardRead{
+	got := session.projectSnapshot(
+		aria2.ReadBatch{
 			Downloads: aria2.DownloadSnapshot{Stopped: []aria2.Download{row}},
 			Detail:    &detail,
-			Managed:   map[string]*aria2.Download{executionGID: &row},
+			Observed:  map[string]*aria2.Download{executionGID: &row},
 		},
 		[]jobs.ScannedJob{{ID: jobID, Job: job}},
-		aria2.DashboardQuery{DetailGID: executionGID},
+		aria2.ReadBatchQuery{DetailGID: executionGID},
 	)
 
 	if len(got.Downloads.Stopped) != 1 ||

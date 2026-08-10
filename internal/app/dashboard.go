@@ -31,44 +31,59 @@ type DashboardSession struct {
 	rpc      dashboardRPC
 }
 
-func (session *DashboardSession) Snapshot(ctx context.Context, query aria2.DashboardQuery) (aria2.DashboardRead, error) {
+func (session *DashboardSession) Snapshot(ctx context.Context, query DashboardQuery) (DashboardRead, error) {
 	ctx, cancel := context.WithTimeout(ctx, session.app.options.DashboardReadTimeout)
 	defer cancel()
 	scanned, scanErr := jobs.New(session.app.options.Paths.StateDir).Scan()
 	if scanErr != nil {
-		return aria2.DashboardRead{}, scanErr
+		return DashboardRead{}, scanErr
 	}
 	requestedJobID := query.DetailGID
+	nativeQuery := aria2.ReadBatchQuery{
+		List: aria2.ListOptions{
+			WaitingLimit: query.List.WaitingLimit, StoppedOffset: query.List.StoppedOffset,
+			StoppedLimit: query.List.StoppedLimit,
+		},
+		DetailGID: query.DetailGID, ResolveDetailSource: query.ResolveDetailSource,
+	}
 	for _, item := range scanned {
 		if item.Err != nil {
 			continue
 		}
 		if item.Job.Execution != nil {
-			query.ManagedGIDs = append(query.ManagedGIDs, item.Job.Execution.GID)
+			nativeQuery.ObserveGIDs = append(nativeQuery.ObserveGIDs, item.Job.Execution.GID)
 		}
 		if requestedJobID == item.ID {
 			if item.Job.Execution != nil {
-				query.DetailGID = item.Job.Execution.GID
+				nativeQuery.DetailGID = item.Job.Execution.GID
 			} else {
-				query.DetailGID = ""
+				nativeQuery.DetailGID = ""
 			}
 		}
 	}
-	read, err := session.rpc.DashboardSnapshot(ctx, session.identity, query)
+	read, err := session.rpc.ReadBatch(ctx, session.identity, nativeQuery)
 	if err != nil {
 		if progress, progressErr := readStartupProgress(session.app.options.Paths.StartupProgressFile); progressErr == nil {
-			return read, &dashboardStartupError{cause: err, progress: progress}
+			return DashboardRead{}, &dashboardStartupError{cause: err, progress: progress}
 		}
-		return read, err
+		return DashboardRead{}, err
 	}
 	_ = clearStartupProgress(session.app.options.Paths.StartupProgressFile)
 	// ListErr stays nested so the TUI can retain its last complete list. The
 	// independently valid detail result must still receive app-owned status
 	// classification before it is applied.
-	return session.decorateSnapshot(read, scanned, query, requestedJobID), nil
+	return session.projectSnapshot(read, scanned, nativeQuery, requestedJobID), nil
 }
 
-func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scanned []jobs.ScannedJob, query aria2.DashboardQuery, requestedJobID ...string) aria2.DashboardRead {
+func (session *DashboardSession) projectSnapshot(native aria2.ReadBatch, scanned []jobs.ScannedJob, query aria2.ReadBatchQuery, requestedJobID ...string) DashboardRead {
+	read := DashboardRead{
+		Downloads: taskSnapshotFromNative(native.Downloads), ListErr: native.ListErr,
+		DetailErr: native.DetailErr, DetailSourceErr: native.DetailSourceErr,
+	}
+	if native.Detail != nil {
+		detail := taskDetailFromNative(*native.Detail)
+		read.Detail = &detail
+	}
 	managed := make(map[string]jobs.Job)
 	managedByExecution := make(map[string]jobs.Job)
 	for _, item := range scanned {
@@ -78,15 +93,15 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 				managedByExecution[item.Job.Execution.GID] = item.Job
 			}
 		} else {
-			read.Downloads.Stopped = append(read.Downloads.Stopped, aria2.Download{GID: item.ID, Status: "error", Name: "corrupt managed manifest", CanonicalStatus: string(StatusError), Ownership: string(OwnershipManaged), IssueCode: "CorruptManifest", IssueText: issueText("CorruptManifest"), Actions: []string{"clear"}})
+			read.Downloads.Stopped = append(read.Downloads.Stopped, TaskRow{GID: item.ID, Status: "error", Name: "corrupt managed manifest", CanonicalStatus: string(StatusError), Ownership: string(OwnershipManaged), IssueCode: "CorruptManifest", IssueText: issueText("CorruptManifest"), Actions: []string{"clear"}})
 		}
 	}
 	seen := make(map[string]struct{})
 	windowed := make(map[string]struct{})
-	for _, row := range append(append(append([]aria2.Download{}, read.Downloads.Active...), read.Downloads.Waiting...), read.Downloads.Stopped...) {
+	for _, row := range append(append(append([]TaskRow{}, read.Downloads.Active...), read.Downloads.Waiting...), read.Downloads.Stopped...) {
 		windowed[row.GID] = struct{}{}
 	}
-	for gid, row := range read.Managed {
+	for gid, row := range native.Observed {
 		if row == nil {
 			continue
 		}
@@ -95,14 +110,14 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 		}
 		switch row.Status {
 		case "active":
-			read.Downloads.Active = append(read.Downloads.Active, *row)
+			read.Downloads.Active = append(read.Downloads.Active, taskRowFromNative(*row))
 		case "waiting", "paused":
-			read.Downloads.Waiting = append(read.Downloads.Waiting, *row)
+			read.Downloads.Waiting = append(read.Downloads.Waiting, taskRowFromNative(*row))
 		default:
-			read.Downloads.Stopped = append(read.Downloads.Stopped, *row)
+			read.Downloads.Stopped = append(read.Downloads.Stopped, taskRowFromNative(*row))
 		}
 	}
-	decorate := func(rows []aria2.Download) {
+	decorate := func(rows []TaskRow) {
 		for index := range rows {
 			row := &rows[index]
 			job, owned := managedByExecution[row.GID]
@@ -137,7 +152,7 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 		}
 		classification := ClassifyTask(ClassificationFact{Managed: true, Lifecycle: derivedLifecycle(job), Intent: job.ActivityIntent, IssueCode: issueCodeForJob(job), NativeAbsent: true})
 		code := projectedIssueCode(job, true)
-		row := aria2.Download{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.FinalRoot(), job.Source), AddedAt: job.CreatedAt, CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), IssueCode: code, IssueText: issueText(code), Actions: session.availableActions(classification, true, job)}
+		row := TaskRow{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.FinalRoot(), job.Source), AddedAt: job.CreatedAt, CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), IssueCode: code, IssueText: issueText(code), Actions: session.availableActions(classification, true, job)}
 		applyPublishedMetrics(&row.CompletedLength, &row.TotalLength, &row.LengthKnown, job)
 		read.Downloads.Stopped = append(read.Downloads.Stopped, row)
 	}
@@ -146,7 +161,7 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 		detailJobID = requestedJobID[0]
 	}
 	if detailJobID != "" && read.Detail == nil {
-		managedRow, absenceKnown := read.Managed[query.DetailGID]
+		managedRow, absenceKnown := native.Observed[query.DetailGID]
 		job, ok := managed[detailJobID]
 		if ok && (job.Execution == nil || (aria2.IsNotFound(read.DetailErr) && absenceKnown && managedRow == nil)) {
 			detail := session.manifestDetail(job)
@@ -155,7 +170,9 @@ func (session *DashboardSession) decorateSnapshot(read aria2.DashboardRead, scan
 			read.DetailSourceErr = nil
 		}
 	}
-	read.Downloads.Stopped = pageManagedHistory(read.Downloads.Stopped, managed, query.List)
+	read.Downloads.Stopped = pageManagedHistory(read.Downloads.Stopped, managed, DashboardListWindow{
+		WaitingLimit: query.List.WaitingLimit, StoppedOffset: query.List.StoppedOffset, StoppedLimit: query.List.StoppedLimit,
+	})
 	return read
 }
 
@@ -172,7 +189,7 @@ func applyPublishedMetrics(completed, total *int64, known *bool, job jobs.Job) {
 // manifestDetail supplies the stable local projection after aria2 has detached
 // a managed task. It keeps detail-only commands, such as opening the payload,
 // consistent with the Dashboard snapshot.
-func (session *DashboardSession) manifestDetail(job jobs.Job) aria2.DownloadDetail {
+func (session *DashboardSession) manifestDetail(job jobs.Job) TaskDetail {
 	classification := ClassifyTask(ClassificationFact{
 		Managed:      true,
 		Lifecycle:    derivedLifecycle(job),
@@ -180,7 +197,7 @@ func (session *DashboardSession) manifestDetail(job jobs.Job) aria2.DownloadDeta
 		IssueCode:    issueCodeForJob(job),
 		NativeAbsent: true,
 	})
-	detail := aria2.DownloadDetail{
+	detail := TaskDetail{
 		GID:             job.ID,
 		Status:          "absent",
 		Name:            firstNonempty(job.FinalRoot(), job.Source),
@@ -196,7 +213,7 @@ func (session *DashboardSession) manifestDetail(job jobs.Job) aria2.DownloadDeta
 	return detail
 }
 
-func (session *DashboardSession) decorateDetail(detail *aria2.DownloadDetail, job jobs.Job, managed bool) {
+func (session *DashboardSession) decorateDetail(detail *TaskDetail, job jobs.Job, managed bool) {
 	fact := ClassificationFact{
 		Managed:        managed,
 		NativeStatus:   detail.Status,
@@ -227,8 +244,8 @@ func projectedIssueCode(job jobs.Job, nativeAbsent bool) string {
 	return ""
 }
 
-func pageManagedHistory(rows []aria2.Download, managed map[string]jobs.Job, page aria2.ListQuery) []aria2.Download {
-	var native, history []aria2.Download
+func pageManagedHistory(rows []TaskRow, managed map[string]jobs.Job, page DashboardListWindow) []TaskRow {
+	var native, history []TaskRow
 	for _, row := range rows {
 		if row.Ownership == string(OwnershipManaged) {
 			history = append(history, row)
@@ -352,7 +369,7 @@ func firstNonempty(values ...string) string {
 	return "managed task"
 }
 
-func (session *DashboardSession) TaskDetail(ctx context.Context, gid string) (aria2.DownloadDetail, error) {
+func (session *DashboardSession) TaskDetail(ctx context.Context, gid string) (TaskDetail, error) {
 	ctx, cancel := context.WithTimeout(ctx, session.app.options.DashboardReadTimeout)
 	defer cancel()
 	job, _, loadErr := jobs.New(session.app.options.Paths.StateDir).Load(gid)
@@ -363,13 +380,14 @@ func (session *DashboardSession) TaskDetail(ctx context.Context, gid string) (ar
 	if loadErr == nil && job.Execution == nil {
 		return session.manifestDetail(job), nil
 	}
-	detail, err := session.rpc.TaskDetail(ctx, session.identity, nativeGID)
+	nativeDetail, err := session.rpc.TaskDetail(ctx, session.identity, nativeGID)
 	if err != nil {
 		if loadErr == nil && aria2.IsNotFound(err) {
 			return session.manifestDetail(job), nil
 		}
-		return detail, err
+		return taskDetailFromNative(nativeDetail), err
 	}
+	detail := taskDetailFromNative(nativeDetail)
 	if loadErr == nil {
 		detail.GID = job.ID
 		session.decorateDetail(&detail, job, true)

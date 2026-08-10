@@ -13,7 +13,7 @@ import (
 	"github.com/amio/aria2s/internal/aria2"
 )
 
-func TestDashboardSnapshotUsesAuthenticatedNestedMulticall(t *testing.T) {
+func TestReadBatchUsesAuthenticatedNestedMulticall(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			Method string            `json:"method"`
@@ -44,7 +44,7 @@ func TestDashboardSnapshotUsesAuthenticatedNestedMulticall(t *testing.T) {
 	}))
 	defer server.Close()
 	client := aria2.NewRPCClient(server.URL, "secret", server.Client())
-	read, err := client.DashboardSnapshot(context.Background(), aria2.DashboardQuery{List: aria2.ListQuery{WaitingLimit: 10, StoppedLimit: 10}, DetailGID: "a", ResolveDetailSource: true})
+	read, err := client.ReadBatch(context.Background(), aria2.ReadBatchQuery{List: aria2.ListOptions{WaitingLimit: 10, StoppedLimit: 10}, DetailGID: "a", ResolveDetailSource: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,13 +53,13 @@ func TestDashboardSnapshotUsesAuthenticatedNestedMulticall(t *testing.T) {
 	}
 }
 
-func TestDashboardSnapshotKeepsDetailWhenNestedListCallFails(t *testing.T) {
+func TestReadBatchKeepsDetailWhenNestedListCallFails(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[[]],{"code":1,"message":"waiting failed"},[[]],[{"gid":"a","status":"active","files":[]}]]}`)
 	}))
 	defer server.Close()
 	client := aria2.NewRPCClient(server.URL, "", server.Client())
-	read, err := client.DashboardSnapshot(context.Background(), aria2.DashboardQuery{List: aria2.ListQuery{StoppedLimit: 10}, DetailGID: "a"})
+	read, err := client.ReadBatch(context.Background(), aria2.ReadBatchQuery{List: aria2.ListOptions{StoppedLimit: 10}, DetailGID: "a"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,21 +72,21 @@ func TestDashboardSnapshotKeepsDetailWhenNestedListCallFails(t *testing.T) {
 	}
 }
 
-func TestDashboardSnapshotResolvesEveryManagedGIDAndTreatsOnlyNotFoundAsAbsent(t *testing.T) {
+func TestReadBatchResolvesEveryObservedGIDAndTreatsOnlyNotFoundAsAbsent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[[]],[[]],[[]],[{"gid":"0123456789abcdef","status":"paused","dir":"/stage/job","files":[]}],{"code":1,"message":"GID not found"}]}`)
 	}))
 	defer server.Close()
 	client := aria2.NewRPCClient(server.URL, "", server.Client())
-	read, err := client.DashboardSnapshot(context.Background(), aria2.DashboardQuery{ManagedGIDs: []string{"0123456789abcdef", "fedcba9876543210"}})
+	read, err := client.ReadBatch(context.Background(), aria2.ReadBatchQuery{ObserveGIDs: []string{"0123456789abcdef", "fedcba9876543210"}})
 	if err != nil || read.ListErr != nil {
-		t.Fatalf("managed resolution failed: read=%#v err=%v", read, err)
+		t.Fatalf("observed GID resolution failed: read=%#v err=%v", read, err)
 	}
-	if row := read.Managed["0123456789abcdef"]; row == nil || row.Dir != "/stage/job" {
-		t.Fatalf("managed live row = %#v", row)
+	if row := read.Observed["0123456789abcdef"]; row == nil || row.Dir != "/stage/job" {
+		t.Fatalf("observed live row = %#v", row)
 	}
-	if row, ok := read.Managed["fedcba9876543210"]; !ok || row != nil {
-		t.Fatalf("managed absence was not proven: row=%#v ok=%v", row, ok)
+	if row, ok := read.Observed["fedcba9876543210"]; !ok || row != nil {
+		t.Fatalf("observed absence was not proven: row=%#v ok=%v", row, ok)
 	}
 }
 
@@ -98,7 +98,7 @@ func TestMutationTransportFailureIsOutcomeUnknownAndKeepsCause(t *testing.T) {
 	}
 }
 
-func TestDashboardSnapshotRejectsMalformedResultCountAndShape(t *testing.T) {
+func TestReadBatchRejectsMalformedResultCountAndShape(t *testing.T) {
 	responses := []string{
 		`{"jsonrpc":"2.0","id":"1","result":[[[]]]}`,
 		`{"jsonrpc":"2.0","id":"1","result":[[],[[]],[[]]]}`,
@@ -108,20 +108,20 @@ func TestDashboardSnapshotRejectsMalformedResultCountAndShape(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, response) }))
 			defer server.Close()
 			client := aria2.NewRPCClient(server.URL, "", server.Client())
-			if _, err := client.DashboardSnapshot(context.Background(), aria2.DashboardQuery{}); err == nil {
+			if _, err := client.ReadBatch(context.Background(), aria2.ReadBatchQuery{}); err == nil {
 				t.Fatal("malformed whole read was accepted")
 			}
 		})
 	}
 }
 
-func TestDashboardSnapshotJoinsAllNestedListFaults(t *testing.T) {
+func TestReadBatchJoinsAllNestedListFaults(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[{"code":1,"message":"active"},{"code":2,"message":"waiting"},[[]]]}`)
 	}))
 	defer server.Close()
 	client := aria2.NewRPCClient(server.URL, "", server.Client())
-	read, err := client.DashboardSnapshot(context.Background(), aria2.DashboardQuery{})
+	read, err := client.ReadBatch(context.Background(), aria2.ReadBatchQuery{})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -1231,8 +1231,8 @@ func (rpc *flakyRPC) Shutdown(context.Context, state.State) error {
 	return nil
 }
 
-func (*flakyRPC) DashboardSnapshot(context.Context, state.State, aria2.DashboardQuery) (aria2.DashboardRead, error) {
-	return aria2.DashboardRead{}, nil
+func (*flakyRPC) ReadBatch(context.Context, state.State, aria2.ReadBatchQuery) (aria2.ReadBatch, error) {
+	return aria2.ReadBatch{}, nil
 }
 func (*flakyRPC) TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error) {
 	return aria2.DownloadDetail{}, nil

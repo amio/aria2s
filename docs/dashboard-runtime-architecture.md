@@ -164,8 +164,8 @@ results live in `app`, not in the RPC protocol package.
 
 ```go
 type DashboardService interface {
-    Snapshot(context.Context, aria2.DashboardQuery) (aria2.DashboardRead, error)
-    TaskDetail(context.Context, string) (aria2.DownloadDetail, error)
+    Snapshot(context.Context, app.DashboardQuery) (app.DashboardRead, error)
+    TaskDetail(context.Context, string) (app.TaskDetail, error)
     AddURI(context.Context, string, aria2.AddOptions) (app.AddResult, error)
     RecentDirs(context.Context) ([]string, error)
     DefaultDir() string
@@ -209,27 +209,38 @@ Every completed interval starts one HTTP `system.multicall` containing:
 - optional `aria2.tellStatus` for the visible detail GID;
 - optional `aria2.getUris` only while initially resolving detail source data.
 
-The protocol types live in `internal/aria2`, not `tui`, so `app` does not depend on UI types.
+Native protocol types live in `internal/aria2`. The app converts that bounded observation into
+its product read model before returning it; `tui` depends only on the app query, row, and detail
+types.
 
 ```go
-type ListQuery struct {
+// internal/app
+type DashboardListWindow struct {
     WaitingLimit  int
     StoppedOffset int
     StoppedLimit  int
 }
 
 type DashboardQuery struct {
-    List                ListQuery
+    List                DashboardListWindow
     DetailGID           string
     ResolveDetailSource bool
 }
 
 type DashboardRead struct {
-    Downloads       DownloadSnapshot
+    Downloads       TaskSnapshot
     ListErr         error
-    Detail          *DownloadDetail
+    Detail          *TaskDetail
     DetailErr       error
     DetailSourceErr error
+}
+
+// internal/aria2
+type ReadBatchQuery struct {
+    List                ListOptions
+    DetailGID           string
+    ResolveDetailSource bool
+    ObserveGIDs         []string
 }
 ```
 
@@ -268,9 +279,9 @@ a failed detail. The combined wire query is not reused as applied UI state.
 
 ```go
 type ListState struct {
-    Requested     aria2.ListQuery
-    Applied       aria2.ListQuery
-    Snapshot      aria2.DownloadSnapshot
+    Requested     app.DashboardListWindow
+    Applied       app.DashboardListWindow
+    Snapshot      app.TaskSnapshot
     HasSnapshot   bool
     Attempted     bool
     LastSuccessAt time.Time
@@ -280,7 +291,7 @@ type ListState struct {
 type DetailState struct {
     RequestedGID   string
     AppliedGID     string
-    Detail         aria2.DownloadDetail
+    Detail         app.TaskDetail
     HasDetail      bool
     SourceResolved bool
     LastError      error

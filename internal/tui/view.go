@@ -8,7 +8,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
-	"github.com/amio/aria2s/internal/aria2"
+	"github.com/amio/aria2s/internal/app"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -473,7 +473,7 @@ func (model Model) centeredBodyLine(width int, text string) string {
 	return borderedCenteredLine(text, width, bodyTextColor, contentBgColor)
 }
 
-func (model Model) downloadRow(width int, download aria2.Download, selected bool) string {
+func (model Model) downloadRow(width int, download app.TaskRow, selected bool) string {
 	contentWidth := contentInner(width)
 	l := computeLayout(contentWidth)
 	parts := make([]string, 0, 11)
@@ -759,15 +759,15 @@ func statusTone(status string) rgb {
 	}
 }
 
-func downloadStatusLabel(download aria2.Download) string {
+func downloadStatusLabel(download app.TaskRow) string {
 	return statusLabel(download.CanonicalStatus)
 }
 
-func downloadStatusTone(download aria2.Download) rgb {
+func downloadStatusTone(download app.TaskRow) rgb {
 	return statusTone(download.CanonicalStatus)
 }
 
-func detailStatusLabel(detail aria2.DownloadDetail) string {
+func detailStatusLabel(detail app.TaskDetail) string {
 	return statusLabel(detail.CanonicalStatus)
 }
 
@@ -1110,7 +1110,7 @@ func appendDetailErrorLines(lines []string, label, value string, width int) []st
 	return lines
 }
 
-func displayFile(file aria2.DownloadFile, downloadDir, taskName string) string {
+func displayFile(file app.TaskFile, downloadDir, taskName string) string {
 	if downloadDir != "" {
 		rel := strings.TrimPrefix(file.Path, downloadDir)
 		rel = strings.TrimPrefix(rel, "/")
@@ -1127,7 +1127,7 @@ func displayFile(file aria2.DownloadFile, downloadDir, taskName string) string {
 	return file.Name
 }
 
-func detailDownloadDir(detail aria2.DownloadDetail) string {
+func detailDownloadDir(detail app.TaskDetail) string {
 	if detail.DownloadDir != "" {
 		return detail.DownloadDir
 	}

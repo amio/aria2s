@@ -25,8 +25,8 @@ import (
 
 /** DashboardService is the consumer-owned boundary executed only by typed commands. */
 type DashboardService interface {
-	Snapshot(context.Context, aria2.DashboardQuery) (aria2.DashboardRead, error)
-	TaskDetail(context.Context, string) (aria2.DownloadDetail, error)
+	Snapshot(context.Context, app.DashboardQuery) (app.DashboardRead, error)
+	TaskDetail(context.Context, string) (app.TaskDetail, error)
 	AddURI(context.Context, string, aria2.AddOptions) (app.AddResult, error)
 	RecentDirs(context.Context) ([]string, error)
 	DefaultDir() string
@@ -47,9 +47,9 @@ const (
 )
 
 type ListState struct {
-	Requested     aria2.ListQuery
-	Applied       aria2.ListQuery
-	Snapshot      aria2.DownloadSnapshot
+	Requested     app.DashboardListWindow
+	Applied       app.DashboardListWindow
+	Snapshot      app.TaskSnapshot
 	HasSnapshot   bool
 	Attempted     bool
 	LastSuccessAt time.Time
@@ -59,7 +59,7 @@ type ListState struct {
 type DetailState struct {
 	RequestedGID   string
 	AppliedGID     string
-	Detail         aria2.DownloadDetail
+	Detail         app.TaskDetail
 	HasDetail      bool
 	SourceResolved bool
 	LoadingVisible bool
@@ -101,14 +101,14 @@ type Model struct {
 	openPending     bool
 	desiredGID      string
 	lastUnknownAdd  *addIntent
-	snapshot        aria2.DownloadSnapshot
+	snapshot        app.TaskSnapshot
 	selected        int
 	width           int
 	height          int
 	stoppedPage     int
 	stoppedLimit    int
 	addForm         AddForm
-	detail          aria2.DownloadDetail
+	detail          app.TaskDetail
 	detailScroll    int
 	loaded          bool
 	loadingFrame    int
@@ -120,8 +120,8 @@ type Model struct {
 
 type snapshotResultMsg struct {
 	generation uint64
-	query      aria2.DashboardQuery
-	read       aria2.DashboardRead
+	query      app.DashboardQuery
+	read       app.DashboardRead
 	err        error
 }
 type refreshTimerMsg struct{ token uint64 }
@@ -170,7 +170,7 @@ func NewModel(ctx context.Context, service DashboardService, refreshInterval tim
 	if version == "" {
 		version = "dev"
 	}
-	return Model{ctx: ctx, service: service, refreshInterval: refreshInterval, mode: ModeList, stoppedLimit: 100, version: version, pending: make(map[string]actionKind), actionErrors: make(map[string]error), refreshState: RefreshState{Generation: 1, InFlight: true}, list: ListState{Requested: aria2.ListQuery{WaitingLimit: 100, StoppedLimit: 100}}}
+	return Model{ctx: ctx, service: service, refreshInterval: refreshInterval, mode: ModeList, stoppedLimit: 100, version: version, pending: make(map[string]actionKind), actionErrors: make(map[string]error), refreshState: RefreshState{Generation: 1, InFlight: true}, list: ListState{Requested: app.DashboardListWindow{WaitingLimit: 100, StoppedLimit: 100}}}
 }
 
 func (model Model) Init() tea.Cmd {
@@ -220,7 +220,7 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				model.detailState.SourceResolved = false
 				model.detailState.LastError = nil
 				model.detailState.SourceError = nil
-				model.detail = aria2.DownloadDetail{}
+				model.detail = app.TaskDetail{}
 			}
 		}
 		feedbackGID := msg.gid
@@ -283,8 +283,8 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return model, nil
 }
 
-func (model Model) query() aria2.DashboardQuery {
-	query := aria2.DashboardQuery{List: model.list.Requested, DetailGID: model.detailState.RequestedGID}
+func (model Model) query() app.DashboardQuery {
+	query := app.DashboardQuery{List: model.list.Requested, DetailGID: model.detailState.RequestedGID}
 	query.ResolveDetailSource = query.DetailGID != "" && (model.detailState.AppliedGID != query.DetailGID || !model.detailState.SourceResolved)
 	return query
 }
@@ -301,7 +301,7 @@ func (model Model) requestRefresh(immediate bool) (tea.Model, tea.Cmd) {
 	return model, model.snapshotCmd(model.refreshState.Generation, model.query())
 }
 
-func (model Model) snapshotCmd(generation uint64, query aria2.DashboardQuery) tea.Cmd {
+func (model Model) snapshotCmd(generation uint64, query app.DashboardQuery) tea.Cmd {
 	return func() tea.Msg {
 		read, err := model.service.Snapshot(model.ctx, query)
 		return snapshotResultMsg{generation: generation, query: query, read: read, err: err}
@@ -382,10 +382,10 @@ func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 }
 
 func (model Model) Mode() Mode { return model.mode }
-func (model Model) Selected() aria2.Download {
+func (model Model) Selected() app.TaskRow {
 	items := model.items()
 	if model.selected < 0 || model.selected >= len(items) {
-		return aria2.Download{}
+		return app.TaskRow{}
 	}
 	return items[model.selected]
 }
@@ -480,7 +480,7 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return model, nil
 }
 
-func hasTaskAction(download aria2.Download, action string) bool {
+func hasTaskAction(download app.TaskRow, action string) bool {
 	return hasAction(download.Actions, action)
 }
 
@@ -593,8 +593,8 @@ func (model Model) openDetailAt(index int) (tea.Model, tea.Cmd) {
 // selected task's on-demand fields are still loading. AppliedGID and HasDetail
 // continue to describe only authoritative RPC detail, so consumers that need
 // file-level data still wait for or fetch the full payload.
-func projectDownloadDetail(download aria2.Download) aria2.DownloadDetail {
-	return aria2.DownloadDetail{
+func projectDownloadDetail(download app.TaskRow) app.TaskDetail {
+	return app.TaskDetail{
 		GID:             download.GID,
 		Status:          download.Status,
 		Name:            download.Name,
@@ -702,8 +702,8 @@ func (model Model) handleClipboardAdd(msg clipboardContentMsg) (tea.Model, tea.C
 	}
 }
 
-func (model Model) items() []aria2.Download {
-	items := make([]aria2.Download, 0, len(model.snapshot.Active)+len(model.snapshot.Waiting)+len(model.snapshot.Stopped))
+func (model Model) items() []app.TaskRow {
+	items := make([]app.TaskRow, 0, len(model.snapshot.Active)+len(model.snapshot.Waiting)+len(model.snapshot.Stopped))
 	items = append(items, model.snapshot.Active...)
 	items = append(items, model.snapshot.Waiting...)
 	items = append(items, model.snapshot.Stopped...)
@@ -733,7 +733,7 @@ func (model Model) items() []aria2.Download {
 
 const downloadingStatusRank = 0
 
-func downloadStatusRank(download aria2.Download) int {
+func downloadStatusRank(download app.TaskRow) int {
 	switch app.TaskStatus(download.CanonicalStatus) {
 	case app.StatusDownloading:
 		return downloadingStatusRank
@@ -769,7 +769,7 @@ func (model Model) indexOf(gid string) int {
 	return min(model.selected, len(items)-1)
 }
 
-func indexOfGID(items []aria2.Download, gid string) (int, bool) {
+func indexOfGID(items []app.TaskRow, gid string) (int, bool) {
 	for index, item := range items {
 		if item.GID == gid {
 			return index, true
@@ -958,7 +958,7 @@ func openInFileManagerPath(ctx context.Context, target string, isDir bool) error
 		return fmt.Errorf("opening downloads is unsupported on %s", runtimeGOOS)
 	}
 }
-func downloadTargetPath(detail aria2.DownloadDetail) string {
+func downloadTargetPath(detail app.TaskDetail) string {
 	if len(detail.Files) == 1 && detail.Files[0].Path != "" {
 		return detail.Files[0].Path
 	}

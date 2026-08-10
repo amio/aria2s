@@ -39,7 +39,7 @@ type RPC interface {
 }
 
 type dashboardRPC interface {
-	DashboardSnapshot(context.Context, state.State, aria2.DashboardQuery) (aria2.DashboardRead, error)
+	ReadBatch(context.Context, state.State, aria2.ReadBatchQuery) (aria2.ReadBatch, error)
 	TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error)
 	AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error)
 	Pause(context.Context, state.State, string) error
@@ -1049,8 +1049,8 @@ func (r *LocalRPC) Shutdown(ctx context.Context, current state.State) error {
 	return aria2.WrapTransportError(r.rpcClient(current).Shutdown(ctx))
 }
 
-func (r *LocalRPC) DashboardSnapshot(ctx context.Context, current state.State, query aria2.DashboardQuery) (aria2.DashboardRead, error) {
-	return r.rpcClient(current).DashboardSnapshot(ctx, query)
+func (r *LocalRPC) ReadBatch(ctx context.Context, current state.State, query aria2.ReadBatchQuery) (aria2.ReadBatch, error) {
+	return r.rpcClient(current).ReadBatch(ctx, query)
 }
 
 func (r *LocalRPC) TaskDetail(ctx context.Context, current state.State, gid string) (aria2.DownloadDetail, error) {

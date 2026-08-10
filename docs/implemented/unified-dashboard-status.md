@@ -51,8 +51,9 @@ Non-goals:
 native `active` using `IsMetadata` and `Seeder`, maps other native statuses
 without renaming, then applies managed fallbacks for rows absent from aria2.
 
-The app continues to place the result in `CanonicalStatus` because the RPC
-model's `Status` field is the native observation:
+The app places the result in its `TaskRow.CanonicalStatus` and
+`TaskDetail.CanonicalStatus`; the separate native `Status` value is copied from
+the RPC observation at the projection boundary:
 
 - `Status`: raw aria2 observation;
 - `CanonicalStatus`: app-owned public status.
@@ -79,7 +80,7 @@ the fewest values. It was rejected because downloading, metadata acquisition,
 and seeding are materially different user-visible activities even though they
 share action semantics.
 
-Overwriting `Download.Status` with the projected status would reduce one
+Overwriting `TaskRow.Status` with the projected status would reduce one
 field, but it would destroy the native observation needed for diagnostics and
 safe managed classification. Keeping both fields preserves ownership
 boundaries without maintaining two public vocabularies.

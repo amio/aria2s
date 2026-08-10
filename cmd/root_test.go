@@ -303,8 +303,8 @@ func (rpc *trackingRPC) Shutdown(context.Context, state.State) error {
 	return nil
 }
 
-func (*trackingRPC) DashboardSnapshot(context.Context, state.State, aria2.DashboardQuery) (aria2.DashboardRead, error) {
-	return aria2.DashboardRead{}, nil
+func (*trackingRPC) ReadBatch(context.Context, state.State, aria2.ReadBatchQuery) (aria2.ReadBatch, error) {
+	return aria2.ReadBatch{}, nil
 }
 func (*trackingRPC) TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error) {
 	return aria2.DownloadDetail{}, nil

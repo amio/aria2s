@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/amio/aria2s/internal/aria2"
+	"github.com/amio/aria2s/internal/app"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -18,7 +18,7 @@ func TestTableShowsPeerMetricsAtWideViewport(t *testing.T) {
 		t.Fatalf("wide header missing optional metrics: %q", header)
 	}
 
-	row := stripANSI(model.downloadRow(contentWidth+8, aria2.Download{
+	row := stripANSI(model.downloadRow(contentWidth+8, app.TaskRow{
 		GID:               "a",
 		Name:              "torrent",
 		NumSeeders:        73,
@@ -68,28 +68,28 @@ func TestStatusLabelsRenderCanonicalStatusWithoutAttributeOverrides(t *testing.T
 		"removed":     "Removed",
 	}
 	for status, want := range labels {
-		if got := downloadStatusLabel(aria2.Download{CanonicalStatus: status}); got != want {
+		if got := downloadStatusLabel(app.TaskRow{CanonicalStatus: status}); got != want {
 			t.Fatalf("canonical status %q rendered as %q, want %q", status, got, want)
 		}
 	}
 
-	metadataTransfer := aria2.Download{IsMetadata: true, CanonicalStatus: "downloading"}
+	metadataTransfer := app.TaskRow{IsMetadata: true, CanonicalStatus: "downloading"}
 	if got := downloadStatusLabel(metadataTransfer); got != "Downloading" {
 		t.Fatalf("metadata attribute overrode canonical status: %q", got)
 	}
-	if got := detailStatusLabel(aria2.DownloadDetail{IsMetadata: true, CanonicalStatus: "complete"}); got != "Complete" {
+	if got := detailStatusLabel(app.TaskDetail{IsMetadata: true, CanonicalStatus: "complete"}); got != "Complete" {
 		t.Fatalf("detail metadata attribute overrode canonical status: %q", got)
 	}
 }
 
 func TestListStatsSummarizesOnlyPresentCanonicalStatuses(t *testing.T) {
 	model := Model{}
-	model.snapshot.Active = []aria2.Download{
+	model.snapshot.Active = []app.TaskRow{
 		{GID: "downloading", CanonicalStatus: "downloading"},
 		{GID: "seeding", CanonicalStatus: "seeding"},
 		{GID: "metadata", CanonicalStatus: "metadata"},
 	}
-	model.snapshot.Stopped = []aria2.Download{
+	model.snapshot.Stopped = []app.TaskRow{
 		{GID: "complete-first", CanonicalStatus: "complete"},
 		{GID: "complete-second", CanonicalStatus: "complete"},
 	}

@@ -11,42 +11,39 @@ import (
 	"time"
 )
 
-/** ListOptions bounds aria2 history reads for the interactive dashboard. */
+/** ListOptions bounds native aria2 task-list reads. */
 type ListOptions struct {
 	WaitingLimit  int
 	StoppedOffset int
 	StoppedLimit  int
 }
 
-/** ListQuery identifies the bounded list window in a dashboard snapshot. */
-type ListQuery = ListOptions
-
-/** DashboardQuery describes one immutable batched dashboard read. */
-type DashboardQuery struct {
-	List                ListQuery
+/** ReadBatchQuery describes one immutable bounded native observation. */
+type ReadBatchQuery struct {
+	List                ListOptions
 	DetailGID           string
 	ResolveDetailSource bool
-	ManagedGIDs         []string
+	ObserveGIDs         []string
 }
 
-/** DashboardRead contains independently valid list and detail portions. */
-type DashboardRead struct {
+/** ReadBatch contains independently valid native list and detail portions. */
+type ReadBatch struct {
 	Downloads       DownloadSnapshot
 	ListErr         error
 	Detail          *DownloadDetail
 	DetailErr       error
 	DetailSourceErr error
-	Managed         map[string]*Download
+	Observed        map[string]*Download
 }
 
-/** DownloadSnapshot groups the live and recent stopped task windows shown by the dashboard. */
+/** DownloadSnapshot groups bounded native task observations. */
 type DownloadSnapshot struct {
 	Active  []Download
 	Waiting []Download
 	Stopped []Download
 }
 
-/** Download is the compact task row used by list views. */
+/** Download is a compact native task observation. */
 type Download struct {
 	GID               string
 	Status            string
@@ -65,14 +62,9 @@ type Download struct {
 	Seeder            bool
 	InfoHash          string
 	AddedAt           time.Time
-	CanonicalStatus   string
-	Ownership         string
-	IssueCode         string
-	IssueText         string
-	Actions           []string
 }
 
-/** DownloadDetail is the selected task payload fetched on demand. */
+/** DownloadDetail is a native detailed task observation fetched on demand. */
 type DownloadDetail struct {
 	GID                    string
 	Status                 string
@@ -97,11 +89,6 @@ type DownloadDetail struct {
 	ErrorCode              string
 	ErrorMessage           string
 	Files                  []DownloadFile
-	CanonicalStatus        string
-	Ownership              string
-	IssueCode              string
-	IssueText              string
-	Actions                []string
 }
 
 /** DownloadFile is a single file entry inside a task detail payload. */

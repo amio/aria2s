@@ -79,8 +79,8 @@ func (client *RPCClient) callWithoutToken(ctx context.Context, method string, pa
 	return client.dispatch(ctx, method, payload, result, false)
 }
 
-/** DashboardSnapshot executes one bounded read while preserving nested partial validity. */
-func (client *RPCClient) DashboardSnapshot(ctx context.Context, query DashboardQuery) (DashboardRead, error) {
+/** ReadBatch executes one bounded native read while preserving nested partial validity. */
+func (client *RPCClient) ReadBatch(ctx context.Context, query ReadBatchQuery) (ReadBatch, error) {
 	if query.List.WaitingLimit <= 0 {
 		query.List.WaitingLimit = 100
 	}
@@ -90,7 +90,7 @@ func (client *RPCClient) DashboardSnapshot(ctx context.Context, query DashboardQ
 	var active, waiting, stopped []rawDownload
 	var detail rawDownload
 	var uris []rawURI
-	managedRaw := make(map[string]*rawDownload, len(query.ManagedGIDs))
+	observedRaw := make(map[string]*rawDownload, len(query.ObserveGIDs))
 	descriptors := []callDescriptor{
 		{method: "aria2.tellActive", params: []any{downloadFields()}, apply: decodeInto(&active)},
 		{method: "aria2.tellWaiting", params: []any{0, query.List.WaitingLimit, downloadFields()}, apply: decodeInto(&waiting)},
@@ -105,22 +105,22 @@ func (client *RPCClient) DashboardSnapshot(ctx context.Context, query DashboardQ
 			descriptors = append(descriptors, callDescriptor{method: "aria2.getUris", params: []any{query.DetailGID}, apply: decodeInto(&uris)})
 		}
 	}
-	if len(query.ManagedGIDs) > 300 {
-		return DashboardRead{}, errors.New("managed dashboard capacity exceeded")
+	if len(query.ObserveGIDs) > 300 {
+		return ReadBatch{}, errors.New("dashboard observation capacity exceeded")
 	}
-	managedIndexes := make(map[int]string, len(query.ManagedGIDs))
-	for _, gid := range query.ManagedGIDs {
+	observedIndexes := make(map[int]string, len(query.ObserveGIDs))
+	for _, gid := range query.ObserveGIDs {
 		value := new(rawDownload)
-		managedRaw[gid] = value
+		observedRaw[gid] = value
 		index := len(descriptors)
-		managedIndexes[index] = gid
+		observedIndexes[index] = gid
 		descriptors = append(descriptors, callDescriptor{method: "aria2.tellStatus", params: []any{gid, downloadFields()}, apply: decodeInto(value)})
 	}
 	errs := client.multicall(ctx, descriptors)
 	if len(errs) == 1 && len(descriptors) != 1 && errs[0] != nil {
-		return DashboardRead{}, errs[0]
+		return ReadBatch{}, errs[0]
 	}
-	read := DashboardRead{}
+	read := ReadBatch{}
 	read.ListErr = errors.Join(errs[0], errs[1], errs[2])
 	if read.ListErr == nil {
 		read.Downloads = DownloadSnapshot{Active: mapDownloads(active), Waiting: mapDownloads(waiting), Stopped: filterMetadataStopped(mapDownloads(stopped))}
@@ -138,15 +138,15 @@ func (client *RPCClient) DashboardSnapshot(ctx context.Context, query DashboardQ
 	if sourceIndex >= 0 {
 		read.DetailSourceErr = errs[sourceIndex]
 	}
-	read.Managed = make(map[string]*Download, len(query.ManagedGIDs))
-	for index, gid := range managedIndexes {
+	read.Observed = make(map[string]*Download, len(query.ObserveGIDs))
+	for index, gid := range observedIndexes {
 		if errs[index] == nil {
-			value := managedRaw[gid].toDownload()
-			read.Managed[gid] = &value
+			value := observedRaw[gid].toDownload()
+			read.Observed[gid] = &value
 			continue
 		}
 		if IsNotFound(errs[index]) {
-			read.Managed[gid] = nil
+			read.Observed[gid] = nil
 			continue
 		}
 		read.ListErr = errors.Join(read.ListErr, errs[index])
