@@ -115,6 +115,90 @@ func TestMagnetMetadataPromotionRetiresOldBindingAndStartsFreshTransfer(t *testi
 	}
 }
 
+func TestPausedMetadataResumesBeforeSavedDescriptorAppears(t *testing.T) {
+	application, repository, rpc, target := newReconcilerTestApp(t)
+	result, err := application.AddManaged(context.Background(), AddRequest{Source: "magnet:?xt=urn:btih:test", TargetDir: target})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := repository.Load(result.Task.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataGID := job.Execution.GID
+	if err := application.SetActivity(context.Background(), job.ID, false); err != nil {
+		t.Fatal(err)
+	}
+
+	metainfo := []byte("d4:infod6:lengthi1e4:name1:x12:piece lengthi1e6:pieces20:01234567890123456789ee")
+	infoHash, err := aria2.ValidateMetainfo(metainfo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := repository.LoadStorage(job.StorageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workDir := jobs.WorkDir(scope, job.ID)
+	rpc.statuses[metadataGID] = aria2.LifecycleStatus{
+		GID: metadataGID, Status: "paused", Dir: workDir, InfoHash: infoHash,
+		Files: []aria2.DownloadFile{{Path: "[METADATA]" + infoHash}},
+	}
+
+	if err := application.SetActivity(context.Background(), job.ID, true); err != nil {
+		t.Fatalf("Resume rejected metadata before aria2 saved its descriptor: %v", err)
+	}
+	resumed, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Execution == nil || resumed.Execution.GID != metadataGID || resumed.ActivityIntent != jobs.ActivityRunning || resumed.Issue != nil {
+		t.Fatalf("pending metadata was promoted or left unhealthy: %+v", resumed)
+	}
+	if len(rpc.resumeCalls) != 1 || rpc.resumeCalls[0] != metadataGID {
+		t.Fatalf("metadata execution was not resumed: %v", rpc.resumeCalls)
+	}
+
+	if err := os.WriteFile(filepath.Join(workDir, infoHash+".torrent"), metainfo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := application.ReconcileJob(context.Background(), job.ID, ReconcileInput{Mode: ReconcileLive}); err != nil {
+		t.Fatal(err)
+	}
+	promoted, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if promoted.Execution == nil || promoted.Execution.GID == metadataGID {
+		t.Fatalf("saved metadata descriptor was not promoted: %+v", promoted)
+	}
+	if _, err := repository.ReadMetainfo(job.ID); err != nil {
+		t.Fatalf("promoted metadata was not retained: %v", err)
+	}
+}
+
+func TestMetadataDescriptorMayBePendingUntilNativeCompletion(t *testing.T) {
+	workDir := t.TempDir()
+	for _, status := range []string{"active", "waiting", "paused"} {
+		t.Run(status, func(t *testing.T) {
+			_, promoted, err := completedDescriptor(workDir, aria2.LifecycleStatus{
+				Status: status, InfoHash: "0123456789012345678901234567890123456789",
+				Files: []aria2.DownloadFile{{Path: "[METADATA]pending"}},
+			})
+			if err != nil || promoted {
+				t.Fatalf("pending metadata descriptor = promoted %t, error %v", promoted, err)
+			}
+		})
+	}
+	_, _, err := completedDescriptor(workDir, aria2.LifecycleStatus{
+		Status: "complete", InfoHash: "0123456789012345678901234567890123456789",
+		Files: []aria2.DownloadFile{{Path: "[METADATA]missing"}},
+	})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("completed metadata did not require its descriptor: %v", err)
+	}
+}
+
 func TestTransferPublicationAndFinalSeedUseDifferentExecutionGIDs(t *testing.T) {
 	application, repository, rpc, target := newReconcilerTestApp(t)
 	targetFact, _ := publication.InspectTarget(target)

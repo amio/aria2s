@@ -1241,6 +1241,15 @@ func readValidatedMetainfo(repository *jobs.Repository, jobID string) ([]byte, e
 func completedDescriptor(workDir string, native aria2.LifecycleStatus) ([]byte, bool, error) {
 	if isMetadataStatus(native) {
 		data, err := findResolvedMetainfo(workDir, native.InfoHash)
+		// aria2 exposes a magnet metadata task while --bt-save-metadata is
+		// still producing the hash-named torrent. Active, waiting, and paused
+		// statuses therefore do not prove that the descriptor is durable yet.
+		if errors.Is(err, os.ErrNotExist) {
+			switch native.Status {
+			case "active", "waiting", "paused":
+				return nil, false, nil
+			}
+		}
 		return data, true, err
 	}
 	if native.Status != "complete" || len(native.Files) != 1 {
