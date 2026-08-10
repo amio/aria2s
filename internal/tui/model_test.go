@@ -462,6 +462,33 @@ func TestIssueRendersWithDetailErrorsAndInSelectedListFeedback(t *testing.T) {
 	}
 }
 
+func TestDetailShowsTargetAndOnlyDistinctTemporaryDirectory(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.loaded = true
+	model.width = 180
+	model.height = 40
+	model.mode = ModeDetail
+	model.detailState = DetailState{RequestedGID: "a", AppliedGID: "a", HasDetail: true}
+	model.detail = app.TaskDetail{
+		GID:         "a",
+		Name:        "task-a",
+		TargetDir:   "/downloads",
+		DownloadDir: "/mnt/.aria2s_staging/storage/a",
+	}
+
+	downloadingView := ansi.Strip(model.View().Content)
+	if !strings.Contains(downloadingView, "Download Dir:") || !strings.Contains(downloadingView, "/downloads") ||
+		!strings.Contains(downloadingView, "Temporary Dir:") || !strings.Contains(downloadingView, "/mnt/.aria2s_staging/storage/a") {
+		t.Fatalf("downloading detail directories =\n%s", downloadingView)
+	}
+
+	model.detail.DownloadDir = model.detail.TargetDir
+	completedView := ansi.Strip(model.View().Content)
+	if !strings.Contains(completedView, "Download Dir:") || !strings.Contains(completedView, "/downloads") || strings.Contains(completedView, "Temporary Dir:") {
+		t.Fatalf("completed detail directories =\n%s", completedView)
+	}
+}
+
 func TestInitialFailureRendersUnavailablePlaceholder(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.loaded = true

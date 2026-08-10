@@ -304,8 +304,39 @@ func TestDashboardDecoratesManagedDetail(t *testing.T) {
 
 	if got.Detail == nil || got.Detail.CanonicalStatus != string(StatusDownloading) ||
 		got.Detail.Ownership != string(OwnershipManaged) ||
+		got.Detail.TargetDir != job.TargetDir ||
 		!reflect.DeepEqual(got.Detail.Actions, []string{"pause", "remove"}) {
 		t.Fatalf("managed detail classification = %#v", got.Detail)
+	}
+}
+
+func TestDashboardPreservesManagedTargetAndTemporaryDirectories(t *testing.T) {
+	const jobID, executionGID = "8181818181818181", "8282828282828282"
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	repository := jobs.New(servicePaths.StateDir)
+	scope := saveTestStorageScope(t, repository, "8383838383838383", root, root)
+	job := jobs.Job{
+		ID:             jobID,
+		TargetDir:      filepath.Join(root, "downloads"),
+		StorageID:      scope.ID,
+		ActivityIntent: jobs.ActivityRunning,
+		Payload:        jobs.PayloadState{Location: jobs.PayloadStaging},
+		Execution:      &jobs.ExecutionBinding{GID: executionGID},
+	}
+	workDir := jobs.WorkDir(scope, jobID)
+	detail := aria2.DownloadDetail{GID: executionGID, Status: "active", DownloadDir: workDir}
+	session := &DashboardSession{app: New(Options{Paths: servicePaths})}
+
+	got := session.projectSnapshot(
+		aria2.ReadBatch{Detail: &detail},
+		[]jobs.ScannedJob{{ID: jobID, Job: job}},
+		aria2.ReadBatchQuery{DetailGID: executionGID},
+		jobID,
+	)
+
+	if got.Detail == nil || got.Detail.TargetDir != job.TargetDir || got.Detail.DownloadDir != workDir {
+		t.Fatalf("managed detail directories = %#v", got.Detail)
 	}
 }
 

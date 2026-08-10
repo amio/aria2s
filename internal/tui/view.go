@@ -236,6 +236,9 @@ func (model Model) detailView() string {
 		lines = appendDetailLabelLines(lines, "Source URL", detail.PrimaryURI, contentWidth)
 	}
 	lines = appendDetailLabelLines(lines, "Download Dir", detailDownloadDir(detail), contentWidth)
+	if temporaryDir := detailTemporaryDir(detail); temporaryDir != "" {
+		lines = appendDetailLabelLines(lines, "Temporary Dir", temporaryDir, contentWidth)
+	}
 	lines = append(lines, "")
 	lines = appendDetailLabelLines(lines, "Down", formatSpeed(detail.DownloadSpeed), contentWidth)
 	lines = appendDetailLabelLines(lines, "Up", formatSpeed(detail.UploadSpeed), contentWidth)
@@ -1128,6 +1131,9 @@ func displayFile(file app.TaskFile, downloadDir, taskName string) string {
 }
 
 func detailDownloadDir(detail app.TaskDetail) string {
+	if detail.TargetDir != "" {
+		return detail.TargetDir
+	}
 	if detail.DownloadDir != "" {
 		return detail.DownloadDir
 	}
@@ -1137,6 +1143,14 @@ func detailDownloadDir(detail app.TaskDetail) string {
 		}
 	}
 	return "-"
+}
+
+func detailTemporaryDir(detail app.TaskDetail) string {
+	if detail.TargetDir == "" || detail.DownloadDir == "" ||
+		filepath.Clean(detail.TargetDir) == filepath.Clean(detail.DownloadDir) {
+		return ""
+	}
+	return detail.DownloadDir
 }
 
 func min(a int, b int) int {

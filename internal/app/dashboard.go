@@ -193,6 +193,7 @@ func (session *DashboardSession) manifestDetail(job jobs.Job) TaskDetail {
 		Status:      "absent",
 		Name:        firstNonempty(job.FinalRoot(), job.Source),
 		PrimaryURI:  job.Source,
+		TargetDir:   job.TargetDir,
 		DownloadDir: job.TargetDir,
 	}
 	applyTaskDetailProjection(&detail, session.projectTask(job, true, taskObservation{absent: true}))
@@ -204,6 +205,9 @@ func (session *DashboardSession) decorateDetail(detail *TaskDetail, job jobs.Job
 	applyTaskDetailProjection(detail, session.projectTask(job, managed, taskObservation{
 		status: detail.Status, seeder: detail.Seeder, metadata: detail.IsMetadata, dir: detail.DownloadDir,
 	}))
+	if managed {
+		detail.TargetDir = job.TargetDir
+	}
 }
 
 type taskObservation struct {

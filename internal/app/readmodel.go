@@ -84,6 +84,7 @@ type TaskDetail struct {
 	PieceLength            int64
 	NumPieces              int64
 	PrimaryURI             string
+	TargetDir              string
 	DownloadDir            string
 	Connections            int64
 	ErrorCode              string
