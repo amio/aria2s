@@ -10,16 +10,15 @@ import (
 )
 
 type StartupFact struct {
-	StorageAvailable bool
-	WorkEmpty        bool
-	HasControl       bool
-	InferredRoot     string
-	HasMetainfo      bool
-	MetainfoPath     string
-	Torrent          bool
+	WorkEmpty    bool
+	HasControl   bool
+	InferredRoot string
+	HasMetainfo  bool
+	MetainfoPath string
+	Torrent      bool
 }
 
-func normalizeStagedBlock(block aria2.SessionBlock, job jobs.Job, workDir string, fact StartupFact) (aria2.SessionBlock, string) {
+func normalizeStagedBlock(block aria2.SessionBlock, job jobs.Job, executionGID, workDir string, fact StartupFact) (aria2.SessionBlock, string) {
 	block = block.Clone()
 	dir, ok := block.Option("dir")
 	if ok && filepath.Clean(dir) != filepath.Clean(workDir) {
@@ -37,16 +36,12 @@ func normalizeStagedBlock(block aria2.SessionBlock, job jobs.Job, workDir string
 			block.SetOption("out", root)
 		}
 	}
-	applyManagedOptions(&block, job, workDir)
+	applyManagedOptions(&block, executionGID, workDir, job.ActivityIntent)
 	return block, ""
 }
 
-func applyManagedOptions(block *aria2.SessionBlock, job jobs.Job, dir string) {
-	gid := job.ID // compatibility for legacy planner-only callers
-	if job.Execution != nil {
-		gid = job.Execution.GID
-	}
-	block.SetOption("gid", gid)
+func applyManagedOptions(block *aria2.SessionBlock, executionGID, dir string, intent jobs.ActivityIntent) {
+	block.SetOption("gid", executionGID)
 	block.SetOption("dir", dir)
 	block.SetOption("allow-overwrite", "false")
 	block.SetOption("auto-file-renaming", "false")
@@ -56,12 +51,12 @@ func applyManagedOptions(block *aria2.SessionBlock, job jobs.Job, dir string) {
 	// Managed staged jobs may inherit a legacy global true value otherwise.
 	// Only generated final-seed blocks override this after publication.
 	block.SetOption("bt-seed-unverified", "false")
-	block.SetOption("pause", fmt.Sprintf("%t", job.ActivityIntent == jobs.ActivityStopped))
+	block.SetOption("pause", fmt.Sprintf("%t", intent == jobs.ActivityStopped))
 }
 
-func generatedTorrentBlock(job jobs.Job, metainfoPath, dir string, paused, finalSeed bool) aria2.SessionBlock {
+func generatedTorrentBlock(executionGID string, intent jobs.ActivityIntent, metainfoPath, dir string, paused, finalSeed bool) aria2.SessionBlock {
 	block := aria2.SessionBlock{URI: metainfoPath}
-	applyManagedOptions(&block, job, dir)
+	applyManagedOptions(&block, executionGID, dir, intent)
 	block.SetOption("pause", fmt.Sprintf("%t", paused))
 	if finalSeed {
 		block.SetOption("bt-seed-unverified", "true")

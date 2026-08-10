@@ -299,6 +299,7 @@ func TestDashboardDecoratesManagedDetail(t *testing.T) {
 		aria2.ReadBatch{Detail: &detail},
 		[]jobs.ScannedJob{{ID: jobID, Job: job}},
 		aria2.ReadBatchQuery{DetailGID: executionGID},
+		jobID,
 	)
 
 	if got.Detail == nil || got.Detail.CanonicalStatus != string(StatusDownloading) ||
@@ -336,6 +337,7 @@ func TestDashboardKeepsCompletedManagedMetadataInMetadataStateUntilPromotion(t *
 		},
 		[]jobs.ScannedJob{{ID: jobID, Job: job}},
 		aria2.ReadBatchQuery{DetailGID: executionGID},
+		jobID,
 	)
 
 	if len(got.Downloads.Stopped) != 1 || got.Downloads.Stopped[0].CanonicalStatus != string(StatusMetadata) ||
@@ -364,7 +366,7 @@ func TestDashboardProjectsDetachedPublishingAsRecoverableManifestDetail(t *testi
 		DetailErr:       &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "GID is not found"},
 		DetailSourceErr: &aria2.RPCError{Method: "aria2.getUris", Code: 1, Message: "GID is not found"},
 	}
-	got := session.projectSnapshot(read, []jobs.ScannedJob{{ID: gid, Job: job}}, aria2.ReadBatchQuery{DetailGID: gid})
+	got := session.projectSnapshot(read, []jobs.ScannedJob{{ID: gid, Job: job}}, aria2.ReadBatchQuery{DetailGID: gid}, gid)
 	if len(got.Downloads.Stopped) != 1 {
 		t.Fatalf("manifest row count = %d", len(got.Downloads.Stopped))
 	}
@@ -388,6 +390,7 @@ func TestDashboardProjectsCorruptManifestWithoutUnsafeAction(t *testing.T) {
 		aria2.ReadBatch{},
 		[]jobs.ScannedJob{{ID: gid, Err: errors.New("invalid manifest")}},
 		aria2.ReadBatchQuery{},
+		"",
 	)
 	if len(got.Downloads.Stopped) != 1 {
 		t.Fatalf("corrupt row count = %d", len(got.Downloads.Stopped))
@@ -422,6 +425,7 @@ func TestDashboardPassesRetainedMetainfoAsStartSeedingCapability(t *testing.T) {
 		aria2.ReadBatch{Downloads: aria2.DownloadSnapshot{Stopped: []aria2.Download{row}}, Detail: &detail},
 		[]jobs.ScannedJob{{ID: jobID, Job: job}},
 		aria2.ReadBatchQuery{DetailGID: executionGID},
+		jobID,
 	)
 	want := []string{"start-seeding", "clear"}
 	if len(got.Downloads.Stopped) != 1 || !reflect.DeepEqual(got.Downloads.Stopped[0].Actions, want) {
@@ -452,7 +456,7 @@ func TestDashboardProjectsPublishedPayloadMetricsInRowAndDetail(t *testing.T) {
 		DetailErr: notFound,
 	}
 
-	got := session.projectSnapshot(read, []jobs.ScannedJob{{ID: gid, Job: job}}, aria2.ReadBatchQuery{DetailGID: gid})
+	got := session.projectSnapshot(read, []jobs.ScannedJob{{ID: gid, Job: job}}, aria2.ReadBatchQuery{DetailGID: gid}, gid)
 	if len(got.Downloads.Stopped) != 1 {
 		t.Fatalf("manifest row count = %d", len(got.Downloads.Stopped))
 	}
@@ -474,6 +478,7 @@ func TestDashboardProjectsPublishedPayloadMetricsInRowAndDetail(t *testing.T) {
 		aria2.ReadBatch{Observed: map[string]*aria2.Download{gid: nil}},
 		[]jobs.ScannedJob{{ID: gid, Job: job}},
 		aria2.ReadBatchQuery{},
+		"",
 	)
 	if len(unknown.Downloads.Stopped) != 1 ||
 		unknown.Downloads.Stopped[0].CanonicalStatus != string(StatusComplete) ||
@@ -524,6 +529,7 @@ func TestDashboardKeepsNativeMetricsAuthoritativeForManagedTask(t *testing.T) {
 		},
 		[]jobs.ScannedJob{{ID: jobID, Job: job}},
 		aria2.ReadBatchQuery{DetailGID: executionGID},
+		jobID,
 	)
 
 	if len(got.Downloads.Stopped) != 1 ||

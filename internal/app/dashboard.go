@@ -75,7 +75,7 @@ func (session *DashboardSession) Snapshot(ctx context.Context, query DashboardQu
 	return session.projectSnapshot(read, scanned, nativeQuery, requestedJobID), nil
 }
 
-func (session *DashboardSession) projectSnapshot(native aria2.ReadBatch, scanned []jobs.ScannedJob, query aria2.ReadBatchQuery, requestedJobID ...string) DashboardRead {
+func (session *DashboardSession) projectSnapshot(native aria2.ReadBatch, scanned []jobs.ScannedJob, query aria2.ReadBatchQuery, requestedJobID string) DashboardRead {
 	read := DashboardRead{
 		Downloads: taskSnapshotFromNative(native.Downloads), ListErr: native.ListErr,
 		DetailErr: native.DetailErr, DetailSourceErr: native.DetailSourceErr,
@@ -155,8 +155,8 @@ func (session *DashboardSession) projectSnapshot(native aria2.ReadBatch, scanned
 	}
 	read.Downloads.Stopped = append(read.Downloads.Stopped, corruptRows...)
 	detailJobID := query.DetailGID
-	if len(requestedJobID) > 0 && requestedJobID[0] != "" {
-		detailJobID = requestedJobID[0]
+	if requestedJobID != "" {
+		detailJobID = requestedJobID
 	}
 	if detailJobID != "" && read.Detail == nil {
 		managedRow, absenceKnown := native.Observed[query.DetailGID]

@@ -156,10 +156,6 @@ func managedRuntimeArgs(current state.State, hooksDir string, safeStartup bool) 
 
 var managedExec = managedruntime.Exec
 
-func storageMatches(scope jobs.StorageScope, job jobs.Job) bool {
-	return storageIdentityMatches(scope, job)
-}
-
 func storageIdentityMatches(scope jobs.StorageScope, job jobs.Job) bool {
 	return stagingIdentityMatches(scope) && targetIdentityMatches(job)
 }
@@ -188,11 +184,8 @@ func pathPresence(path string, identifyErr error) (exists, uncertain bool) {
 	return false, true
 }
 
-func inspectStartupFact(repository *jobs.Repository, job jobs.Job, scope jobs.StorageScope, available bool) StartupFact {
-	fact := StartupFact{StorageAvailable: available}
-	if !available {
-		return fact
-	}
+func inspectStartupFact(repository *jobs.Repository, job jobs.Job, scope jobs.StorageScope) StartupFact {
+	fact := StartupFact{}
 	if metainfo, err := repository.ReadMetainfo(job.ID); err == nil {
 		if _, validationErr := aria2.ValidateMetainfo(metainfo); validationErr != nil {
 			return fact

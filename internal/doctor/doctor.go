@@ -22,7 +22,6 @@ type Issue struct {
 	Explanation string
 	Evidence    string
 	Recovery    []string
-	Message     string // compatibility rendering alias for Summary
 }
 
 type Report struct {
@@ -184,7 +183,7 @@ func Check(ctx context.Context, options Options) Report {
 }
 
 func problem(code, summary, evidence, recovery string) Issue {
-	return Issue{Code: code, Severity: "error", Summary: summary, Message: summary, Explanation: summary, Evidence: evidence, Recovery: []string{recovery}}
+	return Issue{Code: code, Severity: "error", Summary: summary, Explanation: summary, Evidence: evidence, Recovery: []string{recovery}}
 }
 
 func lifecycleProblem(code, jobID, evidence string) Issue {

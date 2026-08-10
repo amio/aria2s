@@ -648,7 +648,7 @@ func (service fixedService) IsRunning(context.Context) bool {
 func assertReportContains(t *testing.T, report doctor.Report, want string) {
 	t.Helper()
 	for _, issue := range report.Issues {
-		if strings.Contains(issue.Message, want) {
+		if strings.Contains(issue.Summary, want) {
 			return
 		}
 	}

@@ -28,14 +28,14 @@ func TestInspectStartupFactRecognizesControlAndIgnoresPublishedStaging(t *testin
 			t.Fatal(err)
 		}
 	}
-	fact := inspectStartupFact(repository, staged, scope, true)
+	fact := inspectStartupFact(repository, staged, scope)
 	if !fact.HasControl || fact.InferredRoot != staged.Payload.Root {
 		t.Fatalf("staged fact = %+v", fact)
 	}
 	published := staged
 	published.Payload.Location = jobs.PayloadPublished
 	published.Payload.FinalRoot = published.Payload.Root
-	fact = inspectStartupFact(repository, published, scope, true)
+	fact = inspectStartupFact(repository, published, scope)
 	if fact.InferredRoot != "" || fact.HasControl {
 		t.Fatalf("published fact observed obsolete staging: %+v", fact)
 	}

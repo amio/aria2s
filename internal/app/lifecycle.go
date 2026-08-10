@@ -202,7 +202,7 @@ func (app *App) reconcileStagedLive(ctx context.Context, repository *jobs.Reposi
 			return ReconcileResult{}, statusErr
 		}
 	}
-	fact := inspectStartupFact(repository, job, scope, true)
+	fact := inspectStartupFact(repository, job, scope)
 	options := stagedAddOptions(job, workDir, fact)
 	var added string
 	var addErr error
@@ -479,16 +479,16 @@ func (app *App) reconcileStartupLocked(ctx context.Context, repository *jobs.Rep
 		if _, err := repository.SaveCAS(job, token); err != nil {
 			return ReconcileResult{}, err
 		}
-		block := generatedTorrentBlock(job, repository.MetainfoPath(job.ID), job.TargetDir, false, true)
+		block := generatedTorrentBlock(job.Execution.GID, job.ActivityIntent, repository.MetainfoPath(job.ID), job.TargetDir, false, true)
 		return ReconcileResult{StartupBlock: &block}, nil
 	}
-	fact := inspectStartupFact(repository, job, scope, true)
+	fact := inspectStartupFact(repository, job, scope)
 	workDir := jobs.WorkDir(scope, job.ID)
 	if saved != nil && job.Execution != nil {
 		if savedGID, ok := saved.Option("gid"); !ok || savedGID != job.Execution.GID {
 			return ReconcileResult{}, persistIssue(repository, job, token, "ManagedIdentityConflict", errors.New("saved block GID does not match execution binding"))
 		}
-		block, problem := normalizeStagedBlock(*saved, job, workDir, fact)
+		block, problem := normalizeStagedBlock(*saved, job, job.Execution.GID, workDir, fact)
 		if problem != "" {
 			return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", errors.New(problem))
 		}
@@ -517,10 +517,10 @@ func (app *App) reconcileStartupLocked(ctx context.Context, repository *jobs.Rep
 	}
 	var block aria2.SessionBlock
 	if fact.Torrent && fact.HasMetainfo {
-		block = generatedTorrentBlock(job, fact.MetainfoPath, workDir, job.ActivityIntent == jobs.ActivityStopped, false)
+		block = generatedTorrentBlock(job.Execution.GID, job.ActivityIntent, fact.MetainfoPath, workDir, job.ActivityIntent == jobs.ActivityStopped, false)
 	} else if fact.WorkEmpty && completeSubmittedSource(job.Source) {
 		block = aria2.SessionBlock{URI: job.Source}
-		applyManagedOptions(&block, job, workDir)
+		applyManagedOptions(&block, job.Execution.GID, workDir, job.ActivityIntent)
 	} else {
 		return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", errors.New("native block is missing beside staged artifacts"))
 	}
