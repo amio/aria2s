@@ -706,50 +706,13 @@ window.
 
 ### Status, Ownership, and Actions
 
-```go
-type TaskStatus string
-type TaskOwnership string
-type TaskAction string
-
-const (
-    StatusDownloading TaskStatus = "downloading"
-    StatusSeeding     TaskStatus = "seeding"
-    StatusQueued      TaskStatus = "queued"
-    StatusPaused      TaskStatus = "paused"
-    StatusFinished    TaskStatus = "finished"
-    StatusError       TaskStatus = "error"
-    StatusRemoved     TaskStatus = "removed"
-)
-
-const (
-    OwnershipManaged   TaskOwnership = "managed"
-    OwnershipUnmanaged TaskOwnership = "unmanaged"
-)
-```
-
 There is no `RuntimeMode`; a supported managed schema is a prerequisite for the task UI.
-Managed rows expose durable activity, publication Retry, storage Retry, and Start seeding
-when facts permit. Unmanaged rows expose only meaningful native detail, Pause, Resume, Stop
-seeding, Remove, and Clear for the current process.
-
-Classification precedence remains:
-
-1. managed GID/path contradiction -> `Error`;
-2. durable `Removed` -> `Removed`;
-3. blocking storage/publication/restart problem -> `Error`;
-4. stopped incomplete without native activity -> `Paused`;
-5. stopped published -> `Finished`;
-6. native error -> `Error`;
-7. running waiting work -> `Queued`;
-8. active final seeder -> `Seeding`;
-9. active pre-publish work -> `Downloading`;
-10. healthy publication transaction -> `Downloading` with phase `publishing`;
-11. unknown managed combination -> typed `Error` rather than an eighth status;
-12. native row without a manifest -> the corresponding native-derived status plus
-    `Unmanaged` ownership.
-
-Observed activity remains the primary status while a requested pause/start is converging;
-secondary phase text explains `pausing`, `resuming`, `stopping`, or `starting-seed`.
+The app-owned Dashboard contract and its pure status/ownership/issue/action policy are
+defined in `docs/implemented/dashboard-read-model-ownership.md`,
+`docs/implemented/unified-dashboard-status.md`, and
+`docs/implemented/dashboard-task-projection-policy.md`. This lifecycle design contributes
+only manifest, identity, native-absence, and retained-metainfo facts; it does not maintain a
+second presentation policy.
 
 ### Full Manifest Scan
 
@@ -770,7 +733,9 @@ a typed capacity problem rather than silently treating uncovered jobs as absent.
 If the manifest scan or native snapshot fails, Dashboard never exposes a partially rebuilt
 catalog.
 Individual malformed job files are represented as `CorruptManifest` rows keyed by their
-job-directory IDs; only inability to enumerate the jobs store invalidates the whole scan.
+job-directory IDs; they are diagnostic-only because the damaged execution binding cannot
+prove that destructive cleanup is safe. Only inability to enumerate the jobs store
+invalidates the whole scan.
 
 At the expected scale this is simpler than maintaining `catalog.generation`, a journal,
 dirty/clean transitions, and asynchronous repair. If measured scans later exceed the UI

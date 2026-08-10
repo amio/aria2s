@@ -76,7 +76,7 @@ func TestCheckReportsCorruptManagedManifestWithRecoveryCode(t *testing.T) {
 	}
 	report := doctor.Check(context.Background(), doctor.Options{Paths: servicePaths, Service: fixedService{loaded: true, running: true}, IsPortAvailable: func(int) bool { return true }, RPCVersion: func(context.Context, state.State) (string, error) { return "1.37.0", nil }})
 	for _, issue := range report.Issues {
-		if issue.Code == "CorruptManifest" && len(issue.Recovery) > 0 {
+		if issue.Code == "CorruptManifest" && len(issue.Recovery) > 0 && !strings.Contains(issue.Recovery[0], "Clear") && strings.Contains(issue.Recovery[0], "cannot be proven") {
 			return
 		}
 	}

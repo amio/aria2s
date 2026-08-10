@@ -13,24 +13,6 @@ func validJob(root string) Job {
 	return Job{ID: "0123456789abcdef", Source: "https://example.test/file", TargetDir: filepath.Join(root, "target"), TargetIdentity: ObjectIdentity{MountID: 1, ObjectID: 1}, StorageID: "fedcba9876543210", ActivityIntent: ActivityRunning, Payload: PayloadState{Location: PayloadStaging}}
 }
 
-func TestDeleteCorruptRemovesManifestDirectoryWithoutLeavingScanRow(t *testing.T) {
-	repository := New(t.TempDir())
-	job := validJob(t.TempDir())
-	if _, err := repository.Create(job); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(repository.manifestPath(job.ID), []byte("not-json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := repository.DeleteCorrupt(job.ID); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := repository.Scan()
-	if err != nil || len(rows) != 0 {
-		t.Fatalf("scan after corrupt delete = %+v err=%v", rows, err)
-	}
-}
-
 func TestRepositoryCASAndCorruptScan(t *testing.T) {
 	repository := New(t.TempDir())
 	job := validJob(t.TempDir())

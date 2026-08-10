@@ -233,31 +233,6 @@ func (repository *Repository) Exists(id string) bool {
 	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0
 }
 
-// DeleteCorrupt removes only a manifest directory that cannot be decoded.
-// Callers must separately prove that aria2 no longer owns the GID.
-func (repository *Repository) DeleteCorrupt(id string) error {
-	if !repository.Exists(id) {
-		return os.ErrNotExist
-	}
-	if _, _, err := repository.Load(id); err == nil {
-		return errors.New("refusing corrupt delete for a valid manifest")
-	}
-	tombstone := filepath.Join(repository.jobsDir, "."+id+".corrupt-deleting")
-	if _, err := os.Lstat(tombstone); err == nil || !errors.Is(err, os.ErrNotExist) {
-		return errors.New("corrupt manifest tombstone already exists")
-	}
-	if err := os.Rename(repository.jobDir(id), tombstone); err != nil {
-		return err
-	}
-	if err := atomicfile.SyncDirectory(repository.jobsDir); err != nil {
-		return err
-	}
-	if err := os.RemoveAll(tombstone); err != nil {
-		return err
-	}
-	return atomicfile.SyncDirectory(repository.jobsDir)
-}
-
 func (repository *Repository) Scan() ([]ScannedJob, error) {
 	entries, err := os.ReadDir(repository.jobsDir)
 	if errors.Is(err, os.ErrNotExist) {

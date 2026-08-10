@@ -86,6 +86,7 @@ func (session *DashboardSession) projectSnapshot(native aria2.ReadBatch, scanned
 	}
 	managed := make(map[string]jobs.Job)
 	managedByExecution := make(map[string]jobs.Job)
+	var corruptRows []TaskRow
 	for _, item := range scanned {
 		if item.Err == nil {
 			managed[item.ID] = item.Job
@@ -93,7 +94,9 @@ func (session *DashboardSession) projectSnapshot(native aria2.ReadBatch, scanned
 				managedByExecution[item.Job.Execution.GID] = item.Job
 			}
 		} else {
-			read.Downloads.Stopped = append(read.Downloads.Stopped, TaskRow{GID: item.ID, Status: "error", Name: "corrupt managed manifest", CanonicalStatus: string(StatusError), Ownership: string(OwnershipManaged), IssueCode: "CorruptManifest", IssueText: issueText("CorruptManifest"), Actions: []string{"clear"}})
+			row := TaskRow{GID: item.ID, Status: "error", Name: "corrupt managed manifest"}
+			applyTaskRowProjection(&row, ProjectTask(TaskFacts{Managed: true, NativeAbsent: true, IssueCode: "CorruptManifest"}))
+			corruptRows = append(corruptRows, row)
 		}
 	}
 	seen := make(map[string]struct{})
@@ -121,19 +124,14 @@ func (session *DashboardSession) projectSnapshot(native aria2.ReadBatch, scanned
 		for index := range rows {
 			row := &rows[index]
 			job, owned := managedByExecution[row.GID]
-			fact := ClassificationFact{Managed: owned, NativeStatus: row.Status, NativeSeeder: row.Seeder, NativeMetadata: row.IsMetadata}
 			if owned {
-				fact.Lifecycle, fact.Intent, fact.IssueCode = derivedLifecycle(job), job.ActivityIntent, issueCodeForJob(job)
-				fact.IdentityConflict = session.nativeDirConflict(job, row.Dir)
 				row.AddedAt = job.CreatedAt
 				row.GID = job.ID
 				seen[job.ID] = struct{}{}
 			}
-			classification := ClassifyTask(fact)
-			row.CanonicalStatus, row.Ownership = string(classification.Status), string(classification.Ownership)
-			row.IssueCode = issueCodeForJob(job)
-			row.IssueText = issueText(row.IssueCode)
-			row.Actions = session.availableActions(classification, owned, job)
+			applyTaskRowProjection(row, session.projectTask(job, owned, taskObservation{
+				status: row.Status, seeder: row.Seeder, metadata: row.IsMetadata, dir: row.Dir,
+			}))
 		}
 	}
 	decorate(read.Downloads.Active)
@@ -150,12 +148,12 @@ func (session *DashboardSession) projectSnapshot(native aria2.ReadBatch, scanned
 		if _, ok := seen[gid]; ok {
 			continue
 		}
-		classification := ClassifyTask(ClassificationFact{Managed: true, Lifecycle: derivedLifecycle(job), Intent: job.ActivityIntent, IssueCode: issueCodeForJob(job), NativeAbsent: true})
-		code := projectedIssueCode(job, true)
-		row := TaskRow{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.FinalRoot(), job.Source), AddedAt: job.CreatedAt, CanonicalStatus: string(classification.Status), Ownership: string(classification.Ownership), IssueCode: code, IssueText: issueText(code), Actions: session.availableActions(classification, true, job)}
+		row := TaskRow{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.FinalRoot(), job.Source), AddedAt: job.CreatedAt}
+		applyTaskRowProjection(&row, session.projectTask(job, true, taskObservation{absent: true}))
 		applyPublishedMetrics(&row.CompletedLength, &row.TotalLength, &row.LengthKnown, job)
 		read.Downloads.Stopped = append(read.Downloads.Stopped, row)
 	}
+	read.Downloads.Stopped = append(read.Downloads.Stopped, corruptRows...)
 	detailJobID := query.DetailGID
 	if len(requestedJobID) > 0 && requestedJobID[0] != "" {
 		detailJobID = requestedJobID[0]
@@ -190,58 +188,45 @@ func applyPublishedMetrics(completed, total *int64, known *bool, job jobs.Job) {
 // a managed task. It keeps detail-only commands, such as opening the payload,
 // consistent with the Dashboard snapshot.
 func (session *DashboardSession) manifestDetail(job jobs.Job) TaskDetail {
-	classification := ClassifyTask(ClassificationFact{
-		Managed:      true,
-		Lifecycle:    derivedLifecycle(job),
-		Intent:       job.ActivityIntent,
-		IssueCode:    issueCodeForJob(job),
-		NativeAbsent: true,
-	})
 	detail := TaskDetail{
-		GID:             job.ID,
-		Status:          "absent",
-		Name:            firstNonempty(job.FinalRoot(), job.Source),
-		PrimaryURI:      job.Source,
-		DownloadDir:     job.TargetDir,
-		CanonicalStatus: string(classification.Status),
-		Ownership:       string(classification.Ownership),
-		IssueCode:       projectedIssueCode(job, true),
-		Actions:         session.availableActions(classification, true, job),
+		GID:         job.ID,
+		Status:      "absent",
+		Name:        firstNonempty(job.FinalRoot(), job.Source),
+		PrimaryURI:  job.Source,
+		DownloadDir: job.TargetDir,
 	}
-	detail.IssueText = issueText(detail.IssueCode)
+	applyTaskDetailProjection(&detail, session.projectTask(job, true, taskObservation{absent: true}))
 	applyPublishedMetrics(&detail.CompletedLength, &detail.TotalLength, &detail.LengthKnown, job)
 	return detail
 }
 
 func (session *DashboardSession) decorateDetail(detail *TaskDetail, job jobs.Job, managed bool) {
-	fact := ClassificationFact{
-		Managed:        managed,
-		NativeStatus:   detail.Status,
-		NativeSeeder:   detail.Seeder,
-		NativeMetadata: detail.IsMetadata,
-	}
-	if managed {
-		fact.Lifecycle = derivedLifecycle(job)
-		fact.Intent = job.ActivityIntent
-		fact.IssueCode = issueCodeForJob(job)
-		fact.IdentityConflict = session.nativeDirConflict(job, detail.DownloadDir)
-	}
-	classification := ClassifyTask(fact)
-	detail.CanonicalStatus = string(classification.Status)
-	detail.Ownership = string(classification.Ownership)
-	detail.IssueCode = issueCodeForJob(job)
-	detail.IssueText = issueText(detail.IssueCode)
-	detail.Actions = session.availableActions(classification, managed, job)
+	applyTaskDetailProjection(detail, session.projectTask(job, managed, taskObservation{
+		status: detail.Status, seeder: detail.Seeder, metadata: detail.IsMetadata, dir: detail.DownloadDir,
+	}))
 }
 
-func projectedIssueCode(job jobs.Job, nativeAbsent bool) string {
-	if code := issueCodeForJob(job); code != "" {
-		return code
+type taskObservation struct {
+	status   string
+	seeder   bool
+	metadata bool
+	dir      string
+	absent   bool
+}
+
+func (session *DashboardSession) projectTask(job jobs.Job, managed bool, observation taskObservation) TaskProjection {
+	facts := TaskFacts{
+		Managed: managed, NativeStatus: observation.status, NativeSeeder: observation.seeder,
+		NativeMetadata: observation.metadata, NativeAbsent: observation.absent,
 	}
-	if nativeAbsent && derivedLifecycle(job) == LifecyclePublishing {
-		return "PublicationRecoveryRequired"
+	if managed {
+		facts.Lifecycle = derivedLifecycle(job)
+		facts.Intent = job.ActivityIntent
+		facts.IssueCode = issueCodeForJob(job)
+		facts.IdentityConflict = !observation.absent && session.nativeDirConflict(job, observation.dir)
+		facts.CanStartSeeding = session.canStartSeeding(job, observation)
 	}
-	return ""
+	return ProjectTask(facts)
 }
 
 func pageManagedHistory(rows []TaskRow, managed map[string]jobs.Job, page DashboardListWindow) []TaskRow {
@@ -273,42 +258,9 @@ func pageManagedHistory(rows []TaskRow, managed map[string]jobs.Job, page Dashbo
 	return append(native, history[start:end]...)
 }
 
-func (session *DashboardSession) availableActions(classification TaskClassification, managed bool, job jobs.Job) []string {
-	if managed && job.Issue != nil {
-		if metadata, ok := jobs.LookupIssue(job.Issue.Code); ok && len(metadata.Actions) > 0 {
-			return metadata.Actions
-		}
-	}
-	if managed && derivedLifecycle(job) == LifecyclePublishing {
-		if classification.Status != StatusError {
-			return nil
-		}
-		return []string{"retry"}
-	}
-	var actions []string
-	switch classification.Status {
-	case StatusDownloading, StatusSeeding:
-		actions = append(actions, "pause", "remove")
-	case StatusMetadata:
-		actions = append(actions, "pause", "delete")
-	case StatusWaiting:
-		actions = append(actions, "pause", "remove")
-	case StatusPaused:
-		actions = append(actions, "resume", "remove")
-	case StatusError:
-		actions = append(actions, "retry")
-		if !managed || (derivedLifecycle(job) != LifecyclePublishing && !job.Removed) {
-			actions = append(actions, "remove")
-		}
-	case StatusComplete:
-		if managed && !job.PublicationRenamed() && session.hasMetainfo(job.ID) {
-			actions = append(actions, "start-seeding")
-		}
-		actions = append(actions, "clear")
-	case StatusRemoved:
-		actions = append(actions, "retry", "clear")
-	}
-	return actions
+func (session *DashboardSession) canStartSeeding(job jobs.Job, observation taskObservation) bool {
+	mayComplete := (observation.status == "complete" && !observation.metadata) || (observation.absent && derivedLifecycle(job) == LifecyclePublished && job.ActivityIntent == jobs.ActivityStopped)
+	return mayComplete && !job.PublicationRenamed() && session.hasMetainfo(job.ID)
 }
 
 func (session *DashboardSession) hasMetainfo(gid string) bool {
@@ -351,13 +303,6 @@ func derivedLifecycle(job jobs.Job) ManagedLifecycle {
 	default:
 		return LifecycleStaged
 	}
-}
-
-func issueText(code string) string {
-	if metadata, ok := jobs.LookupIssue(code); ok {
-		return metadata.Text
-	}
-	return ""
 }
 
 func firstNonempty(values ...string) string {

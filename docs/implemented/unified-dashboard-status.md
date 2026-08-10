@@ -46,10 +46,13 @@ Non-goals:
 
 ## Proposed Solution
 
-`internal/app/readmodel.go` remains the sole owner of status projection.
-`ClassifyTask` applies managed error/removal guards first, refines observed
+`internal/app/readmodel.go` remains the sole owner of product projection.
+`ProjectTask` applies managed error/removal guards first, refines observed
 native `active` using `IsMetadata` and `Seeder`, maps other native statuses
 without renaming, then applies managed fallbacks for rows absent from aria2.
+The same pure result also owns ownership, issue presentation, and actions, so
+row and detail callers cannot apply only part of the policy. Filesystem
+capabilities such as retained metainfo are collected before projection.
 
 The app places the result in its `TaskRow.CanonicalStatus` and
 `TaskDetail.CanonicalStatus`; the separate native `Status` value is copied from
@@ -65,6 +68,8 @@ unused cross-layer `CanonicalCounts` copy is removed. Future counts should be
 derived from the canonical rows that consume them.
 The TUI also dispatches only app-advertised actions and no longer reconstructs
 action eligibility from native status.
+Durable issue action overrides remain in the jobs issue catalog. See
+`docs/implemented/dashboard-task-projection-policy.md` for the complete policy.
 `Metadata` remains the concise list label for active metadata acquisition:
 alternatives such as `Fetching Metadata` exceed the existing status column,
 while `Fetching` alone loses the important object.

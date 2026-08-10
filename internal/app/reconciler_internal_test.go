@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -718,26 +717,6 @@ func TestHookResolutionRejectsDuplicateAndIgnoresStaleGID(t *testing.T) {
 	}
 	if _, err := application.ReconcileJob(context.Background(), "4444444444444444", ReconcileInput{Mode: ReconcileLive}); err == nil {
 		t.Fatal("direct reconciliation accepted a duplicate execution binding")
-	}
-}
-
-func TestIssueMetadataIsDerivedFromSingleCode(t *testing.T) {
-	metadata, ok := jobs.LookupIssue("FinalSeedStartFailed")
-	if !ok || metadata.Severity != "error" || len(metadata.Actions) == 0 {
-		t.Fatalf("issue metadata = %+v, ok=%t", metadata, ok)
-	}
-	metadata.Actions[0] = "mutated"
-	again, _ := jobs.LookupIssue("FinalSeedStartFailed")
-	if errors.Is(errors.New(again.Actions[0]), errors.New("mutated")) || again.Actions[0] == "mutated" {
-		t.Fatal("issue metadata action slice was not isolated")
-	}
-	actions := (&DashboardSession{}).availableActions(TaskClassification{Status: StatusComplete}, true, jobs.Job{Issue: &jobs.JobIssue{Code: "CleanupFailed"}})
-	if len(actions) != 1 || actions[0] != "remove" {
-		t.Fatalf("warning issue actions did not come from metadata: %v", actions)
-	}
-	storageActions := (&DashboardSession{}).availableActions(TaskClassification{Status: StatusError}, true, jobs.Job{Issue: &jobs.JobIssue{Code: "StorageOffline"}})
-	if !slices.Equal(storageActions, []string{"retry", "remove"}) {
-		t.Fatalf("offline storage did not retain its removal action: %v", storageActions)
 	}
 }
 

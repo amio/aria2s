@@ -381,6 +381,57 @@ func TestDashboardProjectsDetachedPublishingAsRecoverableManifestDetail(t *testi
 	}
 }
 
+func TestDashboardProjectsCorruptManifestWithoutUnsafeAction(t *testing.T) {
+	const gid = "928cecc78f5f8415"
+	session := &DashboardSession{}
+	got := session.projectSnapshot(
+		aria2.ReadBatch{},
+		[]jobs.ScannedJob{{ID: gid, Err: errors.New("invalid manifest")}},
+		aria2.ReadBatchQuery{},
+	)
+	if len(got.Downloads.Stopped) != 1 {
+		t.Fatalf("corrupt row count = %d", len(got.Downloads.Stopped))
+	}
+	row := got.Downloads.Stopped[0]
+	if row.GID != gid || row.CanonicalStatus != string(StatusError) || row.Ownership != string(OwnershipManaged) || row.IssueCode != "CorruptManifest" || row.IssueText == "" || row.Actions == nil || len(row.Actions) != 0 {
+		t.Fatalf("corrupt row projection = %#v", row)
+	}
+}
+
+func TestDashboardPassesRetainedMetainfoAsStartSeedingCapability(t *testing.T) {
+	const jobID, executionGID = "928cecc78f5f8415", "928cecc78f5f8416"
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	job := jobs.Job{
+		ID: jobID, Source: "magnet:?xt=urn:btih:example", TargetDir: filepath.Join(root, "downloads"),
+		TargetIdentity: jobs.ObjectIdentity{MountID: 1, ObjectID: 1}, StorageID: "928cecc78f5f8414",
+		ActivityIntent: jobs.ActivityStopped, Payload: jobs.PayloadState{Location: jobs.PayloadPublished, Root: "payload", FinalRoot: "payload", Identity: jobs.ObjectIdentity{MountID: 1, ObjectID: 2}},
+		Execution: &jobs.ExecutionBinding{GID: executionGID},
+	}
+	repository := jobs.New(servicePaths.StateDir)
+	if _, err := repository.Create(job); err != nil {
+		t.Fatal(err)
+	}
+	if err := repository.WriteMetainfo(jobID, []byte("retained metainfo")); err != nil {
+		t.Fatal(err)
+	}
+	row := aria2.Download{GID: executionGID, Status: "complete", Dir: job.TargetDir}
+	detail := aria2.DownloadDetail{GID: executionGID, Status: "complete", DownloadDir: job.TargetDir}
+	session := &DashboardSession{app: New(Options{Paths: servicePaths})}
+	got := session.projectSnapshot(
+		aria2.ReadBatch{Downloads: aria2.DownloadSnapshot{Stopped: []aria2.Download{row}}, Detail: &detail},
+		[]jobs.ScannedJob{{ID: jobID, Job: job}},
+		aria2.ReadBatchQuery{DetailGID: executionGID},
+	)
+	want := []string{"start-seeding", "clear"}
+	if len(got.Downloads.Stopped) != 1 || !reflect.DeepEqual(got.Downloads.Stopped[0].Actions, want) {
+		t.Fatalf("row actions = %#v", got.Downloads.Stopped)
+	}
+	if got.Detail == nil || !reflect.DeepEqual(got.Detail.Actions, want) {
+		t.Fatalf("detail actions = %#v", got.Detail)
+	}
+}
+
 func TestDashboardProjectsPublishedPayloadMetricsInRowAndDetail(t *testing.T) {
 	const gid = "928cecc78f5f8415"
 	root := t.TempDir()

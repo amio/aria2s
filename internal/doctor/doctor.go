@@ -205,7 +205,7 @@ func lifecycleProblem(code, jobID, evidence string) Issue {
 	case "RestartStateMissing":
 		recovery = "Restore the original session/metainfo or inspect retained staging before Retry."
 	case "CorruptManifest":
-		recovery = "Confirm the GID is absent from aria2, then Clear the corrupt Dashboard row."
+		recovery = "Preserve the aria2s state directory and inspect the matching aria2 task manually; automatic deletion is unavailable because native ownership cannot be proven."
 	case "ManagedIdentityConflict", "FinalSeedPathMismatch":
 		recovery = "Stop external RPC changes and inspect the GID/path before retrying."
 	case "RestartCheckpointFailed":

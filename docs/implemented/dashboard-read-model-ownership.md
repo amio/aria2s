@@ -24,7 +24,7 @@ Define `DashboardListWindow`, `DashboardQuery`, `DashboardRead`, `TaskSnapshot`,
 
 Keep a native batch contract in `internal/aria2`, named for observation rather than managed ownership. Its query contains the native list window, optional native detail GID, optional source resolution, and `ObserveGIDs`; its result contains native rows/details and `Observed` results. `aria2.Download` and `aria2.DownloadDetail` retain only native facts.
 
-`DashboardSession.Snapshot` translates the app query to a native query, resolves stable JobID to execution GID, requests all execution bindings as extra observations, and projects the native result into app types. Projection copies native metrics mechanically, then applies the existing classification and action rules exactly once.
+`DashboardSession.Snapshot` translates the app query to a native query, resolves stable JobID to execution GID, requests all execution bindings as extra observations, and projects the native result into app types. Projection copies native metrics mechanically, then passes complete task facts to the app-owned `ProjectTask` policy exactly once. See `docs/implemented/dashboard-task-projection-policy.md`.
 
 The app product types intentionally mirror the existing TUI-facing fields. This avoids an adapter layer and keeps this migration behavioral rather than architectural beyond the ownership boundary.
 

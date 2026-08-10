@@ -5,13 +5,15 @@ package jobs
 type IssueMetadata struct {
 	Severity string
 	Text     string
-	Actions  []string
+	// nil keeps ordinary status actions; a non-nil slice overrides them,
+	// including an empty slice that explicitly forbids every action.
+	Actions []string
 }
 
 var issueMetadata = map[string]IssueMetadata{
 	"AddFailed":                      {"error", "aria2 could not start this transfer", []string{"retry", "remove"}},
 	"CleanupFailed":                  {"warning", "managed staging cleanup is incomplete", []string{"remove"}},
-	"CorruptManifest":                {"error", "managed task metadata is corrupt", []string{"clear"}},
+	"CorruptManifest":                {"error", "managed task metadata is corrupt", []string{}},
 	"FinalSeedPathMismatch":          {"error", "seed files are missing or changed; restore them to the download location and retry, or remove the task", []string{"retry", "remove"}},
 	"FinalSeedStartFailed":           {"error", "published payload could not start seeding", []string{"retry", "remove"}},
 	"ManagedIdentityConflict":        {"error", "native execution does not match managed ownership", []string{"retry"}},
@@ -30,6 +32,8 @@ var issueMetadata = map[string]IssueMetadata{
 
 func LookupIssue(code string) (IssueMetadata, bool) {
 	metadata, ok := issueMetadata[code]
-	metadata.Actions = append([]string(nil), metadata.Actions...)
+	if metadata.Actions != nil {
+		metadata.Actions = append([]string{}, metadata.Actions...)
+	}
 	return metadata, ok
 }

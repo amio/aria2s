@@ -2,6 +2,7 @@ package app
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -48,41 +49,75 @@ func TestNativeDashboardProjectionPreservesProtocolFacts(t *testing.T) {
 	}
 }
 
-func TestCanonicalStatusUsesNativeVocabularyAndActiveSubstates(t *testing.T) {
+func TestProjectTaskOwnsStatusIssueAndActions(t *testing.T) {
 	tests := []struct {
-		name string
-		fact ClassificationFact
-		want TaskStatus
+		name        string
+		facts       TaskFacts
+		wantStatus  TaskStatus
+		wantOwner   TaskOwnership
+		wantIssue   string
+		wantActions []string
 	}{
-		{name: "active download", fact: ClassificationFact{NativeStatus: "active"}, want: StatusDownloading},
-		{name: "active seed", fact: ClassificationFact{NativeStatus: "active", NativeSeeder: true}, want: StatusSeeding},
-		{name: "active metadata", fact: ClassificationFact{NativeStatus: "active", NativeMetadata: true}, want: StatusMetadata},
-		{name: "waiting", fact: ClassificationFact{NativeStatus: "waiting"}, want: StatusWaiting},
-		{name: "paused", fact: ClassificationFact{NativeStatus: "paused"}, want: StatusPaused},
-		{name: "managed completed metadata awaiting promotion", fact: ClassificationFact{Managed: true, Lifecycle: LifecycleStaged, NativeStatus: "complete", NativeMetadata: true}, want: StatusMetadata},
-		{name: "unmanaged completed metadata", fact: ClassificationFact{NativeStatus: "complete", NativeMetadata: true}, want: StatusComplete},
-		{name: "complete", fact: ClassificationFact{NativeStatus: "complete"}, want: StatusComplete},
-		{name: "error", fact: ClassificationFact{NativeStatus: "error"}, want: StatusError},
-		{name: "removed", fact: ClassificationFact{NativeStatus: "removed"}, want: StatusRemoved},
-		{name: "managed publishing fallback", fact: ClassificationFact{Managed: true, Lifecycle: LifecyclePublishing}, want: StatusDownloading},
-		{name: "detached managed publishing recovery", fact: ClassificationFact{Managed: true, Lifecycle: LifecyclePublishing, NativeAbsent: true}, want: StatusError},
-		{name: "managed staged stop fallback", fact: ClassificationFact{Managed: true, Lifecycle: LifecycleStaged, Intent: jobs.ActivityStopped}, want: StatusPaused},
-		{name: "managed published stop fallback", fact: ClassificationFact{Managed: true, Lifecycle: LifecyclePublished, Intent: jobs.ActivityStopped}, want: StatusComplete},
-		{name: "managed removal override", fact: ClassificationFact{Managed: true, Lifecycle: LifecycleRemoved, NativeStatus: "active"}, want: StatusRemoved},
-		{name: "managed issue override", fact: ClassificationFact{Managed: true, IssueCode: "RestartStateMissing", NativeStatus: "active"}, want: StatusError},
-		{name: "managed identity override", fact: ClassificationFact{Managed: true, IdentityConflict: true, NativeStatus: "active"}, want: StatusError},
-		{name: "observed activity overrides stopped intent", fact: ClassificationFact{Managed: true, Lifecycle: LifecycleStaged, Intent: jobs.ActivityStopped, NativeStatus: "active"}, want: StatusDownloading},
+		{name: "active download", facts: TaskFacts{NativeStatus: "active"}, wantStatus: StatusDownloading, wantOwner: OwnershipUnmanaged, wantActions: []string{"pause", "remove"}},
+		{name: "active seed", facts: TaskFacts{NativeStatus: "active", NativeSeeder: true}, wantStatus: StatusSeeding, wantOwner: OwnershipUnmanaged, wantActions: []string{"pause", "remove"}},
+		{name: "active metadata", facts: TaskFacts{NativeStatus: "active", NativeMetadata: true}, wantStatus: StatusMetadata, wantOwner: OwnershipUnmanaged, wantActions: []string{"pause", "delete"}},
+		{name: "waiting", facts: TaskFacts{NativeStatus: "waiting"}, wantStatus: StatusWaiting, wantOwner: OwnershipUnmanaged, wantActions: []string{"pause", "remove"}},
+		{name: "paused", facts: TaskFacts{NativeStatus: "paused"}, wantStatus: StatusPaused, wantOwner: OwnershipUnmanaged, wantActions: []string{"resume", "remove"}},
+		{name: "managed completed metadata awaiting promotion", facts: TaskFacts{Managed: true, Lifecycle: LifecycleStaged, NativeStatus: "complete", NativeMetadata: true}, wantStatus: StatusMetadata, wantOwner: OwnershipManaged, wantActions: []string{"pause", "delete"}},
+		{name: "unmanaged completed metadata", facts: TaskFacts{NativeStatus: "complete", NativeMetadata: true}, wantStatus: StatusComplete, wantOwner: OwnershipUnmanaged, wantActions: []string{"clear"}},
+		{name: "managed complete can seed", facts: TaskFacts{Managed: true, Lifecycle: LifecyclePublished, NativeStatus: "complete", CanStartSeeding: true}, wantStatus: StatusComplete, wantOwner: OwnershipManaged, wantActions: []string{"start-seeding", "clear"}},
+		{name: "managed complete cannot seed", facts: TaskFacts{Managed: true, Lifecycle: LifecyclePublished, NativeStatus: "complete"}, wantStatus: StatusComplete, wantOwner: OwnershipManaged, wantActions: []string{"clear"}},
+		{name: "error", facts: TaskFacts{NativeStatus: "error"}, wantStatus: StatusError, wantOwner: OwnershipUnmanaged, wantActions: []string{"retry", "remove"}},
+		{name: "removed", facts: TaskFacts{NativeStatus: "removed"}, wantStatus: StatusRemoved, wantOwner: OwnershipUnmanaged, wantActions: []string{"retry", "clear"}},
+		{name: "managed publishing fallback", facts: TaskFacts{Managed: true, Lifecycle: LifecyclePublishing}, wantStatus: StatusDownloading, wantOwner: OwnershipManaged},
+		{name: "detached managed publishing recovery", facts: TaskFacts{Managed: true, Lifecycle: LifecyclePublishing, NativeAbsent: true}, wantStatus: StatusError, wantOwner: OwnershipManaged, wantIssue: "PublicationRecoveryRequired", wantActions: []string{"retry"}},
+		{name: "managed staged stop fallback", facts: TaskFacts{Managed: true, Lifecycle: LifecycleStaged, Intent: jobs.ActivityStopped}, wantStatus: StatusPaused, wantOwner: OwnershipManaged, wantActions: []string{"resume", "remove"}},
+		{name: "managed published stop fallback", facts: TaskFacts{Managed: true, Lifecycle: LifecyclePublished, Intent: jobs.ActivityStopped}, wantStatus: StatusComplete, wantOwner: OwnershipManaged, wantActions: []string{"clear"}},
+		{name: "managed removal override", facts: TaskFacts{Managed: true, Lifecycle: LifecycleRemoved, NativeStatus: "active"}, wantStatus: StatusRemoved, wantOwner: OwnershipManaged, wantActions: []string{"retry", "clear"}},
+		{name: "managed error issue override", facts: TaskFacts{Managed: true, Lifecycle: LifecycleStaged, IssueCode: "RestartStateMissing", NativeStatus: "active"}, wantStatus: StatusError, wantOwner: OwnershipManaged, wantIssue: "RestartStateMissing", wantActions: []string{"retry", "remove"}},
+		{name: "managed warning issue keeps catalog actions", facts: TaskFacts{Managed: true, Lifecycle: LifecyclePublished, IssueCode: "CleanupFailed", NativeStatus: "complete", CanStartSeeding: true}, wantStatus: StatusComplete, wantOwner: OwnershipManaged, wantIssue: "CleanupFailed", wantActions: []string{"remove"}},
+		{name: "warning without override keeps status actions", facts: TaskFacts{Managed: true, Lifecycle: LifecyclePublished, IssueCode: "PowerLossDurabilityUnavailable", NativeStatus: "complete"}, wantStatus: StatusComplete, wantOwner: OwnershipManaged, wantIssue: "PowerLossDurabilityUnavailable", wantActions: []string{"clear"}},
+		{name: "managed identity override", facts: TaskFacts{Managed: true, Lifecycle: LifecycleStaged, IdentityConflict: true, NativeStatus: "active"}, wantStatus: StatusError, wantOwner: OwnershipManaged, wantActions: []string{"retry", "remove"}},
+		{name: "observed activity overrides stopped intent", facts: TaskFacts{Managed: true, Lifecycle: LifecycleStaged, Intent: jobs.ActivityStopped, NativeStatus: "active"}, wantStatus: StatusDownloading, wantOwner: OwnershipManaged, wantActions: []string{"pause", "remove"}},
+		{name: "corrupt manifest has no destructive action", facts: TaskFacts{Managed: true, NativeAbsent: true, IssueCode: "CorruptManifest"}, wantStatus: StatusError, wantOwner: OwnershipManaged, wantIssue: "CorruptManifest", wantActions: []string{}},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			got := ClassifyTask(test.fact)
-			if got.Status != test.want {
-				t.Fatalf("classification = %+v, want status %q", got, test.want)
+			got := ProjectTask(test.facts)
+			if got.Status != test.wantStatus || got.Ownership != test.wantOwner || got.IssueCode != test.wantIssue || !slices.Equal(got.Actions, test.wantActions) {
+				t.Fatalf("projection = %+v, want status=%q owner=%q issue=%q actions=%v", got, test.wantStatus, test.wantOwner, test.wantIssue, test.wantActions)
 			}
-			if test.fact.Managed && got.Ownership != OwnershipManaged {
-				t.Fatalf("managed classification lost ownership: %+v", got)
+			if test.wantIssue != "" && got.IssueText == "" {
+				t.Fatalf("issue %q lost catalog text: %+v", test.wantIssue, got)
+			}
+			row := TaskRow{}
+			detail := TaskDetail{}
+			applyTaskRowProjection(&row, got)
+			applyTaskDetailProjection(&detail, got)
+			if row.CanonicalStatus != detail.CanonicalStatus || row.Ownership != detail.Ownership || row.IssueCode != detail.IssueCode || row.IssueText != detail.IssueText || !slices.Equal(row.Actions, detail.Actions) {
+				t.Fatalf("row/detail projection diverged: row=%+v detail=%+v", row, detail)
 			}
 		})
+	}
+}
+
+func TestIssueCatalogActionsAreIsolatedAndDistinguishNoOverride(t *testing.T) {
+	metadata, ok := jobs.LookupIssue("FinalSeedStartFailed")
+	if !ok || metadata.Severity != "error" || len(metadata.Actions) == 0 {
+		t.Fatalf("issue metadata = %+v, ok=%t", metadata, ok)
+	}
+	metadata.Actions[0] = "mutated"
+	again, _ := jobs.LookupIssue("FinalSeedStartFailed")
+	if again.Actions[0] == "mutated" {
+		t.Fatal("issue metadata action slice was not isolated")
+	}
+	corrupt, _ := jobs.LookupIssue("CorruptManifest")
+	warning, _ := jobs.LookupIssue("PowerLossDurabilityUnavailable")
+	if corrupt.Actions == nil || len(corrupt.Actions) != 0 {
+		t.Fatalf("corrupt issue must explicitly suppress actions: %#v", corrupt.Actions)
+	}
+	if warning.Actions != nil {
+		t.Fatalf("warning should leave ordinary status actions unchanged: %#v", warning.Actions)
 	}
 }

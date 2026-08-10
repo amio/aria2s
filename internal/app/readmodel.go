@@ -156,7 +156,6 @@ func taskDetailFromNative(detail aria2.DownloadDetail) TaskDetail {
 
 type TaskStatus string
 type TaskOwnership string
-type TaskAction string
 type ManagedLifecycle string
 
 const (
@@ -177,7 +176,9 @@ const (
 	LifecycleRemoved    ManagedLifecycle = "removed"
 )
 
-type ClassificationFact struct {
+// TaskFacts contains every observation needed to project one Dashboard task.
+// Callers collect filesystem and native facts before entering this pure policy.
+type TaskFacts struct {
 	Managed          bool
 	Lifecycle        ManagedLifecycle
 	Intent           jobs.ActivityIntent
@@ -187,21 +188,27 @@ type ClassificationFact struct {
 	NativeMetadata   bool
 	NativeAbsent     bool
 	IdentityConflict bool
+	CanStartSeeding  bool
 }
 
-type TaskClassification struct {
+type TaskProjection struct {
 	Status    TaskStatus
 	Ownership TaskOwnership
-	Actions   []TaskAction
+	IssueCode string
+	IssueText string
+	Actions   []string
 }
 
-func ClassifyTask(fact ClassificationFact) TaskClassification {
-	result := TaskClassification{Ownership: OwnershipUnmanaged}
-	issueIsError := false
-	if fact.IssueCode != "" {
-		metadata, known := jobs.LookupIssue(fact.IssueCode)
-		issueIsError = !known || metadata.Severity == "error"
+// ProjectTask is the sole owner of Dashboard status, ownership, issue, and
+// action policy. It does not observe the filesystem or mutate lifecycle state.
+func ProjectTask(fact TaskFacts) TaskProjection {
+	result := TaskProjection{Ownership: OwnershipUnmanaged}
+	issueCode := fact.IssueCode
+	if issueCode == "" && fact.Managed && fact.NativeAbsent && fact.Lifecycle == LifecyclePublishing {
+		issueCode = "PublicationRecoveryRequired"
 	}
+	issueMetadata, issueKnown := jobs.LookupIssue(issueCode)
+	issueIsError := issueCode != "" && (!issueKnown || issueMetadata.Severity == "error")
 	if fact.Managed {
 		result.Ownership = OwnershipManaged
 	}
@@ -243,5 +250,68 @@ func ClassifyTask(fact ClassificationFact) TaskClassification {
 	default:
 		result.Status = StatusError
 	}
+
+	result.IssueCode = issueCode
+	if issueKnown {
+		result.IssueText = issueMetadata.Text
+		// nil means this issue does not override ordinary status capabilities;
+		// a non-nil empty slice explicitly suppresses every action.
+		if issueMetadata.Actions != nil {
+			result.Actions = issueMetadata.Actions
+			return result
+		}
+	}
+
+	if fact.Managed && fact.Lifecycle == LifecyclePublishing {
+		if result.Status == StatusError {
+			result.Actions = []string{"retry"}
+		}
+		return result
+	}
+	switch result.Status {
+	case StatusDownloading, StatusSeeding:
+		result.Actions = []string{"pause", "remove"}
+	case StatusMetadata:
+		result.Actions = []string{"pause", "delete"}
+	case StatusWaiting:
+		result.Actions = []string{"pause", "remove"}
+	case StatusPaused:
+		result.Actions = []string{"resume", "remove"}
+	case StatusError:
+		result.Actions = []string{"retry"}
+		if !fact.Managed || fact.Lifecycle != LifecycleRemoved {
+			result.Actions = append(result.Actions, "remove")
+		}
+	case StatusComplete:
+		if fact.Managed && fact.CanStartSeeding {
+			result.Actions = append(result.Actions, "start-seeding")
+		}
+		result.Actions = append(result.Actions, "clear")
+	case StatusRemoved:
+		result.Actions = []string{"retry", "clear"}
+	}
 	return result
+}
+
+func applyTaskRowProjection(row *TaskRow, projection TaskProjection) {
+	row.CanonicalStatus = string(projection.Status)
+	row.Ownership = string(projection.Ownership)
+	row.IssueCode = projection.IssueCode
+	row.IssueText = projection.IssueText
+	row.Actions = cloneActions(projection.Actions)
+}
+
+func applyTaskDetailProjection(detail *TaskDetail, projection TaskProjection) {
+	detail.CanonicalStatus = string(projection.Status)
+	detail.Ownership = string(projection.Ownership)
+	detail.IssueCode = projection.IssueCode
+	detail.IssueText = projection.IssueText
+	detail.Actions = cloneActions(projection.Actions)
+}
+
+func cloneActions(actions []string) []string {
+	if actions == nil {
+		return nil
+	}
+	return append([]string{}, actions...)
 }
