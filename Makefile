@@ -4,7 +4,7 @@ MACOS_CODESIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/d
 
 .DEFAULT_GOAL := help
 
-.PHONY: help build test version-patch version-minor version-major
+.PHONY: help build test release-patch release-minor release-major
 
 help: ## Show available development commands
 	@printf "Usage: make <target>\n\nTargets:\n"
@@ -25,13 +25,13 @@ test: ## Run the full Go test suite
 LATEST_TAG := $(shell git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')
 CUR_VER    := $(or $(LATEST_TAG),0.0.0)
 
-version-patch: ## Bump patch version and push tag (0.0.x)
+release-patch: ## Bump patch version and push tag (0.0.x)
 	@$(MAKE) _bump KIND=patch
 
-version-minor: ## Bump minor version and push tag (0.x.0)
+release-minor: ## Bump minor version and push tag (0.x.0)
 	@$(MAKE) _bump KIND=minor
 
-version-major: ## Bump major version and push tag (x.0.0)
+release-major: ## Bump major version and push tag (x.0.0)
 	@$(MAKE) _bump KIND=major
 
 _bump:
@@ -53,4 +53,3 @@ _bump:
 	git tag -a "v$${NEW}" -m "v$${NEW}"; \
 	BRANCH=$$(git rev-parse --abbrev-ref HEAD); \
 	git push origin "$${BRANCH}" "v$${NEW}"
-
