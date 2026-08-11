@@ -10,7 +10,7 @@ import (
 )
 
 func TestTableShowsPeerMetricsAtWideViewport(t *testing.T) {
-	const contentWidth = 155
+	const contentWidth = 158
 	model := Model{}
 	header := model.tableHeader(contentWidth)
 	if !strings.Contains(header, "Seeds") || !strings.Contains(header, "Peers") ||
@@ -142,7 +142,7 @@ func TestKnownStatusTonesAreDistinct(t *testing.T) {
 }
 
 func TestTableColumnsHideByPriority(t *testing.T) {
-	full := computeLayout(155)
+	full := computeLayout(158)
 	if full.uploadedWidth == 0 || full.addedAgoWidth == 0 {
 		t.Fatalf("new metrics hidden in full layout: %#v", full)
 	}
@@ -150,17 +150,17 @@ func TestTableColumnsHideByPriority(t *testing.T) {
 		t.Fatalf("full layout name width got %d, want at least %d", full.nameWidth, minNameWidth)
 	}
 
-	addedAgoHidden := computeLayout(154)
+	addedAgoHidden := computeLayout(157)
 	if addedAgoHidden.addedAgoWidth != 0 || addedAgoHidden.uploadedWidth == 0 {
 		t.Fatalf("added age did not hide before uploaded: %#v", addedAgoHidden)
 	}
 
-	uploadedHidden := computeLayout(138)
+	uploadedHidden := computeLayout(140)
 	if uploadedHidden.uploadedWidth != 0 || uploadedHidden.peersWidth == 0 {
 		t.Fatalf("uploaded did not hide before peer metrics: %#v", uploadedHidden)
 	}
 
-	peerMetricsHidden := computeLayout(122)
+	peerMetricsHidden := computeLayout(124)
 	if peerMetricsHidden.seedsWidth != 0 || peerMetricsHidden.peersWidth != 0 {
 		t.Fatalf("equal-priority peer metrics did not hide together: %#v", peerMetricsHidden)
 	}
@@ -169,12 +169,12 @@ func TestTableColumnsHideByPriority(t *testing.T) {
 		t.Fatalf("higher-priority columns hid before peer metrics: %#v", peerMetricsHidden)
 	}
 
-	upHidden := computeLayout(99)
+	upHidden := computeLayout(101)
 	if upHidden.upWidth != 0 || upHidden.downWidth == 0 || upHidden.downloadedWidth == 0 {
 		t.Fatalf("up speed did not hide at priority 3: %#v", upHidden)
 	}
 
-	downHidden := computeLayout(84)
+	downHidden := computeLayout(86)
 	if downHidden.downWidth != 0 || downHidden.downloadedWidth == 0 {
 		t.Fatalf("down speed did not hide at priority 2: %#v", downHidden)
 	}
@@ -196,7 +196,7 @@ func TestTableColumnsHideByPriority(t *testing.T) {
 }
 
 func TestWideHeaderUsesCompactColumnSpacing(t *testing.T) {
-	header := Model{}.tableHeader(155)
+	header := Model{}.tableHeader(158)
 	titles := []string{"Size", "Downloaded", "Progress", "Down Speed", "Up Speed", "Seeds", "Peers", "Uploaded", "Added Ago"}
 	for i := 0; i < len(titles)-1; i++ {
 		left := strings.Index(header, titles[i])
@@ -206,7 +206,7 @@ func TestWideHeaderUsesCompactColumnSpacing(t *testing.T) {
 			t.Fatalf("gap between %q and %q = %d, want at most 3", titles[i], titles[i+1], gap)
 		}
 	}
-	if got := computeLayout(155).sizeWidth; got != 9 {
+	if got := computeLayout(158).sizeWidth; got != 9 {
 		t.Fatalf("size width = %d, want 9", got)
 	}
 }

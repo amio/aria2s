@@ -26,7 +26,7 @@ const (
 	bodyBottomPaddingLine = 1
 
 	// column base widths
-	statusBaseWidth     = 11
+	statusBaseWidth     = 13
 	sizeBaseWidth       = 9
 	downloadedBaseWidth = 12
 	progressBaseWidth   = 10
