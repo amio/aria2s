@@ -716,11 +716,16 @@ func (model Model) items() []app.TaskRow {
 	items = append(items, model.snapshot.Waiting...)
 	items = append(items, model.snapshot.Stopped...)
 	// Stable ordering retains aria2's queue order and the app's newest-first
-	// stopped history while grouping rows by their user-facing task state.
+	// stopped history where a section does not own a user-facing sort order.
 	sort.SliceStable(items, func(left, right int) bool {
 		leftRank, rightRank := downloadStatusRank(items[left]), downloadStatusRank(items[right])
 		if leftRank != rightRank {
 			return leftRank < rightRank
+		}
+		if leftRank == seedingStatusRank {
+			leftName := strings.ToLower(items[left].Name)
+			rightName := strings.ToLower(items[right].Name)
+			return leftName < rightName
 		}
 		if leftRank != downloadingStatusRank {
 			return false
@@ -739,14 +744,17 @@ func (model Model) items() []app.TaskRow {
 	return items
 }
 
-const downloadingStatusRank = 0
+const (
+	downloadingStatusRank = 0
+	seedingStatusRank     = 1
+)
 
 func downloadStatusRank(download app.TaskRow) int {
 	switch app.TaskStatus(download.CanonicalStatus) {
 	case app.StatusDownloading:
 		return downloadingStatusRank
 	case app.StatusSeeding:
-		return 1
+		return seedingStatusRank
 	case app.StatusMetadata:
 		return 2
 	case app.StatusWaiting:

@@ -129,13 +129,15 @@ func TestPartialListFailurePreservesLastKnownGood(t *testing.T) {
 	}
 }
 
-func TestItemsGroupByCanonicalStatusAndSortDownloadingByProgress(t *testing.T) {
+func TestItemsGroupByCanonicalStatusAndSortActiveSections(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.snapshot = app.TaskSnapshot{
 		Active: []app.TaskRow{
 			{GID: "download-low", Status: "active", CanonicalStatus: "downloading", CompletedLength: 25, TotalLength: 100},
 			{GID: "metadata", Status: "active", CanonicalStatus: "metadata", IsMetadata: true},
-			{GID: "seed", Status: "active", CanonicalStatus: "seeding", Seeder: true},
+			{GID: "seed-zulu", Name: "Zulu.iso", Status: "active", CanonicalStatus: "seeding", Seeder: true},
+			{GID: "seed-alpha", Name: "alpha.iso", Status: "active", CanonicalStatus: "seeding", Seeder: true},
+			{GID: "seed-beta", Name: "Beta.iso", Status: "active", CanonicalStatus: "seeding", Seeder: true},
 		},
 		Waiting: []app.TaskRow{
 			{GID: "waiting-first", Status: "waiting", CanonicalStatus: "waiting"},
@@ -158,7 +160,7 @@ func TestItemsGroupByCanonicalStatusAndSortDownloadingByProgress(t *testing.T) {
 	}
 	want := []string{
 		"download-high", "download-low",
-		"seed",
+		"seed-alpha", "seed-beta", "seed-zulu",
 		"metadata",
 		"waiting-first", "waiting-second",
 		"paused",
