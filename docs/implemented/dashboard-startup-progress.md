@@ -1,6 +1,8 @@
 # Dashboard Startup Progress
 
-Status: Implemented and validated
+Status: Progress publication remains implemented; Dashboard consumption was superseded by
+`docs/implemented/dashboard-startup-read-path.md` after live RPC blocking invalidated the
+fail-fast assumption below.
 
 ## Context & Goals
 

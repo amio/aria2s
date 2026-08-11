@@ -40,6 +40,21 @@ func TestReadBatchUsesAuthenticatedNestedMulticall(t *testing.T) {
 				t.Fatalf("missing nested token: %#v", call)
 			}
 		}
+		for index := 0; index < 3; index++ {
+			fields, ok := calls[index].Params[len(calls[index].Params)-1].([]any)
+			if !ok {
+				t.Fatalf("row fields = %#v", calls[index].Params)
+			}
+			for _, field := range fields {
+				if field == "files" {
+					t.Fatalf("row call %d requested complete file arrays", index)
+				}
+			}
+		}
+		detailFields, ok := calls[3].Params[len(calls[3].Params)-1].([]any)
+		if !ok || !containsJSONValue(detailFields, "files") {
+			t.Fatalf("detail call lost files: %#v", calls[3].Params)
+		}
 		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[[]],[[]],[[]],[{"gid":"a","status":"active","files":[]}],[[{"uri":"https://example.com/a"}]]]}`)
 	}))
 	defer server.Close()
@@ -74,7 +89,7 @@ func TestReadBatchKeepsDetailWhenNestedListCallFails(t *testing.T) {
 
 func TestReadBatchResolvesEveryObservedGIDAndTreatsOnlyNotFoundAsAbsent(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[[]],[[]],[[]],[{"gid":"0123456789abcdef","status":"paused","dir":"/stage/job","files":[]}],{"code":1,"message":"GID not found"}]}`)
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[[]],[[]],[[]],[{"gid":"0123456789abcdef","status":"paused","dir":"/stage/job","bittorrent":{"info":{"name":"job"}}}],{"code":1,"message":"GID not found"}]}`)
 	}))
 	defer server.Close()
 	client := aria2.NewRPCClient(server.URL, "", server.Client())
@@ -88,6 +103,87 @@ func TestReadBatchResolvesEveryObservedGIDAndTreatsOnlyNotFoundAsAbsent(t *testi
 	if row, ok := read.Observed["fedcba9876543210"]; !ok || row != nil {
 		t.Fatalf("observed absence was not proven: row=%#v ok=%v", row, ok)
 	}
+}
+
+func TestReadBatchHydratesOnlyRowsWithoutTorrentNames(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		var request struct {
+			Params []json.RawMessage `json:"params"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		var calls []struct {
+			Method string `json:"methodName"`
+			Params []any  `json:"params"`
+		}
+		if err := json.Unmarshal(request.Params[0], &calls); err != nil {
+			t.Fatal(err)
+		}
+		switch requestCount {
+		case 1:
+			if len(calls) != 3 {
+				t.Fatalf("initial calls = %d", len(calls))
+			}
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[[{"gid":"http","status":"active"},{"gid":"torrent","status":"active","bittorrent":{"info":{"name":"Large Torrent"}}}]],[[]],[[{"gid":"metadata","status":"complete"}]]]}`)
+		case 2:
+			if len(calls) != 2 || calls[0].Method != "aria2.tellStatus" || calls[1].Method != "aria2.tellStatus" {
+				t.Fatalf("identity calls = %#v", calls)
+			}
+			for _, call := range calls {
+				fields, ok := call.Params[len(call.Params)-1].([]any)
+				if !ok || len(fields) != 2 || !containsJSONValue(fields, "gid") || !containsJSONValue(fields, "files") {
+					t.Fatalf("identity fields = %#v", call.Params)
+				}
+			}
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[{"gid":"http","files":[{"path":"/tmp/asset.iso"}]}],[{"gid":"metadata","files":[{"path":"[METADATA]Example"}]}]]}`)
+		default:
+			t.Fatalf("unexpected request %d", requestCount)
+		}
+	}))
+	defer server.Close()
+	client := aria2.NewRPCClient(server.URL, "", server.Client())
+
+	read, err := client.ReadBatch(context.Background(), aria2.ReadBatchQuery{})
+	if err != nil || read.ListErr != nil {
+		t.Fatalf("compact read failed: read=%#v err=%v", read, err)
+	}
+	if len(read.Downloads.Active) != 2 || read.Downloads.Active[0].Name != "asset.iso" || read.Downloads.Active[1].Name != "Large Torrent" {
+		t.Fatalf("row names = %#v", read.Downloads.Active)
+	}
+	if len(read.Downloads.Stopped) != 0 {
+		t.Fatalf("metadata result was not filtered: %#v", read.Downloads.Stopped)
+	}
+}
+
+func TestReadBatchKeepsDetailWhenRowIdentityHydrationFails(t *testing.T) {
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if requestCount == 1 {
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[[{"gid":"http","status":"active"}]],[[]],[[]],[{"gid":"detail","status":"active","files":[]}]]}`)
+			return
+		}
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[]}`)
+	}))
+	defer server.Close()
+	client := aria2.NewRPCClient(server.URL, "", server.Client())
+
+	read, err := client.ReadBatch(context.Background(), aria2.ReadBatchQuery{DetailGID: "detail"})
+	if err != nil || read.ListErr == nil || read.Detail == nil || read.Detail.GID != "detail" {
+		t.Fatalf("partial detail validity lost: read=%#v err=%v", read, err)
+	}
+}
+
+func containsJSONValue(values []any, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func TestMutationTransportFailureIsOutcomeUnknownAndKeepsCause(t *testing.T) {

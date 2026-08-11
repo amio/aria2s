@@ -25,6 +25,7 @@ import (
 
 /** DashboardService is the consumer-owned boundary executed only by typed commands. */
 type DashboardService interface {
+	StartupStatus() string
 	Snapshot(context.Context, app.DashboardQuery) (app.DashboardRead, error)
 	TaskDetail(context.Context, string) (app.TaskDetail, error)
 	AddURI(context.Context, string, aria2.AddOptions) (app.AddResult, error)
@@ -125,6 +126,7 @@ type snapshotResultMsg struct {
 	err        error
 }
 type refreshTimerMsg struct{ token uint64 }
+type startupStatusMsg struct{ message string }
 type detailLoadingMsg struct {
 	gid   string
 	token uint64
@@ -174,7 +176,7 @@ func NewModel(ctx context.Context, service DashboardService, refreshInterval tim
 }
 
 func (model Model) Init() tea.Cmd {
-	return tea.Batch(model.snapshotCmd(model.refreshState.Generation, model.query()), loadingTick())
+	return tea.Batch(model.snapshotCmd(model.refreshState.Generation, model.query()), startupStatusCmd(model.service), loadingTick())
 }
 
 func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -186,6 +188,12 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return model, nil
 		}
 		return model.requestRefresh(false)
+	case startupStatusMsg:
+		if model.list.HasSnapshot {
+			return model, nil
+		}
+		model.startupMessage = msg.message
+		return model, startupStatusTick(model.service)
 	case detailLoadingMsg:
 		if msg.token != model.detailState.LoadingToken ||
 			msg.gid != model.detailState.RequestedGID ||
@@ -862,11 +870,20 @@ func startupMessage(err error) string {
 }
 
 const loadingTickInterval = 80 * time.Millisecond
+const startupStatusInterval = 250 * time.Millisecond
 const detailLoadingDelay = 200 * time.Millisecond
 const localHelperTimeout = 5 * time.Second
 
 func loadingTick() tea.Cmd {
 	return tea.Tick(loadingTickInterval, func(time.Time) tea.Msg { return loadingTickMsg{} })
+}
+func startupStatusCmd(service DashboardService) tea.Cmd {
+	return func() tea.Msg { return startupStatusMsg{message: service.StartupStatus()} }
+}
+func startupStatusTick(service DashboardService) tea.Cmd {
+	return tea.Tick(startupStatusInterval, func(time.Time) tea.Msg {
+		return startupStatusMsg{message: service.StartupStatus()}
+	})
 }
 func detailLoadingTick(gid string, token uint64) tea.Cmd {
 	return tea.Tick(detailLoadingDelay, func(time.Time) tea.Msg {

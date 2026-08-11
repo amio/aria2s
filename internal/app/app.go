@@ -39,6 +39,7 @@ type RPC interface {
 }
 
 type dashboardRPC interface {
+	Version(context.Context, state.State) (string, error)
 	ReadBatch(context.Context, state.State, aria2.ReadBatchQuery) (aria2.ReadBatch, error)
 	TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error)
 	AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error)

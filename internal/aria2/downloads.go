@@ -461,6 +461,14 @@ func downloadFields() []string {
 	return []string{"gid", "status", "dir", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "uploadLength", "infoHash", "numSeeders", "connections", "seeder"}
 }
 
+func dashboardRowFields() []string {
+	return []string{"gid", "status", "dir", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "uploadLength", "infoHash", "numSeeders", "connections", "seeder"}
+}
+
+func dashboardRowIdentityFields() []string {
+	return []string{"gid", "files"}
+}
+
 func detailFields() []string {
 	return []string{"gid", "status", "dir", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "uploadLength", "verifiedLength", "verifyIntegrityPending", "infoHash", "numSeeders", "seeder", "pieceLength", "numPieces", "connections", "errorCode", "errorMessage"}
 }

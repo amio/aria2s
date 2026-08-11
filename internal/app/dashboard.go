@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"sync/atomic"
 
 	"github.com/amio/aria2s/internal/aria2"
 	"github.com/amio/aria2s/internal/jobs"
@@ -24,11 +25,29 @@ type RetryResult struct {
 	CleanupWarning error
 }
 
-/** DashboardSession binds immutable RPC identity for one dashboard program lifetime. */
+/** DashboardSession binds RPC identity and memoizes readiness for one dashboard program lifetime. */
 type DashboardSession struct {
 	app      *App
 	identity state.State
 	rpc      dashboardRPC
+	ready    atomic.Bool
+}
+
+// StartupStatus returns only the disposable presentation hint published by
+// managed-exec. RPC success remains the authoritative readiness signal.
+func (session *DashboardSession) StartupStatus() string {
+	progress, err := readStartupProgress(session.app.options.Paths.StartupProgressFile)
+	if err != nil {
+		return ""
+	}
+	return progress.message()
+}
+
+func (session *DashboardSession) startupError(err error) error {
+	if progress, progressErr := readStartupProgress(session.app.options.Paths.StartupProgressFile); progressErr == nil {
+		return &dashboardStartupError{cause: err, progress: progress}
+	}
+	return err
 }
 
 func (session *DashboardSession) Snapshot(ctx context.Context, query DashboardQuery) (DashboardRead, error) {
@@ -61,12 +80,15 @@ func (session *DashboardSession) Snapshot(ctx context.Context, query DashboardQu
 			}
 		}
 	}
+	if !session.ready.Load() {
+		if _, err := session.rpc.Version(ctx, session.identity); err != nil {
+			return DashboardRead{}, session.startupError(err)
+		}
+		session.ready.Store(true)
+	}
 	read, err := session.rpc.ReadBatch(ctx, session.identity, nativeQuery)
 	if err != nil {
-		if progress, progressErr := readStartupProgress(session.app.options.Paths.StartupProgressFile); progressErr == nil {
-			return DashboardRead{}, &dashboardStartupError{cause: err, progress: progress}
-		}
-		return DashboardRead{}, err
+		return DashboardRead{}, session.startupError(err)
 	}
 	_ = clearStartupProgress(session.app.options.Paths.StartupProgressFile)
 	// ListErr stays nested so the TUI can retain its last complete list. The

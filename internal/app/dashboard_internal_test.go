@@ -16,18 +16,25 @@ import (
 )
 
 type dashboardRPCStub struct {
-	calls       []string
-	identities  []state.State
-	snapshot    aria2.ReadBatch
-	snapshotErr error
-	source      aria2.RetrySource
-	addGID      string
-	addErr      error
-	cleanupErr  error
-	detail      aria2.DownloadDetail
-	detailErr   error
-	queries     []aria2.ReadBatchQuery
-	detailGIDs  []string
+	calls        []string
+	identities   []state.State
+	versionErr   error
+	versionCalls int
+	snapshot     aria2.ReadBatch
+	snapshotErr  error
+	source       aria2.RetrySource
+	addGID       string
+	addErr       error
+	cleanupErr   error
+	detail       aria2.DownloadDetail
+	detailErr    error
+	queries      []aria2.ReadBatchQuery
+	detailGIDs   []string
+}
+
+func (rpc *dashboardRPCStub) Version(context.Context, state.State) (string, error) {
+	rpc.versionCalls++
+	return "1.37.0", rpc.versionErr
 }
 
 func (rpc *dashboardRPCStub) ReadBatch(_ context.Context, current state.State, query aria2.ReadBatchQuery) (aria2.ReadBatch, error) {
@@ -246,6 +253,49 @@ func TestDashboardSnapshotReportsStartupHintWithoutHidingRPCCause(t *testing.T) 
 	}
 	if _, err := os.Lstat(servicePaths.StartupProgressFile); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("successful snapshot left startup hint: %v", err)
+	}
+}
+
+func TestDashboardSnapshotGatesBatchOnReadinessAndMemoizesSuccess(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	rpcErr := errors.New("RPC busy")
+	rpc := &dashboardRPCStub{versionErr: rpcErr}
+	session := &DashboardSession{app: New(Options{Paths: servicePaths, DashboardReadTimeout: time.Second}), rpc: rpc}
+
+	if _, err := session.Snapshot(context.Background(), DashboardQuery{}); !errors.Is(err, rpcErr) {
+		t.Fatalf("readiness error = %v", err)
+	}
+	if len(rpc.queries) != 0 {
+		t.Fatalf("readiness failure submitted task batch: %#v", rpc.queries)
+	}
+
+	rpc.versionErr = nil
+	if _, err := session.Snapshot(context.Background(), DashboardQuery{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := session.Snapshot(context.Background(), DashboardQuery{}); err != nil {
+		t.Fatal(err)
+	}
+	if rpc.versionCalls != 2 || len(rpc.queries) != 2 {
+		t.Fatalf("readiness calls=%d batch queries=%d", rpc.versionCalls, len(rpc.queries))
+	}
+}
+
+func TestDashboardStartupStatusReadsProgressWithoutRPC(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	if err := writeStartupProgress(servicePaths.StartupProgressFile, startupProgress{phase: startupPhaseWaitingRPC}); err != nil {
+		t.Fatal(err)
+	}
+	rpc := &dashboardRPCStub{}
+	session := &DashboardSession{app: New(Options{Paths: servicePaths}), rpc: rpc}
+
+	if got := session.StartupStatus(); got != "Waiting for aria2 RPC…" {
+		t.Fatalf("startup status = %q", got)
+	}
+	if rpc.versionCalls != 0 || len(rpc.queries) != 0 {
+		t.Fatal("local startup status touched RPC")
 	}
 }
 

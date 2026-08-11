@@ -15,14 +15,15 @@ import (
 )
 
 type fakeService struct {
-	reads        []app.DashboardRead
-	queries      []app.DashboardQuery
-	addResult    app.AddResult
-	addErr       error
-	actions      []string
-	retryResult  app.RetryResult
-	retryErr     error
-	snapshotFunc func(context.Context, app.DashboardQuery) (app.DashboardRead, error)
+	reads         []app.DashboardRead
+	queries       []app.DashboardQuery
+	startupStatus string
+	addResult     app.AddResult
+	addErr        error
+	actions       []string
+	retryResult   app.RetryResult
+	retryErr      error
+	snapshotFunc  func(context.Context, app.DashboardQuery) (app.DashboardRead, error)
 }
 
 type presentableTestError struct{}
@@ -36,6 +37,8 @@ func (err startupTestError) Error() string          { return "connection refused
 func (err startupTestError) StartupMessage() string { return err.message }
 
 func keySpecial(code rune) tea.KeyPressMsg { return tea.KeyPressMsg{Code: code} }
+
+func (service *fakeService) StartupStatus() string { return service.startupStatus }
 
 func (service *fakeService) Snapshot(ctx context.Context, query app.DashboardQuery) (app.DashboardRead, error) {
 	if service.snapshotFunc != nil {
@@ -524,6 +527,31 @@ func TestInitialStartupHintKeepsSpinnerAndSuppressesUnavailable(t *testing.T) {
 	model = updated.(Model)
 	if model.startupMessage != "" || !model.list.HasSnapshot {
 		t.Fatalf("RPC success did not replace startup state: %#v", model.list)
+	}
+}
+
+func TestStartupStatusUpdatesWhileInitialSnapshotIsInFlight(t *testing.T) {
+	service := &fakeService{startupStatus: "Waiting for aria2 RPC…"}
+	model := NewModel(context.Background(), service, time.Second, "dev")
+	if !model.refreshState.InFlight {
+		t.Fatal("test requires the initial snapshot to remain in flight")
+	}
+
+	message := startupStatusCmd(service)().(startupStatusMsg)
+	updated, cmd := model.Update(message)
+	model = updated.(Model)
+	if model.startupMessage != service.startupStatus || cmd == nil {
+		t.Fatalf("independent startup status was not applied: message=%q cmd=%v", model.startupMessage, cmd)
+	}
+	if !model.refreshState.InFlight {
+		t.Fatal("startup status disturbed RPC single-flight state")
+	}
+
+	model.list.HasSnapshot = true
+	updated, cmd = model.Update(startupStatusMsg{message: "stale"})
+	model = updated.(Model)
+	if cmd != nil || model.startupMessage == "stale" {
+		t.Fatal("startup poll continued after the first snapshot")
 	}
 }
 

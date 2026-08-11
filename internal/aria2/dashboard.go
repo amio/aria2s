@@ -79,7 +79,7 @@ func (client *RPCClient) callWithoutToken(ctx context.Context, method string, pa
 	return client.dispatch(ctx, method, payload, result, false)
 }
 
-/** ReadBatch executes one bounded native read while preserving nested partial validity. */
+/** ReadBatch executes a compact native batch plus bounded row-identity hydration while preserving partial validity. */
 func (client *RPCClient) ReadBatch(ctx context.Context, query ReadBatchQuery) (ReadBatch, error) {
 	if query.List.WaitingLimit <= 0 {
 		query.List.WaitingLimit = 100
@@ -92,9 +92,9 @@ func (client *RPCClient) ReadBatch(ctx context.Context, query ReadBatchQuery) (R
 	var uris []rawURI
 	observedRaw := make(map[string]*rawDownload, len(query.ObserveGIDs))
 	descriptors := []callDescriptor{
-		{method: "aria2.tellActive", params: []any{downloadFields()}, apply: decodeInto(&active)},
-		{method: "aria2.tellWaiting", params: []any{0, query.List.WaitingLimit, downloadFields()}, apply: decodeInto(&waiting)},
-		{method: "aria2.tellStopped", params: []any{query.List.StoppedOffset, query.List.StoppedLimit, downloadFields()}, apply: decodeInto(&stopped)},
+		{method: "aria2.tellActive", params: []any{dashboardRowFields()}, apply: decodeInto(&active)},
+		{method: "aria2.tellWaiting", params: []any{0, query.List.WaitingLimit, dashboardRowFields()}, apply: decodeInto(&waiting)},
+		{method: "aria2.tellStopped", params: []any{query.List.StoppedOffset, query.List.StoppedLimit, dashboardRowFields()}, apply: decodeInto(&stopped)},
 	}
 	detailIndex, sourceIndex := -1, -1
 	if query.DetailGID != "" {
@@ -114,7 +114,7 @@ func (client *RPCClient) ReadBatch(ctx context.Context, query ReadBatchQuery) (R
 		observedRaw[gid] = value
 		index := len(descriptors)
 		observedIndexes[index] = gid
-		descriptors = append(descriptors, callDescriptor{method: "aria2.tellStatus", params: []any{gid, downloadFields()}, apply: decodeInto(value)})
+		descriptors = append(descriptors, callDescriptor{method: "aria2.tellStatus", params: []any{gid, dashboardRowFields()}, apply: decodeInto(value)})
 	}
 	errs := client.multicall(ctx, descriptors)
 	if len(errs) == 1 && len(descriptors) != 1 && errs[0] != nil {
@@ -122,9 +122,6 @@ func (client *RPCClient) ReadBatch(ctx context.Context, query ReadBatchQuery) (R
 	}
 	read := ReadBatch{}
 	read.ListErr = errors.Join(errs[0], errs[1], errs[2])
-	if read.ListErr == nil {
-		read.Downloads = DownloadSnapshot{Active: mapDownloads(active), Waiting: mapDownloads(waiting), Stopped: filterMetadataStopped(mapDownloads(stopped))}
-	}
 	if detailIndex >= 0 {
 		read.DetailErr = errs[detailIndex]
 		if read.DetailErr == nil {
@@ -139,10 +136,19 @@ func (client *RPCClient) ReadBatch(ctx context.Context, query ReadBatchQuery) (R
 		read.DetailSourceErr = errs[sourceIndex]
 	}
 	read.Observed = make(map[string]*Download, len(query.ObserveGIDs))
+	identityRows := make([]*rawDownload, 0, len(active)+len(waiting)+len(stopped)+len(query.ObserveGIDs))
+	for index := range active {
+		identityRows = append(identityRows, &active[index])
+	}
+	for index := range waiting {
+		identityRows = append(identityRows, &waiting[index])
+	}
+	for index := range stopped {
+		identityRows = append(identityRows, &stopped[index])
+	}
 	for index, gid := range observedIndexes {
 		if errs[index] == nil {
-			value := observedRaw[gid].toDownload()
-			read.Observed[gid] = &value
+			identityRows = append(identityRows, observedRaw[gid])
 			continue
 		}
 		if IsNotFound(errs[index]) {
@@ -151,7 +157,63 @@ func (client *RPCClient) ReadBatch(ctx context.Context, query ReadBatchQuery) (R
 		}
 		read.ListErr = errors.Join(read.ListErr, errs[index])
 	}
+	if read.ListErr == nil {
+		read.ListErr = client.hydrateDashboardRowIdentities(ctx, identityRows)
+	}
+	if read.ListErr == nil {
+		read.Downloads = DownloadSnapshot{Active: mapDownloads(active), Waiting: mapDownloads(waiting), Stopped: filterMetadataStopped(mapDownloads(stopped))}
+	}
+	for index, gid := range observedIndexes {
+		if errs[index] == nil {
+			value := observedRaw[gid].toDownload()
+			read.Observed[gid] = &value
+		}
+	}
 	return read, nil
+}
+
+// hydrateDashboardRowIdentities keeps complete file arrays off the common
+// torrent row path. Only rows without a BitTorrent name need files to recover
+// an HTTP filename or the special metadata marker used by product projection.
+func (client *RPCClient) hydrateDashboardRowIdentities(ctx context.Context, rows []*rawDownload) error {
+	byGID := make(map[string][]*rawDownload)
+	var gids []string
+	for _, row := range rows {
+		if row == nil || row.GID == "" || row.name() != row.GID {
+			continue
+		}
+		if _, exists := byGID[row.GID]; !exists {
+			gids = append(gids, row.GID)
+		}
+		byGID[row.GID] = append(byGID[row.GID], row)
+	}
+	if len(gids) == 0 {
+		return nil
+	}
+	hydrated := make([]rawDownload, len(gids))
+	descriptors := make([]callDescriptor, len(gids))
+	for index, gid := range gids {
+		descriptors[index] = callDescriptor{
+			method: "aria2.tellStatus",
+			params: []any{gid, dashboardRowIdentityFields()},
+			apply:  decodeInto(&hydrated[index]),
+		}
+	}
+	errs := client.multicall(ctx, descriptors)
+	if len(errs) == 1 && len(descriptors) != 1 && errs[0] != nil {
+		return errs[0]
+	}
+	var hydrationErr error
+	for index, err := range errs {
+		if err != nil {
+			hydrationErr = errors.Join(hydrationErr, err)
+			continue
+		}
+		for _, row := range byGID[gids[index]] {
+			row.Files = hydrated[index].Files
+		}
+	}
+	return hydrationErr
 }
 
 func decodeInto(target any) func(json.RawMessage) error {
