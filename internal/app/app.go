@@ -553,6 +553,10 @@ func fileIdentity(path string) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// inspectDashboard validates the runtime committed by install or update. A
+// running aria2c is already authoritative for Dashboard; on-disk bootstrap
+// artifacts are required only when Dashboard needs to start the supervisor.
+// The invoking CLI must never derive or publish replacement service metadata.
 func (app *App) inspectDashboard(ctx context.Context) (state.State, bool, error) {
 	current, err := state.Load(app.options.Paths.StateFile)
 	if err != nil {
@@ -571,52 +575,60 @@ func (app *App) inspectDashboard(ctx context.Context) (state.State, bool, error)
 		}
 		return current, false, legacyReadyToInstallError()
 	}
+	if current.SessionPath != app.options.Paths.SessionFile || current.StartupInputPath != app.options.Paths.StartupInputFile ||
+		current.LogPath != app.options.Paths.LogFile || current.ErrorLogPath != app.options.Paths.ErrorLogFile ||
+		current.ServiceName != app.options.Paths.ServiceName || current.RPCPort == 0 || current.RPCSecret == "" {
+		return current, false, dashboardInstallRequired("managed runtime state does not match the current platform layout")
+	}
+	serviceRunning := app.options.Service != nil && app.options.Service.IsRunning(ctx)
+	if serviceRunning {
+		return current, true, nil
+	}
 	if !isExecutable(current.Aria2cPath) {
-		return current, true, nil
+		return current, false, dashboardInstallRequired("stored aria2c path is not executable")
 	}
-	serviceFile, err := app.options.RenderService(current)
+	serviceInfo, err := os.Lstat(app.options.Paths.ServiceFile)
+	if err != nil || !serviceInfo.Mode().IsRegular() || serviceInfo.Mode()&os.ModeSymlink != 0 {
+		return current, false, dashboardInstallRequired("service artifact is missing or invalid")
+	}
+	serviceData, err := os.ReadFile(app.options.Paths.ServiceFile)
 	if err != nil {
-		return state.State{}, false, err
+		return current, false, dashboardInstallRequired("service artifact cannot be read")
 	}
-	serviceHash := sha256.Sum256([]byte(serviceFile))
-	if current.ServiceIdentity != hex.EncodeToString(serviceHash[:]) {
-		return current, true, nil
+	serviceHash := sha256.Sum256(serviceData)
+	if current.ServiceIdentity == "" || current.ServiceIdentity != hex.EncodeToString(serviceHash[:]) {
+		return current, false, dashboardInstallRequired("service artifact identity does not match committed state")
+	}
+	if !isExecutable(current.ControllerPath) {
+		return current, false, dashboardInstallRequired("controller executable is missing or invalid")
 	}
 	controllerIdentity, identityErr := fileIdentity(current.ControllerPath)
-	if identityErr != nil || controllerIdentity != current.ControllerIdentity {
-		return current, true, nil
+	if identityErr != nil || current.ControllerIdentity == "" || controllerIdentity != current.ControllerIdentity {
+		return current, false, dashboardInstallRequired("controller executable identity does not match committed state")
 	}
-	serviceChanged, err := fileContentChanged(app.options.Paths.ServiceFile, serviceFile)
-	if err != nil {
-		return state.State{}, false, err
+	if needs0600File(current.SessionPath) {
+		return current, false, dashboardInstallRequired("managed session file is missing or invalid")
 	}
-	if serviceChanged || needs0600File(current.SessionPath) || !dirExists(filepath.Dir(current.LogPath)) {
-		return current, true, nil
-	}
-	if app.options.Service != nil && !app.options.Service.IsLoaded(ctx) {
-		return current, true, nil
+	if !dirExists(filepath.Dir(current.LogPath)) {
+		return current, false, dashboardInstallRequired("managed log directory is missing")
 	}
 	return current, false, nil
 }
 
-/** PrepareDashboard repairs managed runtime state and starts the supervisor without waiting for RPC. */
+func dashboardInstallRequired(reason string) error {
+	return fmt.Errorf("InstallIncomplete: %s; run `aria2s install`", reason)
+}
+
+/** PrepareDashboard validates installed runtime state and starts the supervisor without waiting for RPC. */
 func (app *App) PrepareDashboard(ctx context.Context) (*DashboardSession, error) {
-	current, repair, err := app.inspectDashboard(ctx)
+	current, running, err := app.inspectDashboard(ctx)
 	if err != nil {
 		return nil, err
 	}
-	if repair {
-		desired, err := app.desiredManagedState(current.Aria2cPath)
-		if err != nil {
+	if !running {
+		if err := app.startSupervisor(ctx); err != nil {
 			return nil, err
 		}
-		current, err = app.reconcileManagedRuntime(ctx, desired)
-		if err != nil {
-			return nil, err
-		}
-	}
-	if err := app.startSupervisor(ctx); err != nil {
-		return nil, err
 	}
 	rpc, ok := app.options.RPC.(dashboardRPC)
 	if !ok {

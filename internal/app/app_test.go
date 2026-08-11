@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -249,7 +250,39 @@ func TestPrepareDashboardIgnoresMissingUserConfigAndRPC(t *testing.T) {
 	}
 }
 
-func TestPrepareDashboardRepairsAndStartsWithoutWaitingForRPC(t *testing.T) {
+func TestPrepareDashboardStartsValidInstalledServiceWithoutReinstalling(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	current := writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	if err := touch0600ForTest(servicePaths.SessionFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.LogFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	serviceFile, err := service.RenderLaunchAgent(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, []byte(serviceFile), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	serviceBackend := &recordingService{loaded: false, running: false}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, &flakyRPC{}, app.Options{})
+
+	if _, err := application.PrepareDashboard(context.Background()); err != nil {
+		t.Fatalf("prepare Dashboard: %v", err)
+	}
+	if !slices.Equal(serviceBackend.calls, []string{"start"}) {
+		t.Fatalf("Dashboard service calls = %v, want [start]", serviceBackend.calls)
+	}
+}
+
+func TestPrepareDashboardRejectsAlteredServiceWithoutMutation(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
 	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
@@ -266,18 +299,111 @@ func TestPrepareDashboardRepairsAndStartsWithoutWaitingForRPC(t *testing.T) {
 	if err := os.WriteFile(servicePaths.ServiceFile, []byte("stale service"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	stateStamp := fileModTime(t, servicePaths.StateFile)
+	serviceStamp := fileModTime(t, servicePaths.ServiceFile)
 	serviceBackend := &recordingService{loaded: true, running: false}
 	rpc := &flakyRPC{failuresRemaining: 100}
 	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{})
 
-	if _, err := application.PrepareDashboard(context.Background()); err != nil {
-		t.Fatalf("prepare dashboard: %v", err)
+	_, err := application.PrepareDashboard(context.Background())
+	if err == nil {
+		t.Fatal("altered service artifact was accepted")
 	}
+	assertContains(t, err.Error(), "InstallIncomplete: service artifact identity does not match committed state")
+	assertContains(t, err.Error(), "run `aria2s install`")
 	if rpc.versionCalls != 0 {
-		t.Fatalf("repair path waited for RPC %d times", rpc.versionCalls)
+		t.Fatalf("validation path probed RPC %d times", rpc.versionCalls)
 	}
-	if !serviceBackend.running {
-		t.Fatal("repair path did not start supervisor")
+	if len(serviceBackend.calls) != 0 || serviceBackend.running {
+		t.Fatalf("Dashboard mutated service: calls=%v running=%v", serviceBackend.calls, serviceBackend.running)
+	}
+	if got := fileModTime(t, servicePaths.StateFile); !got.Equal(stateStamp) {
+		t.Fatalf("Dashboard rewrote state: got %s want %s", got, stateStamp)
+	}
+	if got := fileModTime(t, servicePaths.ServiceFile); !got.Equal(serviceStamp) {
+		t.Fatalf("Dashboard rewrote service artifact: got %s want %s", got, serviceStamp)
+	}
+}
+
+func TestPrepareDashboardTrustsCommittedServiceAcrossCLIVersions(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	current := writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	if err := touch0600ForTest(servicePaths.SessionFile); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.LogFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installedService := []byte("service artifact authored by an older CLI")
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, installedService, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	serviceHash := sha256.Sum256(installedService)
+	current.ServiceIdentity = hex.EncodeToString(serviceHash[:])
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatal(err)
+	}
+	renderCalls := 0
+	serviceBackend := &recordingService{loaded: true, running: false}
+	application := newTestApp(servicePaths, aria2c, serviceBackend, &flakyRPC{}, app.Options{
+		RenderService: func(state.State) (string, error) {
+			renderCalls++
+			return "different service artifact from the current CLI", nil
+		},
+	})
+
+	if _, err := application.PrepareDashboard(context.Background()); err != nil {
+		t.Fatalf("prepare Dashboard with an older committed service: %v", err)
+	}
+	if renderCalls != 0 {
+		t.Fatalf("Dashboard re-derived installed service metadata %d times", renderCalls)
+	}
+	if !slices.Equal(serviceBackend.calls, []string{"start"}) {
+		t.Fatalf("Dashboard service calls = %v, want [start]", serviceBackend.calls)
+	}
+}
+
+func TestPrepareDashboardUsesRunningAria2cAfterControllerReplacement(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	current := writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	controller := writeExecutable(t, filepath.Join(root, "bin", "aria2s-controller"))
+	controllerData, err := os.ReadFile(controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controllerHash := sha256.Sum256(controllerData)
+	current.ControllerPath = controller
+	current.ControllerIdentity = hex.EncodeToString(controllerHash[:])
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(controller, []byte("replacement controller"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	serviceBackend := &recordingService{loaded: true, running: true}
+	renderCalls := 0
+	application := newTestApp(servicePaths, aria2c, serviceBackend, &flakyRPC{}, app.Options{
+		RenderService: func(state.State) (string, error) {
+			renderCalls++
+			return "replacement service", nil
+		},
+	})
+
+	if _, err := application.PrepareDashboard(context.Background()); err != nil {
+		t.Fatalf("prepare Dashboard against running aria2c: %v", err)
+	}
+	if renderCalls != 0 {
+		t.Fatalf("Dashboard rendered service metadata %d times", renderCalls)
+	}
+	if len(serviceBackend.calls) != 0 || !serviceBackend.running {
+		t.Fatalf("Dashboard disturbed running aria2c: calls=%v running=%v", serviceBackend.calls, serviceBackend.running)
 	}
 }
 
