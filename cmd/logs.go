@@ -14,7 +14,7 @@ func newLogsCommand(application *app.App) *cobra.Command {
 		Short: "Show log file paths",
 		RunE: func(command *cobra.Command, _ []string) error {
 			paths := application.Paths()
-			fmt.Fprintf(command.OutOrStdout(), "Logs:\n  %s\n  %s\n\n", paths.LogFile, paths.ErrorLogFile)
+			fmt.Fprintf(command.OutOrStdout(), "Logs (50 MiB startup rotation; current + .1 + .2):\n  %s\n  %s\n\n", paths.LogFile, paths.ErrorLogFile)
 			printRecentLog(command, "stdout", paths.LogFile)
 			printRecentLog(command, "stderr", paths.ErrorLogFile)
 			return nil

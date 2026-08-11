@@ -1,5 +1,6 @@
-// Package runtime owns process-lifetime mechanics only: the inherited instance
-// lease, atomic startup input replacement, hook launchers, and final aria2 exec.
+// Package runtime owns process-lifetime mechanics only: bounded log activation,
+// the inherited instance lease, atomic startup input replacement, hook launchers,
+// and final aria2 exec.
 package runtime
 
 import (

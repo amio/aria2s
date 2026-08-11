@@ -61,6 +61,19 @@ func TestManagedArgsIncludeRPCAndSessionFlags(t *testing.T) {
 	assertSliceContains(t, args, "--save-session-interval=60")
 }
 
+func TestManagedV2ArgsSuppressInteractiveConsoleNoise(t *testing.T) {
+	args := aria2.ManagedV2Args(state.State{
+		RPCPort:          6800,
+		RPCSecret:        "secret-token",
+		SessionPath:      "/tmp/session",
+		StartupInputPath: "/tmp/startup",
+	}, "/tmp/hooks")
+
+	assertSliceContains(t, args, "--show-console-readout=false")
+	assertSliceContains(t, args, "--summary-interval=0")
+	assertSliceContains(t, args, "--console-log-level=warn")
+}
+
 func assertContains(t *testing.T, text, want string) {
 	t.Helper()
 	if !strings.Contains(text, want) {

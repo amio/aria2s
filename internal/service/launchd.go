@@ -119,8 +119,15 @@ func RenderLaunchAgent(current state.State) (string, error) {
 	builder.WriteString("  <key>KeepAlive</key>\n  <dict>\n")
 	builder.WriteString("    <key>SuccessfulExit</key>\n    <false/>\n")
 	builder.WriteString("  </dict>\n")
-	writePlistString(&builder, "StandardOutPath", current.LogPath)
-	writePlistString(&builder, "StandardErrorPath", current.ErrorLogPath)
+	if current.RuntimeSchemaVersion == 2 {
+		// managed-exec must rotate before opening these paths; launchd-owned
+		// descriptors would keep writing to an archive after rename.
+		writePlistString(&builder, "StandardOutPath", "/dev/null")
+		writePlistString(&builder, "StandardErrorPath", "/dev/null")
+	} else {
+		writePlistString(&builder, "StandardOutPath", current.LogPath)
+		writePlistString(&builder, "StandardErrorPath", current.ErrorLogPath)
+	}
 	writePlistResourceLimits(&builder, MaxOpenFiles)
 	builder.WriteString("</dict>\n</plist>\n")
 	return builder.String(), nil

@@ -126,15 +126,21 @@ func RenderSystemdUnit(current state.State) (string, error) {
 	builder.WriteString("Restart=on-failure\n")
 	builder.WriteString("RestartSec=3\n")
 	builder.WriteString("LimitNOFILE=" + strconv.Itoa(MaxOpenFiles) + "\n")
-	if current.LogPath != "" {
-		builder.WriteString("StandardOutput=append:")
-		builder.WriteString(current.LogPath)
-		builder.WriteString("\n")
-	}
-	if current.ErrorLogPath != "" {
-		builder.WriteString("StandardError=append:")
-		builder.WriteString(current.ErrorLogPath)
-		builder.WriteString("\n")
+	if current.RuntimeSchemaVersion == 2 {
+		// managed-exec owns rotation and opens the final log descriptors.
+		builder.WriteString("StandardOutput=null\n")
+		builder.WriteString("StandardError=null\n")
+	} else {
+		if current.LogPath != "" {
+			builder.WriteString("StandardOutput=append:")
+			builder.WriteString(current.LogPath)
+			builder.WriteString("\n")
+		}
+		if current.ErrorLogPath != "" {
+			builder.WriteString("StandardError=append:")
+			builder.WriteString(current.ErrorLogPath)
+			builder.WriteString("\n")
+		}
 	}
 	builder.WriteString("\n[Install]\n")
 	builder.WriteString("WantedBy=default.target\n")

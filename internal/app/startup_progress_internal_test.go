@@ -53,14 +53,17 @@ func TestStartupProgressRejectsInvalidText(t *testing.T) {
 
 func TestManagedExecReportsOnlyNaturalStartupBoundaries(t *testing.T) {
 	application := managedExecTestApp(t, 2)
-	oldPersist, oldExec := persistStartupProgress, managedExec
-	defer func() { persistStartupProgress, managedExec = oldPersist, oldExec }()
+	oldPersist, oldExec, oldActivateLogs := persistStartupProgress, managedExec, activateManagedLogs
+	defer func() {
+		persistStartupProgress, managedExec, activateManagedLogs = oldPersist, oldExec, oldActivateLogs
+	}()
 	var got []startupProgress
 	persistStartupProgress = func(_ string, progress startupProgress) error {
 		got = append(got, progress)
 		return nil
 	}
 	managedExec = func(string, []string, []string) error { return nil }
+	activateManagedLogs = func(string, string) error { return nil }
 
 	if err := application.ManagedExec(context.Background()); err != nil {
 		t.Fatal(err)
@@ -78,10 +81,11 @@ func TestManagedExecReportsOnlyNaturalStartupBoundaries(t *testing.T) {
 
 func TestManagedExecProgressFailureIsBestEffortAndExecErrorCleansUp(t *testing.T) {
 	application := managedExecTestApp(t, 0)
-	oldPersist, oldClear, oldExec := persistStartupProgress, clearStartupProgress, managedExec
+	oldPersist, oldClear, oldExec, oldActivateLogs := persistStartupProgress, clearStartupProgress, managedExec, activateManagedLogs
 	defer func() {
-		persistStartupProgress, clearStartupProgress, managedExec = oldPersist, oldClear, oldExec
+		persistStartupProgress, clearStartupProgress, managedExec, activateManagedLogs = oldPersist, oldClear, oldExec, oldActivateLogs
 	}()
+	activateManagedLogs = func(string, string) error { return nil }
 	persistStartupProgress = func(string, startupProgress) error { return errors.New("read-only state") }
 	cleared := false
 	clearStartupProgress = func(string) error {
@@ -96,6 +100,27 @@ func TestManagedExecProgressFailureIsBestEffortAndExecErrorCleansUp(t *testing.T
 	}
 	if !cleared {
 		t.Fatal("exec failure did not clear startup progress")
+	}
+}
+
+func TestManagedExecStopsBeforeRuntimeWorkWhenLogActivationFails(t *testing.T) {
+	application := managedExecTestApp(t, 0)
+	oldExec, oldActivateLogs := managedExec, activateManagedLogs
+	defer func() { managedExec, activateManagedLogs = oldExec, oldActivateLogs }()
+	want := errors.New("log directory is read-only")
+	activateManagedLogs = func(stdoutPath, stderrPath string) error {
+		if stdoutPath != application.options.Paths.LogFile || stderrPath != application.options.Paths.ErrorLogFile {
+			t.Fatalf("log paths = %q, %q", stdoutPath, stderrPath)
+		}
+		return want
+	}
+	managedExec = func(string, []string, []string) error {
+		t.Fatal("aria2 exec reached after log activation failure")
+		return nil
+	}
+
+	if err := application.ManagedExec(context.Background()); !errors.Is(err, want) {
+		t.Fatalf("ManagedExec error = %v", err)
 	}
 }
 

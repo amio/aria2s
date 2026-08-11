@@ -16,6 +16,9 @@ import (
 )
 
 func (app *App) ManagedExec(ctx context.Context) error {
+	if err := activateManagedLogs(app.options.Paths.LogFile, app.options.Paths.ErrorLogFile); err != nil {
+		return fmt.Errorf("activate managed logs: %w", err)
+	}
 	current, err := state.Load(app.options.Paths.StateFile)
 	if err != nil {
 		return err
@@ -154,6 +157,7 @@ func managedRuntimeArgs(current state.State, hooksDir string, safeStartup bool) 
 }
 
 var managedExec = managedruntime.Exec
+var activateManagedLogs = managedruntime.ActivateLogs
 
 func pathPresence(path string, identifyErr error) (exists, uncertain bool) {
 	if identifyErr == nil {

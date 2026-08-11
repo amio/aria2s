@@ -42,12 +42,18 @@ func TestRenderSystemdUnitEscapesRuntimeV2ControllerPath(t *testing.T) {
 		RuntimeSchemaVersion: 2,
 		Aria2cPath:           "/opt/aria 2/aria2c",
 		ControllerPath:       "/opt/aria 2/aria2s$prod%name",
+		LogPath:              "/home/amio/.local/state/aria2s/aria2.log",
+		ErrorLogPath:         "/home/amio/.local/state/aria2s/aria2.err.log",
 	}
 	rendered, err := service.RenderSystemdUnit(current)
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertContains(t, rendered, `ExecStart="/opt/aria 2/aria2s$$prod%%name" managed-exec`)
+	assertContains(t, rendered, "StandardOutput=null")
+	assertContains(t, rendered, "StandardError=null")
+	assertNotContains(t, rendered, current.LogPath)
+	assertNotContains(t, rendered, current.ErrorLogPath)
 }
 
 func TestSystemdBackendGeneratesLifecycleCommands(t *testing.T) {

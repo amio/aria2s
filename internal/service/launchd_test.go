@@ -47,6 +47,26 @@ func TestRenderLaunchAgentUsesAbsoluteAria2cPathWithoutShell(t *testing.T) {
 	assertNotContains(t, rendered, "<string>-c</string>")
 }
 
+func TestRenderLaunchAgentLeavesV2LogDescriptorsToManagedExec(t *testing.T) {
+	current := state.State{
+		RuntimeSchemaVersion: 2,
+		Aria2cPath:           "/opt/homebrew/bin/aria2c",
+		ControllerPath:       "/usr/local/bin/aria2s",
+		LogPath:              "/Users/amio/Library/Logs/aria2s/aria2.log",
+		ErrorLogPath:         "/Users/amio/Library/Logs/aria2s/aria2.err.log",
+		ServiceName:          "io.github.amio.aria2s",
+	}
+	rendered, err := service.RenderLaunchAgent(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(rendered, "<string>/dev/null</string>"); got != 2 {
+		t.Fatalf("null log targets = %d, want 2\n%s", got, rendered)
+	}
+	assertNotContains(t, rendered, current.LogPath)
+	assertNotContains(t, rendered, current.ErrorLogPath)
+}
+
 func TestLaunchdBackendGeneratesBootstrapCommands(t *testing.T) {
 	runner := &printAwareRunner{loaded: false}
 	backend := service.NewLaunchdBackend(runner, 501, "io.github.amio.aria2s", "/tmp/io.github.amio.aria2s.plist")

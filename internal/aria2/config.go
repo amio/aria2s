@@ -76,6 +76,9 @@ func ManagedArgs(current state.State) []string {
 
 func ManagedV2Args(current state.State, hooksDir string) []string {
 	return []string{
+		"--show-console-readout=false",
+		"--summary-interval=0",
+		"--console-log-level=warn",
 		"--enable-rpc=true",
 		"--rpc-listen-all=false",
 		"--rpc-listen-port=" + strconv.Itoa(current.RPCPort),
