@@ -1,6 +1,8 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -s -w -X github.com/amio/aria2s/cmd.Version=$(VERSION)
 MACOS_CODESIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | awk '/"Apple Development:/ { print $$2; exit }')
+GOCACHE ?= $(CURDIR)/.cache/go-build
+export GOCACHE
 
 .DEFAULT_GOAL := help
 

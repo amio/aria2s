@@ -4,6 +4,7 @@
 - **Tech stack**: Go 1.26 CLI built with Cobra; terminal UI built with Bubble Tea v2 and Bubbles v2; Make and GoReleaser provide local builds and release packaging.
 - **Targeted platform**: macOS and Linux command-line environments with `aria2c`; persistent services are managed by `launchd` on macOS and `systemd --user` on Linux.
 - **Preferences & restraints**: Preserve aria2s as a thin wrapper around aria2c, prefer Go standard-library solutions, avoid new runtime dependencies without clear value, keep platform behavior aligned, and spend tests on risky lifecycle, persistence, state-machine, and RPC boundaries rather than trivial wiring or presentation details.
+- **Test entry point**: Run the full suite with `make test`; the Makefile keeps Go's build cache inside the writable project workspace so sandboxed agents do not depend on the system cache directory.
 
 # ARCHITECTURE BLUEPRINT
 
