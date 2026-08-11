@@ -52,7 +52,7 @@ func TestListDownloadsFetchesActiveWaitingAndStoppedWindows(t *testing.T) {
 	}
 	assertRPCRequest(t, requests[0], "aria2.tellActive", "token:secret-token")
 	assertRPCRequest(t, requests[1], "aria2.tellWaiting", "token:secret-token", float64(0), float64(10))
-	assertRPCRequest(t, requests[2], "aria2.tellStopped", "token:secret-token", float64(20), float64(30))
+	assertRPCRequest(t, requests[2], "aria2.tellStopped", "token:secret-token", float64(-21), float64(30))
 }
 
 func TestListDownloadsFiltersCompletedMetadataFromStopped(t *testing.T) {

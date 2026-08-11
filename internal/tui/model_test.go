@@ -141,10 +141,12 @@ func TestPartialListFailurePreservesLastKnownGood(t *testing.T) {
 
 func TestItemsGroupByCanonicalStatusAndSortActiveSections(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	now := time.Now()
 	model.snapshot = app.TaskSnapshot{
 		Active: []app.TaskRow{
 			{GID: "download-low", Status: "active", CanonicalStatus: "downloading", CompletedLength: 25, TotalLength: 100},
-			{GID: "metadata", Status: "active", CanonicalStatus: "metadata", IsMetadata: true},
+			{GID: "metadata-old", Status: "active", CanonicalStatus: "metadata", IsMetadata: true, AddedAt: now.Add(-time.Minute)},
+			{GID: "metadata-new", Status: "active", CanonicalStatus: "metadata", IsMetadata: true, AddedAt: now},
 			{GID: "seed-zulu", Name: "Zulu.iso", Status: "active", CanonicalStatus: "seeding", Seeder: true},
 			{GID: "seed-alpha", Name: "alpha.iso", Status: "active", CanonicalStatus: "seeding", Seeder: true},
 			{GID: "seed-beta", Name: "Beta.iso", Status: "active", CanonicalStatus: "seeding", Seeder: true},
@@ -153,7 +155,8 @@ func TestItemsGroupByCanonicalStatusAndSortActiveSections(t *testing.T) {
 			{GID: "waiting-first", Status: "waiting", CanonicalStatus: "waiting"},
 			{GID: "download-high", Status: "waiting", CanonicalStatus: "downloading", CompletedLength: 3, TotalLength: 4},
 			{GID: "waiting-second", Status: "waiting", CanonicalStatus: "waiting"},
-			{GID: "paused", Status: "paused", CanonicalStatus: "paused"},
+			{GID: "paused-low", Status: "paused", CanonicalStatus: "paused", CompletedLength: 1, TotalLength: 4},
+			{GID: "paused-high", Status: "paused", CanonicalStatus: "paused", CompletedLength: 3, TotalLength: 4},
 		},
 		Stopped: []app.TaskRow{
 			{GID: "complete-new", Status: "complete", CanonicalStatus: "complete"},
@@ -169,11 +172,11 @@ func TestItemsGroupByCanonicalStatusAndSortActiveSections(t *testing.T) {
 		got = append(got, item.GID)
 	}
 	want := []string{
+		"metadata-new", "metadata-old",
 		"download-high", "download-low",
-		"seed-alpha", "seed-beta", "seed-zulu",
-		"metadata",
 		"waiting-first", "waiting-second",
-		"paused",
+		"paused-high", "paused-low",
+		"seed-alpha", "seed-beta", "seed-zulu",
 		"error",
 		"complete-new", "complete-old",
 		"removed",

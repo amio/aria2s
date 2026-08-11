@@ -731,63 +731,84 @@ func (model Model) items() []app.TaskRow {
 	items = append(items, model.snapshot.Active...)
 	items = append(items, model.snapshot.Waiting...)
 	items = append(items, model.snapshot.Stopped...)
-	// Stable ordering retains aria2's queue order and the app's newest-first
-	// stopped history where a section does not own a user-facing sort order.
+	// Stable ordering retains queue order and the app's newest-first completion
+	// history when the group comparator considers two rows equivalent.
 	sort.SliceStable(items, func(left, right int) bool {
 		leftRank, rightRank := downloadStatusRank(items[left]), downloadStatusRank(items[right])
 		if leftRank != rightRank {
 			return leftRank < rightRank
 		}
-		if leftRank == seedingStatusRank {
+		switch leftRank {
+		case metadataStatusRank:
+			return newerAddedTask(items[left], items[right])
+		case seedingStatusRank:
 			leftName := strings.ToLower(items[left].Name)
 			rightName := strings.ToLower(items[right].Name)
 			return leftName < rightName
-		}
-		if leftRank != downloadingStatusRank {
+		case downloadingStatusRank, pausedStatusRank:
+			return moreCompleteTask(items[left], items[right])
+		default:
 			return false
 		}
-		leftKnown, rightKnown := items[left].TotalLength > 0, items[right].TotalLength > 0
-		if leftKnown != rightKnown {
-			return leftKnown
-		}
-		if !leftKnown {
-			return false
-		}
-		leftProgress := float64(items[left].CompletedLength) / float64(items[left].TotalLength)
-		rightProgress := float64(items[right].CompletedLength) / float64(items[right].TotalLength)
-		return leftProgress > rightProgress
 	})
 	return items
 }
 
 const (
-	downloadingStatusRank = 0
-	seedingStatusRank     = 1
+	metadataStatusRank    = 0
+	downloadingStatusRank = 1
+	waitingStatusRank     = 2
+	pausedStatusRank      = 3
+	seedingStatusRank     = 4
+	errorStatusRank       = 5
+	completeStatusRank    = 6
+	unknownStatusRank     = 7
+	removedStatusRank     = 8
 )
 
 func downloadStatusRank(download app.TaskRow) int {
 	switch app.TaskStatus(download.CanonicalStatus) {
+	case app.StatusMetadata:
+		return metadataStatusRank
 	case app.StatusDownloading:
 		return downloadingStatusRank
+	case app.StatusWaiting:
+		return waitingStatusRank
+	case app.StatusPaused:
+		return pausedStatusRank
 	case app.StatusSeeding:
 		return seedingStatusRank
-	case app.StatusMetadata:
-		return 2
-	case app.StatusWaiting:
-		return 3
-	case app.StatusPaused:
-		return 4
 	case app.StatusError:
-		return 5
+		return errorStatusRank
 	case app.StatusComplete:
-		return 6
+		return completeStatusRank
 	case app.StatusRemoved:
-		return 8
+		return removedStatusRank
 	default:
 		// Unknown states remain visible near other exceptional states, while
 		// Removed is always the final group.
-		return 7
+		return unknownStatusRank
 	}
+}
+
+func newerAddedTask(left, right app.TaskRow) bool {
+	if left.AddedAt.IsZero() != right.AddedAt.IsZero() {
+		return !left.AddedAt.IsZero()
+	}
+	return left.AddedAt.After(right.AddedAt)
+}
+
+func moreCompleteTask(left, right app.TaskRow) bool {
+	leftKnown, rightKnown := left.TotalLength > 0, right.TotalLength > 0
+	if leftKnown != rightKnown {
+		return leftKnown
+	}
+	if !leftKnown {
+		return false
+	}
+	leftProgress := float64(left.CompletedLength) / float64(left.TotalLength)
+	rightProgress := float64(right.CompletedLength) / float64(right.TotalLength)
+	return leftProgress > rightProgress
 }
 
 func (model Model) indexOf(gid string) int {

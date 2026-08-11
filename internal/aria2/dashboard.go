@@ -94,7 +94,7 @@ func (client *RPCClient) ReadBatch(ctx context.Context, query ReadBatchQuery) (R
 	descriptors := []callDescriptor{
 		{method: "aria2.tellActive", params: []any{dashboardRowFields()}, apply: decodeInto(&active)},
 		{method: "aria2.tellWaiting", params: []any{0, query.List.WaitingLimit, dashboardRowFields()}, apply: decodeInto(&waiting)},
-		{method: "aria2.tellStopped", params: []any{query.List.StoppedOffset, query.List.StoppedLimit, dashboardRowFields()}, apply: decodeInto(&stopped)},
+		{method: "aria2.tellStopped", params: []any{recentStoppedOffset(query.List.StoppedOffset), query.List.StoppedLimit, dashboardRowFields()}, apply: decodeInto(&stopped)},
 	}
 	detailIndex, sourceIndex := -1, -1
 	if query.DetailGID != "" {

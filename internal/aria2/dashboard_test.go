@@ -51,6 +51,9 @@ func TestReadBatchUsesAuthenticatedNestedMulticall(t *testing.T) {
 				}
 			}
 		}
+		if calls[2].Params[1] != float64(-21) {
+			t.Fatalf("stopped offset = %#v, want newest-first page offset -21", calls[2].Params[1])
+		}
 		detailFields, ok := calls[3].Params[len(calls[3].Params)-1].([]any)
 		if !ok || !containsJSONValue(detailFields, "files") {
 			t.Fatalf("detail call lost files: %#v", calls[3].Params)
@@ -59,7 +62,7 @@ func TestReadBatchUsesAuthenticatedNestedMulticall(t *testing.T) {
 	}))
 	defer server.Close()
 	client := aria2.NewRPCClient(server.URL, "secret", server.Client())
-	read, err := client.ReadBatch(context.Background(), aria2.ReadBatchQuery{List: aria2.ListOptions{WaitingLimit: 10, StoppedLimit: 10}, DetailGID: "a", ResolveDetailSource: true})
+	read, err := client.ReadBatch(context.Background(), aria2.ReadBatchQuery{List: aria2.ListOptions{WaitingLimit: 10, StoppedOffset: 20, StoppedLimit: 10}, DetailGID: "a", ResolveDetailSource: true})
 	if err != nil {
 		t.Fatal(err)
 	}

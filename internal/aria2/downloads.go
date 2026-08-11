@@ -11,7 +11,7 @@ import (
 	"time"
 )
 
-/** ListOptions bounds native aria2 task-list reads. */
+/** ListOptions bounds product-ordered aria2 task-list reads. */
 type ListOptions struct {
 	WaitingLimit  int
 	StoppedOffset int
@@ -114,7 +114,7 @@ func (client *RPCClient) ListDownloads(ctx context.Context, options ListOptions)
 	if err := client.call(ctx, "aria2.tellWaiting", []any{0, options.WaitingLimit, downloadFields()}, &waiting); err != nil {
 		return DownloadSnapshot{}, err
 	}
-	if err := client.call(ctx, "aria2.tellStopped", []any{options.StoppedOffset, options.StoppedLimit, downloadFields()}, &stopped); err != nil {
+	if err := client.call(ctx, "aria2.tellStopped", []any{recentStoppedOffset(options.StoppedOffset), options.StoppedLimit, downloadFields()}, &stopped); err != nil {
 		return DownloadSnapshot{}, err
 	}
 	return DownloadSnapshot{
@@ -122,6 +122,12 @@ func (client *RPCClient) ListDownloads(ctx context.Context, options ListOptions)
 		Waiting: mapDownloads(waiting),
 		Stopped: filterMetadataStopped(mapDownloads(stopped)),
 	}, nil
+}
+
+// aria2 indexes stopped results from the least recent entry. A negative offset
+// walks backward from the most recent entry and returns the page newest-first.
+func recentStoppedOffset(offset int) int {
+	return -max(offset, 0) - 1
 }
 
 func (client *RPCClient) TaskDetail(ctx context.Context, gid string) (DownloadDetail, error) {
