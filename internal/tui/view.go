@@ -527,20 +527,11 @@ func (model Model) listStats() string {
 		upTotal += item.UploadSpeed
 		statusCounts[item.CanonicalStatus]++
 	}
-	statuses := []string{
-		"downloading",
-		"seeding",
-		"metadata",
-		"waiting",
-		"paused",
-		"error",
-		"complete",
-		"removed",
-	}
-	statusSummary := make([]string, 0, len(statuses))
-	for _, status := range statuses {
-		if count := statusCounts[status]; count > 0 {
-			statusSummary = append(statusSummary, fmt.Sprintf("%s%d", strings.ToUpper(status[:1]), count))
+	statusSummary := make([]string, 0, len(dashboardStatusOrder))
+	for _, status := range dashboardStatusOrder {
+		statusName := string(status)
+		if count := statusCounts[statusName]; count > 0 {
+			statusSummary = append(statusSummary, fmt.Sprintf("%s%d", strings.ToUpper(statusName[:1]), count))
 		}
 	}
 	return fmt.Sprintf(

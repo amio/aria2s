@@ -95,7 +95,7 @@ func TestListStatsSummarizesOnlyPresentCanonicalStatuses(t *testing.T) {
 	}
 
 	got := model.listStats()
-	want := "Total 5 (D1 S1 M1 C2) Down 0/s  Up 0/s"
+	want := "Total 5 (M1 D1 S1 C2) Down 0/s  Up 0/s"
 	if got != want {
 		t.Fatalf("listStats() = %q, want %q", got, want)
 	}

@@ -738,14 +738,14 @@ func (model Model) items() []app.TaskRow {
 		if leftRank != rightRank {
 			return leftRank < rightRank
 		}
-		switch leftRank {
-		case metadataStatusRank:
+		switch app.TaskStatus(items[left].CanonicalStatus) {
+		case app.StatusMetadata:
 			return newerAddedTask(items[left], items[right])
-		case seedingStatusRank:
+		case app.StatusSeeding:
 			leftName := strings.ToLower(items[left].Name)
 			rightName := strings.ToLower(items[right].Name)
 			return leftName < rightName
-		case downloadingStatusRank, pausedStatusRank:
+		case app.StatusDownloading, app.StatusPaused:
 			return moreCompleteTask(items[left], items[right])
 		default:
 			return false
@@ -754,41 +754,30 @@ func (model Model) items() []app.TaskRow {
 	return items
 }
 
-const (
-	metadataStatusRank    = 0
-	downloadingStatusRank = 1
-	waitingStatusRank     = 2
-	pausedStatusRank      = 3
-	seedingStatusRank     = 4
-	errorStatusRank       = 5
-	completeStatusRank    = 6
-	unknownStatusRank     = 7
-	removedStatusRank     = 8
-)
+var dashboardStatusOrder = []app.TaskStatus{
+	app.StatusMetadata,
+	app.StatusDownloading,
+	app.StatusWaiting,
+	app.StatusPaused,
+	app.StatusSeeding,
+	app.StatusError,
+	app.StatusComplete,
+	app.StatusRemoved,
+}
 
 func downloadStatusRank(download app.TaskRow) int {
-	switch app.TaskStatus(download.CanonicalStatus) {
-	case app.StatusMetadata:
-		return metadataStatusRank
-	case app.StatusDownloading:
-		return downloadingStatusRank
-	case app.StatusWaiting:
-		return waitingStatusRank
-	case app.StatusPaused:
-		return pausedStatusRank
-	case app.StatusSeeding:
-		return seedingStatusRank
-	case app.StatusError:
-		return errorStatusRank
-	case app.StatusComplete:
-		return completeStatusRank
-	case app.StatusRemoved:
-		return removedStatusRank
-	default:
-		// Unknown states remain visible near other exceptional states, while
-		// Removed is always the final group.
-		return unknownStatusRank
+	status := app.TaskStatus(download.CanonicalStatus)
+	if status == app.StatusRemoved {
+		return len(dashboardStatusOrder)
 	}
+	for rank, known := range dashboardStatusOrder {
+		if status == known {
+			return rank
+		}
+	}
+	// Unknown states remain visible near other exceptional states, while
+	// Removed is always the final group.
+	return len(dashboardStatusOrder) - 1
 }
 
 func newerAddedTask(left, right app.TaskRow) bool {
