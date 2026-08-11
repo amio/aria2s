@@ -186,6 +186,7 @@ type LifecycleStatus struct {
 	GID             string
 	Status          string
 	Dir             string
+	Name            string
 	InfoHash        string
 	Seeder          bool
 	CompletedLength int64
@@ -215,18 +216,18 @@ func (client *RPCClient) CompleteCensus(ctx context.Context) ([]LifecycleStatus,
 	result := make([]LifecycleStatus, 0, len(all))
 	for _, raw := range all {
 		detail := raw.toDetail()
-		result = append(result, LifecycleStatus{GID: raw.GID, Status: raw.Status, Dir: raw.Dir, InfoHash: raw.InfoHash, Seeder: raw.Seeder == "true", CompletedLength: detail.CompletedLength, TotalLength: detail.TotalLength, Files: detail.Files})
+		result = append(result, LifecycleStatus{GID: raw.GID, Status: raw.Status, Dir: raw.Dir, Name: detail.Name, InfoHash: raw.InfoHash, Seeder: raw.Seeder == "true", CompletedLength: detail.CompletedLength, TotalLength: detail.TotalLength, Files: detail.Files})
 	}
 	return result, nil
 }
 
 func (client *RPCClient) LifecycleStatus(ctx context.Context, gid string) (LifecycleStatus, error) {
 	var raw rawDownload
-	if err := client.call(ctx, "aria2.tellStatus", []any{gid, []string{"gid", "status", "dir", "infoHash", "seeder", "completedLength", "totalLength", "files"}}, &raw); err != nil {
+	if err := client.call(ctx, "aria2.tellStatus", []any{gid, []string{"gid", "status", "dir", "bittorrent", "infoHash", "seeder", "completedLength", "totalLength", "files"}}, &raw); err != nil {
 		return LifecycleStatus{}, err
 	}
 	detail := raw.toDetail()
-	return LifecycleStatus{GID: raw.GID, Status: raw.Status, Dir: raw.Dir, InfoHash: raw.InfoHash, Seeder: raw.Seeder == "true", CompletedLength: detail.CompletedLength, TotalLength: detail.TotalLength, Files: detail.Files}, nil
+	return LifecycleStatus{GID: raw.GID, Status: raw.Status, Dir: raw.Dir, Name: detail.Name, InfoHash: raw.InfoHash, Seeder: raw.Seeder == "true", CompletedLength: detail.CompletedLength, TotalLength: detail.TotalLength, Files: detail.Files}, nil
 }
 
 func IsNotFound(err error) bool {

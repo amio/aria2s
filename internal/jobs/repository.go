@@ -83,6 +83,7 @@ type Job struct {
 	Version        int               `json:"version"`
 	ID             string            `json:"id"`
 	Source         string            `json:"source"`
+	DisplayName    string            `json:"displayName,omitempty"`
 	TargetDir      string            `json:"targetDir"`
 	TargetIdentity ObjectIdentity    `json:"targetIdentity"`
 	StorageID      string            `json:"storageId"`

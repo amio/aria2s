@@ -170,7 +170,7 @@ func (session *DashboardSession) projectSnapshot(native aria2.ReadBatch, scanned
 		if _, ok := seen[gid]; ok {
 			continue
 		}
-		row := TaskRow{GID: gid, Status: "absent", Dir: job.TargetDir, Name: firstNonempty(job.FinalRoot(), job.Source), AddedAt: job.CreatedAt}
+		row := TaskRow{GID: gid, Status: "absent", Dir: job.TargetDir, Name: manifestDisplayName(job), AddedAt: job.CreatedAt}
 		applyTaskRowProjection(&row, session.projectTask(job, true, taskObservation{absent: true}))
 		applyPublishedMetrics(&row.CompletedLength, &row.TotalLength, &row.LengthKnown, job)
 		read.Downloads.Stopped = append(read.Downloads.Stopped, row)
@@ -213,7 +213,7 @@ func (session *DashboardSession) manifestDetail(job jobs.Job) TaskDetail {
 	detail := TaskDetail{
 		GID:         job.ID,
 		Status:      "absent",
-		Name:        firstNonempty(job.FinalRoot(), job.Source),
+		Name:        manifestDisplayName(job),
 		PrimaryURI:  job.Source,
 		TargetDir:   job.TargetDir,
 		DownloadDir: job.TargetDir,
@@ -221,6 +221,10 @@ func (session *DashboardSession) manifestDetail(job jobs.Job) TaskDetail {
 	applyTaskDetailProjection(&detail, session.projectTask(job, true, taskObservation{absent: true}))
 	applyPublishedMetrics(&detail.CompletedLength, &detail.TotalLength, &detail.LengthKnown, job)
 	return detail
+}
+
+func manifestDisplayName(job jobs.Job) string {
+	return firstNonempty(job.FinalRoot(), job.DisplayName, job.Source)
 }
 
 func (session *DashboardSession) decorateDetail(detail *TaskDetail, job jobs.Job, managed bool) {

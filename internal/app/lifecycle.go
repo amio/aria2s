@@ -390,8 +390,21 @@ func (app *App) reconcileRemovedLive(ctx context.Context, repository *jobs.Repos
 		if err != nil {
 			return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", err)
 		}
-		if err := validateAndDetach(ctx, env, job, scope); err != nil {
+		native, present, err := validatedManagedNative(ctx, env, job, scope)
+		if err != nil {
 			return ReconcileResult{}, err
+		}
+		if present {
+			if name := durableDisplayName(native); name != "" && name != job.DisplayName {
+				job.DisplayName = name
+				token, err = repository.SaveCAS(job, token) // preserve presentation before destructive detach
+				if err != nil {
+					return ReconcileResult{}, err
+				}
+			}
+			if err := detachManagedNative(ctx, env.rpc, env.current, job.Execution.GID); err != nil {
+				return ReconcileResult{}, err
+			}
 		}
 		job.Execution = nil
 		token, err = repository.SaveCAS(job, token)
@@ -858,20 +871,35 @@ func ensureExecutionBindingUnique(repository *jobs.Repository, job jobs.Job, tok
 }
 
 func validateAndDetach(ctx context.Context, env liveEnvironment, job jobs.Job, scope jobs.StorageScope) error {
+	_, present, err := validatedManagedNative(ctx, env, job, scope)
+	if err != nil || !present {
+		return err
+	}
+	return detachManagedNative(ctx, env.rpc, env.current, job.Execution.GID)
+}
+
+func validatedManagedNative(ctx context.Context, env liveEnvironment, job jobs.Job, scope jobs.StorageScope) (aria2.LifecycleStatus, bool, error) {
 	if job.Execution == nil {
-		return nil
+		return aria2.LifecycleStatus{}, false, nil
 	}
 	native, err := env.rpc.LifecycleStatus(ctx, env.current, job.Execution.GID)
 	if aria2.IsNotFound(err) {
-		return nil
+		return aria2.LifecycleStatus{}, false, nil
 	}
 	if err != nil {
-		return err
+		return aria2.LifecycleStatus{}, false, err
 	}
 	if err := validateNative(job, scope, native); err != nil {
-		return fmt.Errorf("ManagedIdentityConflict: %w", err)
+		return aria2.LifecycleStatus{}, false, fmt.Errorf("ManagedIdentityConflict: %w", err)
 	}
-	return detachManagedNative(ctx, env.rpc, env.current, job.Execution.GID)
+	return native, true, nil
+}
+
+func durableDisplayName(native aria2.LifecycleStatus) string {
+	if strings.TrimSpace(native.Name) == "" || native.Name == native.GID {
+		return ""
+	}
+	return native.Name
 }
 
 func convergeActivity(ctx context.Context, env liveEnvironment, gid, status string, intent jobs.ActivityIntent) error {

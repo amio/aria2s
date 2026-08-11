@@ -55,6 +55,25 @@ func TestListDownloadsFetchesActiveWaitingAndStoppedWindows(t *testing.T) {
 	assertRPCRequest(t, requests[2], "aria2.tellStopped", "token:secret-token", float64(-21), float64(30))
 }
 
+func TestLifecycleStatusIncludesNativeDisplayName(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := decodeRPCCall(t, r)
+		assertRPCRequest(t, call, "aria2.tellStatus", "token:secret-token", "a1")
+		assertRequestIncludesField(t, call, "bittorrent")
+		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":{"gid":"a1","status":"active","dir":"/tmp","bittorrent":{"info":{"name":"Readable Release"}},"files":[{"path":"/tmp/internal-name"}]}}`)
+	}))
+	defer server.Close()
+	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
+
+	status, err := client.LifecycleStatus(context.Background(), "a1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Name != "Readable Release" {
+		t.Fatalf("lifecycle display name = %q", status.Name)
+	}
+}
+
 func TestListDownloadsFiltersCompletedMetadataFromStopped(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := decodeRPCCall(t, r)

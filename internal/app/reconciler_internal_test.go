@@ -515,6 +515,47 @@ func TestIntentEntryPointsMutateByJobIDAndRPCUsesExecutionGID(t *testing.T) {
 	}
 }
 
+func TestRemoveManagedPreservesNativeDisplayNameForHistory(t *testing.T) {
+	application, repository, rpc, target := newReconcilerTestApp(t)
+	result, err := application.AddManaged(context.Background(), AddRequest{
+		Source:    "https://example.test/download?id=42",
+		TargetDir: target,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	job, _, err := repository.Load(result.Task.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := rpc.statuses[job.Execution.GID]
+	native.Name = "readable-release.iso"
+	rpc.statuses[job.Execution.GID] = native
+
+	if err := application.RemoveManaged(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	removed, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed.DisplayName != native.Name || !removed.Removed || removed.Execution != nil {
+		t.Fatalf("removed manifest lost native display name: %+v", removed)
+	}
+
+	session := &DashboardSession{app: application}
+	read := session.projectSnapshot(
+		aria2.ReadBatch{},
+		[]jobs.ScannedJob{{ID: removed.ID, Job: removed}},
+		aria2.ReadBatchQuery{},
+		"",
+	)
+	if len(read.Downloads.Stopped) != 1 || read.Downloads.Stopped[0].Name != native.Name ||
+		read.Downloads.Stopped[0].CanonicalStatus != string(StatusRemoved) {
+		t.Fatalf("removed history row = %#v", read.Downloads.Stopped)
+	}
+}
+
 func TestRetryReplacesTerminalTransferExecution(t *testing.T) {
 	application, repository, rpc, target := newReconcilerTestApp(t)
 	result, err := application.AddManaged(context.Background(), AddRequest{Source: "https://example.test/payload.bin", TargetDir: target})
