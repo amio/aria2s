@@ -59,6 +59,7 @@ type StorageScope struct {
 	ID            string         `json:"id"`
 	MountPoint    string         `json:"mountPoint"`
 	StagingAnchor string         `json:"stagingAnchor"`
+	StableID      string         `json:"stableId,omitempty"`
 	Marker        ObjectIdentity `json:"marker"`
 }
 

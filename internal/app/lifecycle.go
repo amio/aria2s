@@ -106,8 +106,8 @@ func (app *App) reconcileLiveLocked(ctx context.Context, repository *jobs.Reposi
 	if job.Removed {
 		return app.reconcileRemovedLive(ctx, repository, env, job, token)
 	}
-	scope, err := repository.LoadStorage(job.StorageID)
-	if err != nil || !storageIdentityMatches(scope, job) {
+	scope, job, token, err := rebindJobStorage(repository, job, token)
+	if err != nil {
 		return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("registered storage is unavailable or mismatched"), err))
 	}
 	if job.Payload.Location == jobs.PayloadStaging && job.Payload.FinalRoot != "" {
@@ -400,8 +400,8 @@ func (app *App) reconcileRemovedLive(ctx context.Context, repository *jobs.Repos
 		}
 	}
 	if job.Payload.Location == jobs.PayloadStaging {
-		scope, err := repository.LoadStorage(job.StorageID)
-		if err != nil || !stagingIdentityMatches(scope) {
+		scope, err := loadObservedStorageScope(repository, job.StorageID)
+		if err != nil {
 			return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("cannot clean changed storage"), err))
 		}
 		if err := removeWorkDir(jobs.WorkDir(scope, job.ID)); err != nil {
@@ -435,8 +435,8 @@ func (app *App) reconcileStartupLocked(ctx context.Context, repository *jobs.Rep
 		// without touching its potentially offline storage.
 		return ReconcileResult{}, nil
 	}
-	scope, err := repository.LoadStorage(job.StorageID)
-	if err != nil || !storageIdentityMatches(scope, job) {
+	scope, job, token, err := rebindJobStorage(repository, job, token)
+	if err != nil {
 		return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("registered storage unavailable"), err))
 	}
 	if job.Payload.Location == jobs.PayloadStaging && job.Payload.FinalRoot != "" {
@@ -637,8 +637,8 @@ func adoptRecreatedTarget(repository *jobs.Repository, job jobs.Job, token jobs.
 	if job.Payload.Location != jobs.PayloadStaging || job.Payload.FinalRoot != "" {
 		return job, token, nil
 	}
-	scope, err := repository.LoadStorage(job.StorageID)
-	if err != nil || !stagingIdentityMatches(scope) {
+	scope, err := loadObservedStorageScope(repository, job.StorageID)
+	if err != nil {
 		return job, token, nil
 	}
 	target, err := retryTarget(scope, job.TargetDir)
@@ -1135,11 +1135,25 @@ func ensureStorageScope(repository *jobs.Repository, target publication.Target) 
 		if pathsOverlap(target.Path, stagingRoot) {
 			return jobs.StorageScope{}, errors.New("managed target overlaps staging namespace")
 		}
-		marker, identifyErr := publication.Identify(stagingRoot)
-		if identifyErr != nil || !publication.SameObject(marker, publicationIdentity(scope.Marker)) {
-			return jobs.StorageScope{}, errors.New("StorageMismatch: registered staging marker changed")
+		observed, needsStableBinding, observeErr := observeStorageScope(scope)
+		if observeErr != nil {
+			return jobs.StorageScope{}, errors.Join(errors.New("StorageMismatch: registered staging marker changed"), observeErr)
 		}
-		return scope, nil
+		targetIdentity := target.Identity
+		if targetIdentity.MountID == 0 {
+			targetIdentity, err = publication.Identify(target.Path)
+		}
+		if err != nil {
+			return jobs.StorageScope{}, errors.Join(errors.New("StorageMismatch: registered target changed"), err)
+		}
+		if targetIdentity.MountID != observed.Marker.MountID {
+			return jobs.StorageScope{}, fmt.Errorf("StorageMismatch: target mount %d differs from staging mount %d", targetIdentity.MountID, observed.Marker.MountID)
+		}
+		observed, err = commitStorageObservation(repository, scope, observed, needsStableBinding)
+		if err != nil {
+			return jobs.StorageScope{}, err
+		}
+		return observed, nil
 	}
 	if !rootWritable {
 		anchor = filepath.Dir(target.Path)
@@ -1152,7 +1166,10 @@ func ensureStorageScope(repository *jobs.Repository, target publication.Target) 
 	if pathsOverlap(target.Path, root) {
 		return jobs.StorageScope{}, errors.New("managed target overlaps staging namespace")
 	}
-	if err := os.MkdirAll(root, 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(root), 0o700); err != nil {
+		return jobs.StorageScope{}, err
+	}
+	if err := os.Mkdir(root, 0o700); err != nil {
 		return jobs.StorageScope{}, err
 	}
 	marker, err := publication.Identify(root)
@@ -1160,8 +1177,12 @@ func ensureStorageScope(repository *jobs.Repository, target publication.Target) 
 		return jobs.StorageScope{}, err
 	}
 	scope := jobs.StorageScope{ID: id, MountPoint: target.MountPoint, StagingAnchor: anchor, Marker: jobIdentity(marker)}
+	scope, err = bindStableStorageIdentity(scope)
+	if err != nil {
+		return jobs.StorageScope{}, errors.Join(err, cleanupNewStorageRoot(root))
+	}
 	if err := repository.SaveStorage(scope); err != nil {
-		return jobs.StorageScope{}, errors.Join(err, os.Remove(root))
+		return jobs.StorageScope{}, errors.Join(err, cleanupNewStorageRoot(root))
 	}
 	return scope, nil
 }

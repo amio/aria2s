@@ -169,13 +169,17 @@ func TestMixedManifestVersionsMigrateLazilyWithoutChangingStorageSchema(t *testi
 	if !strings.Contains(encoded, `"version": 2`) || strings.Contains(encoded, `"phase"`) || strings.Contains(encoded, `"problemCode"`) {
 		t.Fatalf("lazy v2 write retained legacy workflow fields: %s", encoded)
 	}
-	scope := StorageScope{ID: "3333333333333333", MountPoint: "/tmp", StagingAnchor: "/tmp", Marker: ObjectIdentity{MountID: 1, ObjectID: 3}}
+	scope := StorageScope{ID: "3333333333333333", MountPoint: "/tmp", StagingAnchor: "/tmp", StableID: "darwin-volume:example", Marker: ObjectIdentity{MountID: 1, ObjectID: 3}}
 	if err := repository.SaveStorage(scope); err != nil {
 		t.Fatal(err)
 	}
 	storage, err := os.ReadFile(filepath.Join(root, "storages", scope.ID+".json"))
 	if err != nil || !strings.Contains(string(storage), `"version": 1`) {
 		t.Fatalf("storage schema changed: %s err=%v", storage, err)
+	}
+	loadedScope, err := repository.LoadStorage(scope.ID)
+	if err != nil || loadedScope.StableID != scope.StableID {
+		t.Fatalf("stable storage identity = %q err=%v", loadedScope.StableID, err)
 	}
 }
 
