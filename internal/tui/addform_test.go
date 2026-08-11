@@ -80,7 +80,7 @@ func TestAddFormBodyLinesUseStackedFieldsAndFocusedRecents(t *testing.T) {
 	form.focus = focusDir
 	focused := strings.Join(form.BodyLines(), "\n")
 	if !strings.Contains(focused, "  Recent (↑↓ select)") ||
-		!strings.Contains(focused, "  ›  /data/Movies") ||
+		!strings.Contains(focused, "  ›  /data/Movies"+dimText("  Ctrl+D delete")) ||
 		!strings.Contains(focused, "     /data/Music") {
 		t.Fatalf("focused recent picker has unexpected layout:\n%s", focused)
 	}
@@ -97,6 +97,36 @@ func TestAddFormArrowsSelectRecentsWithoutChangingFieldFocus(t *testing.T) {
 	form, _, _ = stepKey(form, keySpecial(tea.KeyUp))
 	if form.dir != "/data/Movies" || form.dirPick != 0 || form.focus != focusDir {
 		t.Fatalf("up selection got dir=%q pick=%d focus=%v", form.dir, form.dirPick, form.focus)
+	}
+}
+
+func TestAddFormCtrlDRequestsSelectedRecentDeletion(t *testing.T) {
+	form := NewAddForm("").WithRecents([]string{"/data/Movies", "/data/Music"})
+	form.focus = focusDir
+
+	unchanged, _, action := stepKey(form, tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	if action != AddFormDeleteRecent {
+		t.Fatalf("Ctrl+D action got %v, want delete recent", action)
+	}
+	if dir, ok := unchanged.SelectedRecentDir(); !ok || dir != "/data/Movies" {
+		t.Fatalf("selected recent changed before persistence: dir=%q ok=%v", dir, ok)
+	}
+
+	updated := unchanged.WithoutRecentDir("/data/Movies")
+	if len(updated.recentDirs) != 1 || updated.recentDirs[0] != "/data/Music" || updated.dirPick != 0 || updated.dir != "/data/Music" {
+		t.Fatalf("unexpected form after deletion: %#v", updated)
+	}
+}
+
+func TestAddFormCtrlDDoesNothingWithoutSelectedRecent(t *testing.T) {
+	form := NewAddForm("").WithRecents([]string{"/data/Movies"})
+	form.focus = focusDir
+	form.dir = "/custom/path"
+	form.dirPick = -1
+
+	_, _, action := stepKey(form, tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	if action != AddFormNone {
+		t.Fatalf("Ctrl+D action got %v without a selected recent", action)
 	}
 }
 

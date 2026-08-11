@@ -26,6 +26,7 @@ const (
 	AddFormSubmit
 	AddFormCancel
 	AddFormQuit
+	AddFormDeleteRecent
 )
 
 type cursorBlinkMsg struct{}
@@ -116,7 +117,11 @@ func (form AddForm) BodyLines() []string {
 			if i == form.dirPick {
 				marker = "  ›  "
 			}
-			lines = append(lines, marker+dir)
+			line := marker + dir
+			if i == form.dirPick {
+				line += dimText("  Ctrl+D delete")
+			}
+			lines = append(lines, line)
 		}
 	}
 	return lines
@@ -180,6 +185,10 @@ func (form AddForm) handleDirKey(msg tea.KeyPressMsg) (AddForm, tea.Cmd, AddForm
 		form.navigateRecents(false)
 	case key.Matches(msg, dashboardKeys.Add.RecentDown):
 		form.navigateRecents(true)
+	case key.Matches(msg, dashboardKeys.Add.DeleteRecent):
+		if _, ok := form.SelectedRecentDir(); ok {
+			return form, nil, AddFormDeleteRecent
+		}
 	default:
 		if msg.Text != "" {
 			form.dir += msg.Text
@@ -187,6 +196,35 @@ func (form AddForm) handleDirKey(msg tea.KeyPressMsg) (AddForm, tea.Cmd, AddForm
 		}
 	}
 	return form, nil, AddFormNone
+}
+
+func (form AddForm) SelectedRecentDir() (string, bool) {
+	if form.dirPick < 0 || form.dirPick >= len(form.recentDirs) {
+		return "", false
+	}
+	return form.recentDirs[form.dirPick], true
+}
+
+func (form AddForm) WithoutRecentDir(dir string) AddForm {
+	removed := recentDirIndex(form.recentDirs, dir)
+	if removed < 0 {
+		return form
+	}
+	form.recentDirs = append(append([]string(nil), form.recentDirs[:removed]...), form.recentDirs[removed+1:]...)
+	switch {
+	case form.dirPick < 0:
+		return form
+	case form.dirPick > removed:
+		form.dirPick--
+	case form.dirPick == removed:
+		if len(form.recentDirs) == 0 {
+			form.dirPick = -1
+			return form
+		}
+		form.dirPick = min(removed, len(form.recentDirs)-1)
+		form.dir = form.recentDirs[form.dirPick]
+	}
+	return form
 }
 
 func trimLastRune(text string) string {

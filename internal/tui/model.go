@@ -30,6 +30,7 @@ type DashboardService interface {
 	TaskDetail(context.Context, string) (app.TaskDetail, error)
 	AddURI(context.Context, string, aria2.AddOptions) (app.AddResult, error)
 	RecentDirs(context.Context) ([]string, error)
+	DeleteRecentDir(context.Context, string) error
 	DefaultDir() string
 	Pause(context.Context, string) error
 	Resume(context.Context, string) error
@@ -136,6 +137,10 @@ type recentDirsMsg struct {
 	dirs []string
 	err  error
 }
+type recentDirDeleteResultMsg struct {
+	dir string
+	err error
+}
 type actionResultMsg struct {
 	kind        actionKind
 	gid         string
@@ -215,6 +220,11 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if model.mode == ModeAdd {
 			return model, model.addForm.BlinkCmd()
 		}
+	case recentDirDeleteResultMsg:
+		if msg.err != nil {
+			return model.setNotice(msg.err)
+		}
+		model.addForm = model.addForm.WithoutRecentDir(msg.dir)
 	case actionResultMsg:
 		if pending, ok := model.pending[msg.gid]; !ok || pending != msg.kind {
 			return model, nil
@@ -524,6 +534,12 @@ func (model Model) applyAddForm(form AddForm, cmd tea.Cmd, action AddFormAction)
 		}
 		model.addPending = true
 		return model, model.addCmd(uri, aria2.AddOptions{Dir: dir}, false)
+	case AddFormDeleteRecent:
+		dir, ok := model.addForm.SelectedRecentDir()
+		if !ok {
+			return model, nil
+		}
+		return model, deleteRecentDir(model.ctx, model.service, dir)
 	default:
 		return model, cmd
 	}
@@ -900,6 +916,12 @@ func detailLoadingTick(gid string, token uint64) tea.Cmd {
 }
 func loadRecentDirs(ctx context.Context, service DashboardService) tea.Cmd {
 	return func() tea.Msg { dirs, err := service.RecentDirs(ctx); return recentDirsMsg{dirs: dirs, err: err} }
+}
+
+func deleteRecentDir(ctx context.Context, service DashboardService, dir string) tea.Cmd {
+	return func() tea.Msg {
+		return recentDirDeleteResultMsg{dir: dir, err: service.DeleteRecentDir(ctx, dir)}
+	}
 }
 func readClipboardCommand(ctx context.Context) tea.Cmd {
 	return func() tea.Msg {

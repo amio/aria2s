@@ -32,14 +32,15 @@ type listKeyMap struct {
 }
 
 type addKeyMap struct {
-	Quit       key.Binding
-	Cancel     key.Binding
-	Submit     key.Binding
-	NextField  key.Binding
-	PrevField  key.Binding
-	Backspace  key.Binding
-	RecentUp   key.Binding
-	RecentDown key.Binding
+	Quit         key.Binding
+	Cancel       key.Binding
+	Submit       key.Binding
+	NextField    key.Binding
+	PrevField    key.Binding
+	Backspace    key.Binding
+	RecentUp     key.Binding
+	RecentDown   key.Binding
+	DeleteRecent key.Binding
 }
 
 type detailKeyMap struct {
@@ -72,14 +73,15 @@ func newDashboardKeyMaps() dashboardKeyMaps {
 			PrevPage:   newBinding("b", "Next/Prev Page", "b"),
 		},
 		Add: addKeyMap{
-			Quit:       newBinding("Ctrl+C", "Quit", "ctrl+c"),
-			Cancel:     newBinding("Esc", "Back", "esc"),
-			Submit:     newBinding("Enter", "Submit", "enter"),
-			NextField:  newBinding("Tab", "Switch field", "tab"),
-			PrevField:  newBinding("Shift+Tab", "Switch field", "shift+tab"),
-			Backspace:  newHiddenBinding("backspace"),
-			RecentUp:   newHiddenBinding("up"),
-			RecentDown: newHiddenBinding("down"),
+			Quit:         newBinding("Ctrl+C", "Quit", "ctrl+c"),
+			Cancel:       newBinding("Esc", "Back", "esc"),
+			Submit:       newBinding("Enter", "Submit", "enter"),
+			NextField:    newBinding("Tab", "Switch field", "tab"),
+			PrevField:    newBinding("Shift+Tab", "Switch field", "shift+tab"),
+			Backspace:    newHiddenBinding("backspace"),
+			RecentUp:     newHiddenBinding("up"),
+			RecentDown:   newHiddenBinding("down"),
+			DeleteRecent: newHiddenBinding("ctrl+d"),
 		},
 		Detail: detailKeyMap{
 			Quit:       newBinding("q", "Quit", "q", "ctrl+c"),

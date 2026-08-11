@@ -1581,6 +1581,34 @@ func TestAddWithoutDirDoesNotRecord(t *testing.T) {
 	}
 }
 
+func TestDeleteRecentDirPersistsRemoval(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	current := state.State{
+		RPCSecret:  "preserved",
+		RecentDirs: []string{"/data/Movies", "/data/Music"},
+	}
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatal(err)
+	}
+	application := newTestApp(servicePaths, "", &recordingService{}, &dirRecordingRPC{}, app.Options{})
+
+	if err := application.DeleteRecentDir(context.Background(), "/data/Movies"); err != nil {
+		t.Fatalf("delete recent dir: %v", err)
+	}
+	updated, err := state.Load(servicePaths.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(updated.RecentDirs, []string{"/data/Music"}) || updated.RPCSecret != "preserved" {
+		t.Fatalf("unexpected state after recent-dir deletion: %#v", updated)
+	}
+
+	if err := application.DeleteRecentDir(context.Background(), "/missing"); err != nil {
+		t.Fatalf("delete missing recent dir: %v", err)
+	}
+}
+
 func assertContains(t *testing.T, text, want string) {
 	t.Helper()
 	if !strings.Contains(text, want) {

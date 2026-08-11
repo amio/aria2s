@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -15,15 +16,18 @@ import (
 )
 
 type fakeService struct {
-	reads         []app.DashboardRead
-	queries       []app.DashboardQuery
-	startupStatus string
-	addResult     app.AddResult
-	addErr        error
-	actions       []string
-	retryResult   app.RetryResult
-	retryErr      error
-	snapshotFunc  func(context.Context, app.DashboardQuery) (app.DashboardRead, error)
+	reads              []app.DashboardRead
+	queries            []app.DashboardQuery
+	startupStatus      string
+	addResult          app.AddResult
+	addErr             error
+	actions            []string
+	retryResult        app.RetryResult
+	retryErr           error
+	recentDirs         []string
+	deletedRecentDirs  []string
+	deleteRecentDirErr error
+	snapshotFunc       func(context.Context, app.DashboardQuery) (app.DashboardRead, error)
 }
 
 type presentableTestError struct{}
@@ -58,8 +62,14 @@ func (*fakeService) TaskDetail(context.Context, string) (app.TaskDetail, error) 
 func (service *fakeService) AddURI(context.Context, string, aria2.AddOptions) (app.AddResult, error) {
 	return service.addResult, service.addErr
 }
-func (*fakeService) RecentDirs(context.Context) ([]string, error) { return nil, nil }
-func (*fakeService) DefaultDir() string                           { return "/tmp" }
+func (service *fakeService) RecentDirs(context.Context) ([]string, error) {
+	return service.recentDirs, nil
+}
+func (service *fakeService) DeleteRecentDir(_ context.Context, dir string) error {
+	service.deletedRecentDirs = append(service.deletedRecentDirs, dir)
+	return service.deleteRecentDirErr
+}
+func (*fakeService) DefaultDir() string { return "/tmp" }
 func (service *fakeService) Pause(_ context.Context, gid string) error {
 	service.actions = append(service.actions, "pause:"+gid)
 	return nil
@@ -274,6 +284,51 @@ func TestNavigationAndQuitRemainAvailableDuringRead(t *testing.T) {
 	_, cmd := model.Update(tea.KeyPressMsg{Code: 'q', Text: "q"})
 	if cmd == nil {
 		t.Fatal("quit blocked by read")
+	}
+}
+
+func TestAddCtrlDDeletesSelectedRecentAfterPersistence(t *testing.T) {
+	service := &fakeService{}
+	model := NewModel(context.Background(), service, time.Second, "dev")
+	model.mode = ModeAdd
+	model.addForm = NewAddForm("").WithRecents([]string{"/data/Movies", "/data/Music"})
+	model.addForm.focus = focusDir
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("Ctrl+D did not request recent-dir deletion")
+	}
+	if len(model.addForm.recentDirs) != 2 {
+		t.Fatal("recent dir was removed before persistence succeeded")
+	}
+
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+	if !reflect.DeepEqual(service.deletedRecentDirs, []string{"/data/Movies"}) {
+		t.Fatalf("deleted recent dirs = %v", service.deletedRecentDirs)
+	}
+	if !reflect.DeepEqual(model.addForm.recentDirs, []string{"/data/Music"}) {
+		t.Fatalf("form recent dirs = %v", model.addForm.recentDirs)
+	}
+}
+
+func TestAddCtrlDKeepsRecentWhenPersistenceFails(t *testing.T) {
+	service := &fakeService{deleteRecentDirErr: errors.New("save failed")}
+	model := NewModel(context.Background(), service, time.Second, "dev")
+	model.mode = ModeAdd
+	model.addForm = NewAddForm("").WithRecents([]string{"/data/Movies"})
+	model.addForm.focus = focusDir
+
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl})
+	model = updated.(Model)
+	updated, _ = model.Update(cmd())
+	model = updated.(Model)
+	if !reflect.DeepEqual(model.addForm.recentDirs, []string{"/data/Movies"}) {
+		t.Fatalf("failed persistence removed recent dir: %v", model.addForm.recentDirs)
+	}
+	if model.notice != "save failed" {
+		t.Fatalf("failure notice = %q", model.notice)
 	}
 }
 

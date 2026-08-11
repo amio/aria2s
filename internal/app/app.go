@@ -902,6 +902,30 @@ func (app *App) RecentDirs(context.Context) ([]string, error) {
 	return current.RecentDirs, nil
 }
 
+func (app *App) DeleteRecentDir(_ context.Context, dir string) error {
+	if dir == "" {
+		return nil
+	}
+	current, err := state.Load(app.options.Paths.StateFile)
+	if err != nil {
+		return err
+	}
+	filtered := make([]string, 0, len(current.RecentDirs))
+	removed := false
+	for _, existing := range current.RecentDirs {
+		if existing == dir {
+			removed = true
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	if !removed {
+		return nil
+	}
+	current.RecentDirs = filtered
+	return state.Save(app.options.Paths.StateFile, current)
+}
+
 func (app *App) recordDir(dir string) error {
 	if dir == "" {
 		return nil

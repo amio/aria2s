@@ -382,6 +382,10 @@ func (session *DashboardSession) RecentDirs(ctx context.Context) ([]string, erro
 	return session.app.RecentDirs(ctx)
 }
 
+func (session *DashboardSession) DeleteRecentDir(ctx context.Context, dir string) error {
+	return session.app.DeleteRecentDir(ctx, dir)
+}
+
 func (session *DashboardSession) DefaultDir() string { return session.app.DefaultDir() }
 
 func (session *DashboardSession) Pause(ctx context.Context, gid string) error {
