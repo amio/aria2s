@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -992,9 +993,6 @@ func TestRebindManagedControllerRefreshesIdentityWithoutRestart(t *testing.T) {
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatal(err)
 	}
-	if err := touch0600ForTest(servicePaths.SessionFile); err != nil {
-		t.Fatal(err)
-	}
 	serviceFile, err := service.RenderLaunchAgent(current)
 	if err != nil {
 		t.Fatal(err)
@@ -1015,8 +1013,13 @@ func TestRebindManagedControllerRefreshesIdentityWithoutRestart(t *testing.T) {
 	if !bound {
 		t.Fatal("existing v2 controller was not rebound")
 	}
-	if len(backend.calls) != 0 || !backend.running {
-		t.Fatalf("running service was disturbed: calls=%v running=%v", backend.calls, backend.running)
+	if len(backend.calls) != 0 || backend.inspectionCalls != 0 || !backend.running {
+		t.Fatalf("running service was consulted or disturbed: inspections=%d calls=%v running=%v", backend.inspectionCalls, backend.calls, backend.running)
+	}
+	for _, path := range []string{servicePaths.ConfigFile, servicePaths.SessionFile, filepath.Dir(servicePaths.LogFile)} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("controller-only rebind repaired unrelated path %s: %v", path, err)
+		}
 	}
 	updated, err := state.Load(servicePaths.StateFile)
 	if err != nil {
@@ -1027,8 +1030,75 @@ func TestRebindManagedControllerRefreshesIdentityWithoutRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	wantIdentity := fmt.Sprintf("%x", sha256.Sum256(controllerData))
-	if updated.ControllerIdentity != wantIdentity {
-		t.Fatalf("controller identity = %q, want %q", updated.ControllerIdentity, wantIdentity)
+	want := current
+	want.ControllerPath = updated.ControllerPath
+	want.ControllerIdentity = wantIdentity
+	if !reflect.DeepEqual(updated, want) {
+		t.Fatalf("rebound state = %#v, want only controller identity changed from %#v", updated, current)
+	}
+}
+
+func TestRebindManagedControllerReconcilesChangedServiceDefinition(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	current := writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	current.ControllerIdentity = strings.Repeat("0", 64)
+	if err := state.Save(servicePaths.StateFile, current); err != nil {
+		t.Fatal(err)
+	}
+	installedService, err := service.RenderLaunchAgent(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(servicePaths.ServiceFile, []byte(installedService), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := touch0600ForTest(servicePaths.SessionFile); err != nil {
+		t.Fatal(err)
+	}
+	backend := &recordingService{loaded: true, running: true}
+	rpc := &sessionRecordingRPC{service: backend}
+	application := newTestApp(servicePaths, aria2c, backend, rpc, app.Options{
+		RenderService: func(current state.State) (string, error) {
+			content, err := service.RenderLaunchAgent(current)
+			if err != nil {
+				return "", err
+			}
+			return content + "<!-- upgraded supervisor contract -->\n", nil
+		},
+	})
+
+	bound, err := application.RebindManagedController(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bound {
+		t.Fatal("existing v2 controller was not rebound")
+	}
+	if got := strings.Join(backend.calls, ","); got != "stop,uninstall,install,start" {
+		t.Fatalf("changed service reconciliation calls = %q", got)
+	}
+	if rpc.saveSessionCalls != 1 || !backend.running {
+		t.Fatalf("service migration did not preserve runtime: saves=%d running=%v", rpc.saveSessionCalls, backend.running)
+	}
+	serviceData, err := os.ReadFile(servicePaths.ServiceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(serviceData), "upgraded supervisor contract") {
+		t.Fatalf("service artifact was not upgraded: %s", serviceData)
+	}
+	updated, err := state.Load(servicePaths.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantServiceIdentity := fmt.Sprintf("%x", sha256.Sum256(serviceData))
+	if updated.ServiceIdentity != wantServiceIdentity {
+		t.Fatalf("service identity = %q, want %q", updated.ServiceIdentity, wantServiceIdentity)
 	}
 }
 
@@ -1148,6 +1218,7 @@ type recordingService struct {
 	running           bool
 	calls             []string
 	events            *[]string
+	inspectionCalls   int
 	shutdownLagChecks int
 }
 
@@ -1244,10 +1315,12 @@ func (service *recordingService) Stop(context.Context) error {
 }
 
 func (service *recordingService) IsLoaded(context.Context) bool {
+	service.inspectionCalls++
 	return service.loaded
 }
 
 func (service *recordingService) IsRunning(context.Context) bool {
+	service.inspectionCalls++
 	if !service.running && service.shutdownLagChecks > 0 {
 		service.shutdownLagChecks--
 		return true

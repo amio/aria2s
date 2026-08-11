@@ -47,9 +47,12 @@ so supervisor metadata is never resolved from root's home or user domain. All ot
 failures are returned normally.
 
 After any successful latest-version check, the app layer refreshes the controller path
-and SHA-256 identity when managed runtime v2 is already installed. This also repairs the
-narrow case where a privileged replacement succeeded but its unprivileged parent was
-interrupted before rebinding.
+and SHA-256 identity when managed runtime v2 is already installed. A byte-identical
+rendered supervisor artifact takes a controller-only state-write path without querying
+or operating the service. A real artifact change falls back to full runtime
+reconciliation so required launch arguments or limits are safely applied. This also
+repairs the narrow case where a privileged replacement succeeded but its unprivileged
+parent was interrupted before rebinding.
 
 The latest release is resolved through GitHub's `/releases/latest` redirect rather than
 the rate-limited REST API. The final tag URL supplies the version, and fixed asset URLs
@@ -82,10 +85,12 @@ The rename commits the binary before the directory sync. A sync failure is repor
 an uncertain durability result and is never treated as a privilege retry. Currently
 running processes continue using their open executable inode until restarted.
 
-The only durable-data change is replacing `ControllerIdentity` (and reasserting the
-existing controller path) through the established managed-runtime reconciliation path.
+The ordinary durable-data change is replacing `ControllerIdentity` (and reasserting the
+existing controller path) without entering the full managed-runtime reconciliation path.
 Legacy state is left untouched, no schema migration is introduced, and rollback through
-the versioned installer rebinds the identity to the restored binary.
+the versioned installer rebinds the identity to the restored binary. If a release changes
+the rendered service artifact, existing reconciliation also updates `ServiceIdentity`
+and applies that supervisor migration.
 
 ## Validation & Rollout
 

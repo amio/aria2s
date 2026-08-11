@@ -75,12 +75,12 @@ func rebindController(command *cobra.Command, rebind controllerRebinder, binaryC
 	bound, err := rebind(command.Context())
 	if err != nil {
 		if binaryChanged {
-			return fmt.Errorf("aria2s was updated, but managed service metadata could not be refreshed; run `aria2s install`: %w", err)
+			return fmt.Errorf("aria2s was updated, but the managed controller identity could not be refreshed; run `aria2s install`: %w", err)
 		}
-		return fmt.Errorf("refresh managed service metadata: %w", err)
+		return fmt.Errorf("refresh managed controller identity: %w", err)
 	}
 	if bound {
-		fmt.Fprintln(command.OutOrStdout(), "Managed service metadata was refreshed; running downloads were not restarted.")
+		fmt.Fprintln(command.OutOrStdout(), "Managed controller identity was refreshed; running downloads were not restarted.")
 	}
 	return nil
 }

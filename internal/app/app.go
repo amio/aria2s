@@ -205,8 +205,9 @@ func (app *App) Install(ctx context.Context, start bool) error {
 }
 
 // RebindManagedController refreshes the committed identity of an existing v2
-// controller after its executable is atomically upgraded. It deliberately
-// leaves a running supervisor process undisturbed.
+// controller after its executable is atomically upgraded. A byte-identical
+// supervisor artifact takes a controller-only path; a changed artifact remains
+// owned by full runtime reconciliation.
 func (app *App) RebindManagedController(ctx context.Context) (bool, error) {
 	current, err := state.Load(app.options.Paths.StateFile)
 	if errors.Is(err, os.ErrNotExist) || (err == nil && current.RuntimeSchemaVersion != 2) {
@@ -214,6 +215,29 @@ func (app *App) RebindManagedController(ctx context.Context) (bool, error) {
 	}
 	if err != nil {
 		return false, fmt.Errorf("load managed state: %w", err)
+	}
+	rebound := current
+	rebound.ControllerPath, rebound.ControllerIdentity, err = currentControllerIdentity()
+	if err != nil {
+		return false, err
+	}
+	serviceFile, err := app.options.RenderService(rebound)
+	if err != nil {
+		return false, err
+	}
+	serviceHash := sha256.Sum256([]byte(serviceFile))
+	serviceIdentity := hex.EncodeToString(serviceHash[:])
+	serviceChanged, err := fileContentChanged(app.options.Paths.ServiceFile, serviceFile)
+	if err != nil {
+		return false, err
+	}
+	if !serviceChanged && current.ServiceIdentity == serviceIdentity {
+		if current.ControllerPath != rebound.ControllerPath || current.ControllerIdentity != rebound.ControllerIdentity {
+			if err := state.Save(app.options.Paths.StateFile, rebound); err != nil {
+				return false, fmt.Errorf("save managed controller identity: %w", err)
+			}
+		}
+		return true, nil
 	}
 	desired, err := app.desiredManagedState(current.Aria2cPath)
 	if err != nil {
@@ -265,20 +289,13 @@ func (app *App) desiredManagedState(storedExecutable string) (state.State, error
 		}
 	}
 	desired := current
-	controller, err := os.Executable()
-	if err != nil {
-		return state.State{}, err
-	}
-	controller, err = filepath.EvalSymlinks(controller)
+	controller, controllerIdentity, err := currentControllerIdentity()
 	if err != nil {
 		return state.State{}, err
 	}
 	desired.RuntimeSchemaVersion = 2
 	desired.ControllerPath = controller
-	desired.ControllerIdentity, err = fileIdentity(controller)
-	if err != nil {
-		return state.State{}, err
-	}
+	desired.ControllerIdentity = controllerIdentity
 	desired.Aria2cPath = aria2c
 	desired.SessionPath = app.options.Paths.SessionFile
 	desired.StartupInputPath = app.options.Paths.StartupInputFile
@@ -552,6 +569,22 @@ func fileIdentity(path string) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func currentControllerIdentity() (string, string, error) {
+	controller, err := os.Executable()
+	if err != nil {
+		return "", "", err
+	}
+	controller, err = filepath.EvalSymlinks(controller)
+	if err != nil {
+		return "", "", err
+	}
+	identity, err := fileIdentity(controller)
+	if err != nil {
+		return "", "", err
+	}
+	return controller, identity, nil
 }
 
 // inspectDashboard validates the runtime committed by install or update. A
