@@ -67,7 +67,7 @@ func newDashboardKeyMaps() dashboardKeyMaps {
 			PasteURL:   newBinding("ctrl+p", "Paste URL", "ctrl+p"),
 			Pause:      newBinding("p", "Pause", "p"),
 			Resume:     newBinding("r", "Retry/Resume", "r"),
-			Remove:     newBinding("d", "Remove", "d"),
+			Remove:     newBinding("x", "Remove", "x"),
 			Open:       newBinding("o", "Open", "o"),
 			NextPage:   newBinding("n", "Next/Prev Page", "n"),
 			PrevPage:   newBinding("b", "Next/Prev Page", "b"),

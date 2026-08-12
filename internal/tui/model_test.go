@@ -690,7 +690,7 @@ func TestListResumeKeyDispatchesAdvertisedAction(t *testing.T) {
 	}
 }
 
-func TestListRemoveKeyPermanentlyDeletesMetadata(t *testing.T) {
+func TestListRemoveKeyUsesXAndPermanentlyDeletesMetadata(t *testing.T) {
 	service := &fakeService{}
 	model := NewModel(context.Background(), service, time.Second, "dev")
 	model.snapshot.Active = []app.TaskRow{{
@@ -702,6 +702,12 @@ func TestListRemoveKeyPermanentlyDeletesMetadata(t *testing.T) {
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
 	model = updated.(Model)
+	if cmd != nil || len(service.actions) != 0 {
+		t.Fatalf("legacy d key dispatched remove: cmd=%v actions=%v", cmd != nil, service.actions)
+	}
+
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'x', Text: "x"})
+	model = updated.(Model)
 	if cmd == nil {
 		t.Fatal("metadata delete did not dispatch a command")
 	}
@@ -710,7 +716,7 @@ func TestListRemoveKeyPermanentlyDeletesMetadata(t *testing.T) {
 		t.Fatalf("metadata delete result = %#v", msg)
 	}
 	if len(service.actions) != 1 || service.actions[0] != "delete:metadata" {
-		t.Fatalf("metadata d action = %v", service.actions)
+		t.Fatalf("metadata x action = %v", service.actions)
 	}
 	if pendingStatus(model.pending["metadata"]) != "Deleting..." {
 		t.Fatalf("metadata pending action = %q", pendingStatus(model.pending["metadata"]))
