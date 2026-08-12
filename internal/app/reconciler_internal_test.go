@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -515,7 +516,7 @@ func TestIntentEntryPointsMutateByJobIDAndRPCUsesExecutionGID(t *testing.T) {
 	}
 }
 
-func TestRemoveManagedPreservesNativeDisplayNameForHistory(t *testing.T) {
+func TestRemoveManagedRetiresNativeAndManifestWithoutHistory(t *testing.T) {
 	application, repository, rpc, target := newReconcilerTestApp(t)
 	result, err := application.AddManaged(context.Background(), AddRequest{
 		Source:    "https://example.test/download?id=42",
@@ -528,31 +529,14 @@ func TestRemoveManagedPreservesNativeDisplayNameForHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	native := rpc.statuses[job.Execution.GID]
-	native.Name = "readable-release.iso"
-	rpc.statuses[job.Execution.GID] = native
-
 	if err := application.RemoveManaged(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
-	removed, _, err := repository.Load(job.ID)
-	if err != nil {
-		t.Fatal(err)
+	if repository.Exists(job.ID) {
+		t.Fatal("successful removal retained managed history")
 	}
-	if removed.DisplayName != native.Name || !removed.Removed || removed.Execution != nil {
-		t.Fatalf("removed manifest lost native display name: %+v", removed)
-	}
-
-	session := &DashboardSession{app: application}
-	read := session.projectSnapshot(
-		aria2.ReadBatch{},
-		[]jobs.ScannedJob{{ID: removed.ID, Job: removed}},
-		aria2.ReadBatchQuery{},
-		"",
-	)
-	if len(read.Downloads.Stopped) != 1 || read.Downloads.Stopped[0].Name != native.Name ||
-		read.Downloads.Stopped[0].CanonicalStatus != string(StatusRemoved) {
-		t.Fatalf("removed history row = %#v", read.Downloads.Stopped)
+	if _, present := rpc.statuses[job.Execution.GID]; present {
+		t.Fatal("successful removal retained native result")
 	}
 }
 
@@ -678,6 +662,46 @@ func TestStartupReconstructionUsesFreshGIDAndForcesIntegrityWithoutControl(t *te
 	}
 }
 
+func TestStartupCompletesRemovedStagingCleanupAndDeletesManifest(t *testing.T) {
+	application, repository, _, target := newReconcilerTestApp(t)
+	targetFact, err := publication.InspectTarget(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := ensureStorageScope(repository, targetFact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job := jobs.Job{
+		ID: "2525252525252525", Source: "https://example.test/x", TargetDir: target,
+		TargetIdentity: jobIdentity(targetFact.Identity), StorageID: scope.ID,
+		ActivityIntent: jobs.ActivityStopped, Removed: true,
+		Payload:   jobs.PayloadState{Location: jobs.PayloadStaging},
+		Execution: &jobs.ExecutionBinding{GID: "2626262626262626"},
+	}
+	if _, err := repository.Create(job); err != nil {
+		t.Fatal(err)
+	}
+	workDir := jobs.WorkDir(scope, job.ID)
+	if err := os.MkdirAll(workDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(workDir, "partial"), []byte("partial"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := application.ReconcileJob(context.Background(), job.ID, ReconcileInput{Mode: ReconcileStartup})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.StartupBlock != nil || repository.Exists(job.ID) {
+		t.Fatalf("removed job survived startup: result=%+v exists=%t", result, repository.Exists(job.ID))
+	}
+	if _, err := os.Stat(workDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removed staging data survived startup: %v", err)
+	}
+}
+
 func TestPreparedPublicationCrashRecoveryCommitsWeakDestinationWithoutExecution(t *testing.T) {
 	application, repository, _, target := newReconcilerTestApp(t)
 	targetFact, err := publication.InspectTarget(target)
@@ -771,7 +795,7 @@ func TestSuccessfulAddStillConfirmsNativeDirectory(t *testing.T) {
 	}
 }
 
-func TestRetryRemovedCleansBeforeRestarting(t *testing.T) {
+func TestRetryRemovedIsRejectedWithoutCleanup(t *testing.T) {
 	application, repository, _, target := newReconcilerTestApp(t)
 	targetFact, _ := publication.InspectTarget(target)
 	scope, _ := ensureStorageScope(repository, targetFact)
@@ -793,95 +817,18 @@ func TestRetryRemovedCleansBeforeRestarting(t *testing.T) {
 	if err := os.WriteFile(stale, []byte("stale"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := application.RetryManaged(context.Background(), job.ID); err != nil {
-		t.Fatal(err)
-	}
-	loaded, _, _ := repository.Load(job.ID)
-	if loaded.Removed || loaded.Execution == nil || loaded.Issue != nil {
-		t.Fatalf("removed Retry did not clean then restart: %+v", loaded)
-	}
-	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stale staging data survived removed Retry: %v", err)
-	}
-}
-
-func TestRetryRemovedStagedJobAdoptsRecreatedTargetAfterCleanup(t *testing.T) {
-	application, repository, _, target := newReconcilerTestApp(t)
-	targetFact, _ := publication.InspectTarget(target)
-	scope, _ := ensureStorageScope(repository, targetFact)
-	job := jobs.Job{
-		ID: "1616161616161616", Source: "https://example.test/x", TargetDir: targetFact.Path,
-		TargetIdentity: jobIdentity(targetFact.Identity), StorageID: scope.ID,
-		ActivityIntent: jobs.ActivityStopped, Removed: true,
-		Payload: jobs.PayloadState{Location: jobs.PayloadStaging},
-	}
-	if _, err := repository.Create(job); err != nil {
-		t.Fatal(err)
-	}
-	workDir := jobs.WorkDir(scope, job.ID)
-	if err := os.MkdirAll(workDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	stale := filepath.Join(workDir, "stale-partial")
-	if err := os.WriteFile(stale, []byte("stale"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(target, target+"-moved"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(target, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	replacement, err := publication.InspectTarget(target)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := application.RetryManaged(context.Background(), job.ID); err != nil {
-		t.Fatal(err)
-	}
-	loaded, _, err := repository.Load(job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if loaded.Removed || loaded.Execution == nil || loaded.TargetIdentity.ObjectID != replacement.Identity.ObjectID || loaded.Issue != nil {
-		t.Fatalf("removed Retry did not prepare target recovery before convergence: %+v", loaded)
-	}
-	if _, err := os.Stat(stale); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("stale staging data survived removed Retry: %v", err)
-	}
-}
-
-func TestRetryCleanupFailureDoesNotReviveRemovedJob(t *testing.T) {
-	application, repository, _, target := newReconcilerTestApp(t)
-	targetFact, _ := publication.InspectTarget(target)
-	scope, _ := ensureStorageScope(repository, targetFact)
-	job := jobs.Job{
-		ID: "1717171717171717", Source: "https://example.test/x", TargetDir: target,
-		TargetIdentity: jobIdentity(targetFact.Identity), StorageID: scope.ID,
-		ActivityIntent: jobs.ActivityStopped, Removed: true,
-		Payload: jobs.PayloadState{Location: jobs.PayloadStaging},
-	}
-	if _, err := repository.Create(job); err != nil {
-		t.Fatal(err)
-	}
-	registeredMarker := filepath.Join(scope.StagingAnchor, ".aria2s_staging", scope.ID)
-	if err := os.Rename(registeredMarker, registeredMarker+"-replaced"); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(registeredMarker, 0o700); err != nil {
-		t.Fatal(err)
-	}
-
 	if err := application.RetryManaged(context.Background(), job.ID); err == nil {
-		t.Fatal("Retry revived a removed task after cleanup validation failed")
+		t.Fatal("Retry revived a task committed to removal")
 	}
 	loaded, _, err := repository.Load(job.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !loaded.Removed || loaded.Execution != nil || loaded.ActivityIntent != jobs.ActivityStopped || loaded.Issue == nil || loaded.Issue.Code != "StorageOffline" {
-		t.Fatalf("failed cleanup changed removed intent: %+v", loaded)
+	if !loaded.Removed || loaded.Execution != nil || loaded.ActivityIntent != jobs.ActivityStopped {
+		t.Fatalf("Retry changed removal intent: %+v", loaded)
+	}
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatalf("Retry cleaned staging data: %v", err)
 	}
 }
 
@@ -910,26 +857,51 @@ func TestRemoveManagedRetriesCleanupWithoutRestarting(t *testing.T) {
 	if err := application.RemoveManaged(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
-	loaded, _, err := repository.Load(job.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !loaded.Removed || loaded.Execution != nil || loaded.Issue != nil {
-		t.Fatalf("cleanup retry resurrected removed job: %+v", loaded)
+	if repository.Exists(job.ID) {
+		t.Fatal("successful cleanup retry retained manifest")
 	}
 	if _, err := os.Stat(workDir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("staging directory survived cleanup retry: %v", err)
 	}
 
-	if err := application.ClearManaged(context.Background(), job.ID); err != nil {
+}
+
+func TestFailedRemoveStaysAnErrorTransactionWithoutRetry(t *testing.T) {
+	application, repository, _, target := newReconcilerTestApp(t)
+	targetFact, _ := publication.InspectTarget(target)
+	scope, _ := ensureStorageScope(repository, targetFact)
+	job := jobs.Job{
+		ID: "1717171717171717", Source: "https://example.test/x", TargetDir: target,
+		TargetIdentity: jobIdentity(targetFact.Identity), StorageID: scope.ID,
+		ActivityIntent: jobs.ActivityRunning,
+		Payload:        jobs.PayloadState{Location: jobs.PayloadStaging},
+	}
+	if _, err := repository.Create(job); err != nil {
 		t.Fatal(err)
 	}
-	if repository.Exists(job.ID) {
-		t.Fatal("removed job remained after Clear")
+	registeredMarker := filepath.Join(scope.StagingAnchor, ".aria2s_staging", scope.ID)
+	if err := os.Rename(registeredMarker, registeredMarker+"-replaced"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(registeredMarker, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := application.RemoveManaged(context.Background(), job.ID); err == nil {
+		t.Fatal("unsafe cleanup unexpectedly succeeded")
+	}
+	loaded, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projection := ProjectTask(TaskFacts{Managed: true, Lifecycle: derivedLifecycle(loaded), IssueCode: issueCodeForJob(loaded), NativeAbsent: true})
+	if !loaded.Removed || loaded.ActivityIntent != jobs.ActivityStopped || loaded.Issue == nil ||
+		projection.Status != StatusError || !reflect.DeepEqual(projection.Actions, []string{"remove"}) {
+		t.Fatalf("failed removal projection: job=%+v projection=%+v", loaded, projection)
 	}
 }
 
-func TestDeleteManagedRemovesNativeStagingAndManifest(t *testing.T) {
+func TestRemoveManagedRemovesNativeStagingAndManifest(t *testing.T) {
 	application, repository, rpc, target := newReconcilerTestApp(t)
 	result, err := application.AddManaged(context.Background(), AddRequest{
 		Source:    "magnet:?xt=urn:btih:test",
@@ -948,7 +920,7 @@ func TestDeleteManagedRemovesNativeStagingAndManifest(t *testing.T) {
 	}
 	workDir := jobs.WorkDir(scope, job.ID)
 
-	if err := application.DeleteManaged(context.Background(), job.ID); err != nil {
+	if err := application.RemoveManaged(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
 	if repository.Exists(job.ID) {
@@ -965,7 +937,7 @@ func TestDeleteManagedRemovesNativeStagingAndManifest(t *testing.T) {
 	}
 }
 
-func TestDeleteManagedAfterTargetDirectoryRename(t *testing.T) {
+func TestRemoveManagedAfterTargetDirectoryRename(t *testing.T) {
 	application, repository, rpc, target := newReconcilerTestApp(t)
 	result, err := application.AddManaged(context.Background(), AddRequest{
 		Source:    "magnet:?xt=urn:btih:test",
@@ -997,7 +969,7 @@ func TestDeleteManagedAfterTargetDirectoryRename(t *testing.T) {
 		t.Fatalf("renamed target issue = %+v, want StorageOffline", blocked.Issue)
 	}
 
-	if err := application.DeleteManaged(context.Background(), job.ID); err != nil {
+	if err := application.RemoveManaged(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
 	if repository.Exists(job.ID) {
@@ -1151,7 +1123,7 @@ func TestRetryDoesNotAdoptRecreatedTargetAfterPublication(t *testing.T) {
 	}
 }
 
-func TestRetryRemovedRenamedPublicationRemainsStopped(t *testing.T) {
+func TestRemovePublishedTaskPreservesRenamedPayload(t *testing.T) {
 	application, repository, _, target := newReconcilerTestApp(t)
 	targetFact, _ := publication.InspectTarget(target)
 	scope, _ := ensureStorageScope(repository, targetFact)
@@ -1169,11 +1141,13 @@ func TestRetryRemovedRenamedPublicationRemainsStopped(t *testing.T) {
 	if _, err := repository.Create(job); err != nil {
 		t.Fatal(err)
 	}
-	if err := application.RetryManaged(context.Background(), job.ID); err != nil {
+	if err := application.RemoveManaged(context.Background(), job.ID); err != nil {
 		t.Fatal(err)
 	}
-	loaded, _, _ := repository.Load(job.ID)
-	if loaded.Removed || loaded.ActivityIntent != jobs.ActivityStopped || loaded.Execution != nil {
-		t.Fatalf("renamed publication Retry attempted to seed: %+v", loaded)
+	if repository.Exists(job.ID) {
+		t.Fatal("published removal retained manifest")
+	}
+	if data, err := os.ReadFile(payload); err != nil || string(data) != "x" {
+		t.Fatalf("published payload changed during removal: data=%q err=%v", data, err)
 	}
 }

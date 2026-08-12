@@ -390,20 +390,13 @@ func (app *App) reconcileRemovedLive(ctx context.Context, repository *jobs.Repos
 		if err != nil {
 			return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", err)
 		}
-		native, present, err := validatedManagedNative(ctx, env, job, scope)
+		_, present, err := validatedManagedNative(ctx, env, job, scope)
 		if err != nil {
-			return ReconcileResult{}, err
+			return ReconcileResult{}, persistIssue(repository, job, token, issueCode(err, "RemovalFailed"), err)
 		}
 		if present {
-			if name := durableDisplayName(native); name != "" && name != job.DisplayName {
-				job.DisplayName = name
-				token, err = repository.SaveCAS(job, token) // preserve presentation before destructive detach
-				if err != nil {
-					return ReconcileResult{}, err
-				}
-			}
 			if err := detachManagedNative(ctx, env.rpc, env.current, job.Execution.GID); err != nil {
-				return ReconcileResult{}, err
+				return ReconcileResult{}, persistIssue(repository, job, token, issueCode(err, "RemovalFailed"), err)
 			}
 		}
 		job.Execution = nil
@@ -418,22 +411,15 @@ func (app *App) reconcileRemovedLive(ctx context.Context, repository *jobs.Repos
 			return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("cannot clean changed storage"), err))
 		}
 		if err := removeWorkDir(jobs.WorkDir(scope, job.ID)); err != nil {
-			return ReconcileResult{}, persistIssue(repository, job, token, "CleanupFailed", err)
+			return ReconcileResult{}, persistIssue(repository, job, token, "RemovalFailed", err)
 		}
 	}
-	job.Issue = nil
-	_, err := repository.SaveCAS(job, token)
-	return ReconcileResult{}, err
+	return ReconcileResult{}, repository.DeleteCAS(job.ID, token)
 }
 
 func (app *App) reconcileStartupLocked(ctx context.Context, repository *jobs.Repository, job jobs.Job, token jobs.Token, saved *aria2.SessionBlock, duplicate bool) (ReconcileResult, error) {
 	if job.Removed {
-		if job.Execution != nil { // exclusive startup lease + omission proves retirement
-			job.Execution = nil
-			_, err := repository.SaveCAS(job, token)
-			return ReconcileResult{}, err
-		}
-		return ReconcileResult{}, nil
+		return app.reconcileRemovedStartup(repository, job, token)
 	}
 	if duplicate {
 		return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", errors.New("duplicate native session blocks for execution GID"))
@@ -541,6 +527,27 @@ func (app *App) reconcileStartupLocked(ctx context.Context, repository *jobs.Rep
 	return ReconcileResult{StartupBlock: &block}, nil
 }
 
+func (app *App) reconcileRemovedStartup(repository *jobs.Repository, job jobs.Job, token jobs.Token) (ReconcileResult, error) {
+	if job.Execution != nil { // exclusive startup lease + omission proves retirement
+		job.Execution = nil
+		next, err := repository.SaveCAS(job, token)
+		if err != nil {
+			return ReconcileResult{}, err
+		}
+		token = next
+	}
+	if job.Payload.Location == jobs.PayloadStaging {
+		scope, err := loadObservedStorageScope(repository, job.StorageID)
+		if err != nil {
+			return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("cannot clean changed storage"), err))
+		}
+		if err := removeWorkDir(jobs.WorkDir(scope, job.ID)); err != nil {
+			return ReconcileResult{}, persistIssue(repository, job, token, "RemovalFailed", err)
+		}
+	}
+	return ReconcileResult{}, repository.DeleteCAS(job.ID, token)
+}
+
 func (app *App) SetActivity(ctx context.Context, jobID string, running bool) error {
 	repository := jobs.New(app.options.Paths.StateDir)
 	unlock, err := repository.Lock(ctx, jobID)
@@ -586,15 +593,6 @@ func (app *App) RemoveManaged(ctx context.Context, jobID string) error {
 	return reconcileCommandError(result, err)
 }
 
-// DeleteManaged fully retires a disposable managed task. Removal owns native
-// and staging cleanup; Clear then removes the durable manifest projection.
-func (app *App) DeleteManaged(ctx context.Context, jobID string) error {
-	if err := app.RemoveManaged(ctx, jobID); err != nil {
-		return err
-	}
-	return app.ClearManaged(ctx, jobID)
-}
-
 func (app *App) RetryManaged(ctx context.Context, jobID string) error {
 	repository := jobs.New(app.options.Paths.StateDir)
 	unlock, err := repository.Lock(ctx, jobID)
@@ -610,31 +608,14 @@ func (app *App) RetryManaged(ctx context.Context, jobID string) error {
 	if err := ensureExecutionBindingUnique(repository, job, token); err != nil {
 		return err
 	}
+	if job.Removed {
+		return errors.New("removed task cannot be retried; retry removal cleanup instead")
+	}
 	env, err := app.liveEnvironment()
 	if err != nil {
 		return err
 	}
 
-	// Removal cleanup remains authoritative until it succeeds. Only then may
-	// Retry revive the task and prepare explicit target recovery.
-	if job.Removed {
-		if _, err := app.reconcileRemovedLive(ctx, repository, env, job, token); err != nil {
-			return err
-		}
-		job, token, err = repository.Load(jobID)
-		if err != nil {
-			return err
-		}
-		job.Removed = false
-		job.ActivityIntent = jobs.ActivityRunning
-		if job.Payload.Location == jobs.PayloadPublished && job.PublicationRenamed() {
-			job.ActivityIntent = jobs.ActivityStopped
-		}
-		token, err = repository.SaveCAS(job, token)
-		if err != nil {
-			return err
-		}
-	}
 	job, token, err = adoptRecreatedTarget(repository, job, token)
 	if err != nil {
 		return err
@@ -712,29 +693,6 @@ func validateRetryTarget(scope jobs.StorageScope, path string, target publicatio
 		return publication.Target{}, errors.New("target is outside the registered storage or resolves through a symlink")
 	}
 	return target, nil
-}
-
-func (app *App) ClearManaged(ctx context.Context, jobID string) error {
-	repository := jobs.New(app.options.Paths.StateDir)
-	unlock, err := repository.Lock(ctx, jobID)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	job, token, err := repository.Load(jobID)
-	if err != nil {
-		if repository.Exists(jobID) {
-			return errors.New("cannot Clear corrupt managed metadata because its execution binding is unknown")
-		}
-		return err
-	}
-	if job.Execution != nil {
-		return errors.New("managed execution must retire before Clear")
-	}
-	if job.Payload.Location == jobs.PayloadStaging && !job.Removed {
-		return errors.New("active managed task cannot be cleared")
-	}
-	return repository.DeleteCAS(jobID, token)
 }
 
 type AddRequest struct{ Source, TargetDir string }
@@ -893,13 +851,6 @@ func validatedManagedNative(ctx context.Context, env liveEnvironment, job jobs.J
 		return aria2.LifecycleStatus{}, false, fmt.Errorf("ManagedIdentityConflict: %w", err)
 	}
 	return native, true, nil
-}
-
-func durableDisplayName(native aria2.LifecycleStatus) string {
-	if strings.TrimSpace(native.Name) == "" || native.Name == native.GID {
-		return ""
-	}
-	return native.Name
 }
 
 func convergeActivity(ctx context.Context, env liveEnvironment, gid, status string, intent jobs.ActivityIntent) error {

@@ -36,8 +36,6 @@ type DashboardService interface {
 	Resume(context.Context, string) error
 	Retry(context.Context, string) (app.RetryResult, error)
 	Remove(context.Context, string) error
-	Delete(context.Context, string) error
-	ClearStopped(context.Context, string) error
 }
 
 type Mode string
@@ -82,10 +80,9 @@ type actionKind string
 const (
 	actionPause  actionKind = "pause"
 	actionResume actionKind = "resume"
+	actionReseed actionKind = "reseed"
 	actionRetry  actionKind = "retry"
 	actionRemove actionKind = "remove"
-	actionDelete actionKind = "delete"
-	actionClear  actionKind = "clear"
 )
 
 type Model struct {
@@ -463,21 +460,18 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if hasTaskAction(model.Selected(), "retry") {
 			return model.startAction(actionRetry)
 		}
-		if hasTaskAction(model.Selected(), "resume") || hasTaskAction(model.Selected(), "start-seeding") {
+		if hasTaskAction(model.Selected(), "resume") {
 			return model.startAction(actionResume)
+		}
+		if hasTaskAction(model.Selected(), "reseed") {
+			return model.startAction(actionReseed)
 		}
 		return model.flashInapplicable("retry/resume", model.Selected().CanonicalStatus)
 	case key.Matches(msg, dashboardKeys.List.Remove):
-		if hasTaskAction(model.Selected(), "clear") {
-			return model.startAction(actionClear)
-		}
-		if hasTaskAction(model.Selected(), "delete") {
-			return model.startAction(actionDelete)
-		}
 		if hasTaskAction(model.Selected(), "remove") {
 			return model.startAction(actionRemove)
 		}
-		return model.flashInapplicable("remove/clear", model.Selected().CanonicalStatus)
+		return model.flashInapplicable("remove", model.Selected().CanonicalStatus)
 	case key.Matches(msg, dashboardKeys.List.NextPage):
 		model.stoppedPage++
 		model.list.Requested.StoppedOffset = model.stoppedPage * model.stoppedLimit
@@ -659,12 +653,10 @@ func (model Model) startAction(kind actionKind) (tea.Model, tea.Cmd) {
 			err = model.service.Pause(model.ctx, gid)
 		case actionResume:
 			err = model.service.Resume(model.ctx, gid)
+		case actionReseed:
+			err = model.service.Resume(model.ctx, gid)
 		case actionRemove:
 			err = model.service.Remove(model.ctx, gid)
-		case actionDelete:
-			err = model.service.Delete(model.ctx, gid)
-		case actionClear:
-			err = model.service.ClearStopped(model.ctx, gid)
 		case actionRetry:
 			var result app.RetryResult
 			result, err = model.service.Retry(model.ctx, gid)
@@ -762,21 +754,16 @@ var dashboardStatusOrder = []app.TaskStatus{
 	app.StatusSeeding,
 	app.StatusError,
 	app.StatusComplete,
-	app.StatusRemoved,
 }
 
 func downloadStatusRank(download app.TaskRow) int {
 	status := app.TaskStatus(download.CanonicalStatus)
-	if status == app.StatusRemoved {
-		return len(dashboardStatusOrder)
-	}
 	for rank, known := range dashboardStatusOrder {
 		if status == known {
 			return rank
 		}
 	}
-	// Unknown states remain visible near other exceptional states, while
-	// Removed is always the final group.
+	// Unknown states remain visible near other exceptional states.
 	return len(dashboardStatusOrder) - 1
 }
 
@@ -826,14 +813,12 @@ func pendingStatus(kind actionKind) string {
 		return "Pausing..."
 	case actionResume:
 		return "Resuming..."
+	case actionReseed:
+		return "Reseeding..."
 	case actionRetry:
 		return "Retrying..."
 	case actionRemove:
 		return "Removing..."
-	case actionDelete:
-		return "Deleting..."
-	case actionClear:
-		return "Clearing..."
 	default:
 		return "Pending..."
 	}
@@ -879,7 +864,7 @@ func inapplicableActionMessage(action, status string) string {
 	case "error":
 		return "failed task — " + action + " does nothing"
 	case "removed":
-		return "task was removed — " + action + " does nothing"
+		return "failed task — " + action + " does nothing"
 	default:
 		return "cannot " + action + " a " + status + " task"
 	}

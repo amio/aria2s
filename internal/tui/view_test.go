@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,42 @@ func TestTableShowsPeerMetricsAtWideViewport(t *testing.T) {
 	if !strings.Contains(row, "73") || !strings.Contains(row, "41") ||
 		!strings.Contains(row, "2.5K") || !strings.Contains(row, "2h 05m") {
 		t.Fatalf("wide row missing optional metrics: %q", row)
+	}
+}
+
+func TestListHelpShowsOnlySelectedTaskActions(t *testing.T) {
+	tests := []struct {
+		name    string
+		actions []string
+		want    []string
+	}{
+		{name: "downloading", actions: []string{"pause", "remove"}, want: []string{"p Pause", "x Remove"}},
+		{name: "paused", actions: []string{"resume", "remove"}, want: []string{"r Resume", "x Remove"}},
+		{name: "error", actions: []string{"retry", "remove"}, want: []string{"r Retry", "x Remove"}},
+		{name: "reseed", actions: []string{"reseed", "remove"}, want: []string{"r Reseed", "x Remove"}},
+		{name: "complete", actions: []string{"remove"}, want: []string{"x Remove"}},
+		{name: "no selection"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+			if test.actions != nil {
+				model.snapshot.Active = []app.TaskRow{{GID: "g1", Actions: test.actions}}
+			}
+			var dynamic []string
+			for _, segment := range model.listHelp() {
+				plain := stripANSI(segment)
+				if strings.HasPrefix(plain, "p ") || strings.HasPrefix(plain, "r ") || strings.HasPrefix(plain, "x ") {
+					dynamic = append(dynamic, plain)
+				}
+			}
+			if strings.Join(dynamic, "|") != strings.Join(test.want, "|") {
+				t.Fatalf("dynamic help = %v, want %v", dynamic, test.want)
+			}
+			if strings.Contains(strings.Join(dynamic, " "), "Start seeding") {
+				t.Fatalf("legacy reseed copy remains: %v", dynamic)
+			}
+		})
 	}
 }
 
@@ -65,7 +102,7 @@ func TestStatusLabelsRenderCanonicalStatusWithoutAttributeOverrides(t *testing.T
 		"paused":      "Paused",
 		"complete":    "Complete",
 		"error":       "Error",
-		"removed":     "Removed",
+		"removed":     "Error",
 	}
 	for status, want := range labels {
 		if got := downloadStatusLabel(app.TaskRow{CanonicalStatus: status}); got != want {
@@ -129,7 +166,6 @@ func TestKnownStatusTonesAreDistinct(t *testing.T) {
 		"paused",
 		"complete",
 		"error",
-		"removed",
 	}
 	seen := make(map[rgb]string, len(statuses))
 	for _, status := range statuses {

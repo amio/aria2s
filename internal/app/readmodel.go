@@ -167,7 +167,6 @@ const (
 	StatusPaused        TaskStatus       = "paused"
 	StatusComplete      TaskStatus       = "complete"
 	StatusError         TaskStatus       = "error"
-	StatusRemoved       TaskStatus       = "removed"
 	OwnershipManaged    TaskOwnership    = "managed"
 	OwnershipUnmanaged  TaskOwnership    = "unmanaged"
 	LifecyclePending    ManagedLifecycle = "pending"
@@ -214,12 +213,10 @@ func ProjectTask(fact TaskFacts) TaskProjection {
 		result.Ownership = OwnershipManaged
 	}
 	switch {
+	case fact.Managed && fact.Lifecycle == LifecycleRemoved:
+		result.Status = StatusError
 	case fact.Managed && fact.IdentityConflict:
 		result.Status = StatusError
-	case fact.Managed && fact.Lifecycle == LifecycleRemoved && issueIsError:
-		result.Status = StatusError
-	case fact.Managed && fact.Lifecycle == LifecycleRemoved:
-		result.Status = StatusRemoved
 	case fact.Managed && issueIsError:
 		result.Status = StatusError
 	case fact.Managed && fact.Lifecycle == LifecyclePublishing && fact.NativeAbsent:
@@ -241,7 +238,7 @@ func ProjectTask(fact TaskFacts) TaskProjection {
 	case fact.NativeStatus == "error":
 		result.Status = StatusError
 	case fact.NativeStatus == "removed":
-		result.Status = StatusRemoved
+		result.Status = StatusError
 	case fact.Managed && fact.Intent == jobs.ActivityStopped && fact.Lifecycle != LifecyclePublished:
 		result.Status = StatusPaused
 	case fact.Managed && fact.Intent == jobs.ActivityStopped && fact.Lifecycle == LifecyclePublished:
@@ -255,10 +252,19 @@ func ProjectTask(fact TaskFacts) TaskProjection {
 	result.IssueCode = issueCode
 	if issueKnown {
 		result.IssueText = issueMetadata.Text
+	}
+	if (fact.Managed && fact.Lifecycle == LifecycleRemoved) || fact.NativeStatus == "removed" {
+		result.Actions = []string{"remove"}
+		return result
+	}
+	if issueKnown {
 		// nil means this issue does not override ordinary status capabilities;
 		// a non-nil empty slice explicitly suppresses every action.
 		if issueMetadata.Actions != nil {
 			result.Actions = issueMetadata.Actions
+			if len(result.Actions) > 0 {
+				result.Actions = appendAction(result.Actions, "remove")
+			}
 			return result
 		}
 	}
@@ -267,31 +273,36 @@ func ProjectTask(fact TaskFacts) TaskProjection {
 		if result.Status == StatusError {
 			result.Actions = []string{"retry"}
 		}
+		result.Actions = appendAction(result.Actions, "remove")
 		return result
 	}
 	switch result.Status {
 	case StatusDownloading, StatusSeeding:
 		result.Actions = []string{"pause", "remove"}
 	case StatusMetadata:
-		result.Actions = []string{"pause", "delete"}
+		result.Actions = []string{"pause", "remove"}
 	case StatusWaiting:
 		result.Actions = []string{"pause", "remove"}
 	case StatusPaused:
 		result.Actions = []string{"resume", "remove"}
 	case StatusError:
-		result.Actions = []string{"retry"}
-		if !fact.Managed || fact.Lifecycle != LifecycleRemoved {
-			result.Actions = append(result.Actions, "remove")
-		}
+		result.Actions = []string{"retry", "remove"}
 	case StatusComplete:
 		if fact.Managed && fact.CanStartSeeding {
-			result.Actions = append(result.Actions, "start-seeding")
+			result.Actions = append(result.Actions, "reseed")
 		}
-		result.Actions = append(result.Actions, "clear")
-	case StatusRemoved:
-		result.Actions = []string{"retry", "clear"}
+		result.Actions = append(result.Actions, "remove")
 	}
 	return result
+}
+
+func appendAction(actions []string, action string) []string {
+	for _, candidate := range actions {
+		if candidate == action {
+			return actions
+		}
+	}
+	return append(actions, action)
 }
 
 func applyTaskRowProjection(row *TaskRow, projection TaskProjection) {

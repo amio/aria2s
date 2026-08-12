@@ -23,8 +23,9 @@ authoritative.
   facts. Recovery derives the next action from those facts and current observations.
 - `app.ReconcileJob` owns managed convergence. Add persists an execution binding before RPC;
   hooks resolve exactly one manifest by execution GID; startup holds the exclusive process lease.
-- Explicit Retry may prepare removed-task revival or a safe unpublished target under the JobID
-  lock, then enters the same live convergence path.
+- Remove uses `Removed=true` as a cleanup transaction and deletes the manifest on success;
+  Retry never revives that intent. Retry may still prepare a safe unpublished target under the
+  JobID lock before entering the ordinary live convergence path.
 - Publication is one guarded same-filesystem rename of a single payload root. The app owns target
   allocation and the detach/move/rehydrate transaction; `publication` owns filesystem facts.
 - A prepared staging payload is recoverable when native ownership is absent. Filesystem identity
@@ -40,7 +41,7 @@ authoritative.
 | Durable model, execution identity, reconciliation | [Managed job reconciler](implemented/managed-job-reconciler.md) |
 | Portable publication and storage identity | [Portable publication](implemented/portable-publication.md) |
 | Missing staged control recovery | [Staged control-file recovery](implemented/staged-control-file-recovery.md) |
-| Removed-task restart behavior | [Removed task restart](implemented/removed-task-restart.md) |
+| Unified removal behavior | [Unified Remove task](implemented/unified-remove-task.md) |
 | RPC faults and publication recovery | [RPC error and publication recovery](implemented/aria2-rpc-error-and-publication-recovery.md) |
 | Dashboard read ownership | [Dashboard read model](implemented/dashboard-read-model-ownership.md) |
 | Status, ownership, issues, and actions | [Dashboard task projection](implemented/dashboard-task-projection-policy.md) |

@@ -66,7 +66,7 @@ func newDashboardKeyMaps() dashboardKeyMaps {
 			Add:        newBinding("a", "Add", "a"),
 			PasteURL:   newBinding("ctrl+p", "Paste URL", "ctrl+p"),
 			Pause:      newBinding("p", "Pause", "p"),
-			Resume:     newBinding("r", "Retry/Resume", "r"),
+			Resume:     newBinding("r", "Resume", "r"),
 			Remove:     newBinding("x", "Remove", "x"),
 			Open:       newBinding("o", "Open", "o"),
 			NextPage:   newBinding("n", "Next/Prev Page", "n"),
@@ -98,19 +98,37 @@ func newDashboardKeyMaps() dashboardKeyMaps {
 	}
 }
 
-func (keys listKeyMap) HelpItems() []helpItem {
-	return bindingHelpItems(
+func (keys listKeyMap) HelpItems(actions []string) []helpItem {
+	items := bindingHelpItems(
 		helpGroup(keys.SelectDown, keys.SelectUp),
 		helpGroup(keys.Detail),
 		helpGroup(keys.Add),
 		helpGroup(keys.PasteURL),
-		helpGroup(keys.Pause),
-		helpGroup(keys.Resume),
-		helpGroup(keys.Remove),
+	)
+	if hasAction(actions, "pause") {
+		items = append(items, bindingHelpItem(keys.Pause, "Pause"))
+	}
+	switch {
+	case hasAction(actions, "retry"):
+		items = append(items, bindingHelpItem(keys.Resume, "Retry"))
+	case hasAction(actions, "resume"):
+		items = append(items, bindingHelpItem(keys.Resume, "Resume"))
+	case hasAction(actions, "reseed"):
+		items = append(items, bindingHelpItem(keys.Resume, "Reseed"))
+	}
+	if hasAction(actions, "remove") {
+		items = append(items, bindingHelpItem(keys.Remove, "Remove"))
+	}
+	return append(items, bindingHelpItems(
 		helpGroup(keys.Open),
 		helpGroup(keys.NextPage, keys.PrevPage),
 		helpGroup(keys.Quit),
-	)
+	)...)
+}
+
+func bindingHelpItem(binding key.Binding, desc string) helpItem {
+	help := binding.Help()
+	return helpItem{key: help.Key, desc: desc}
 }
 
 func (keys addKeyMap) HelpItems() []helpItem {

@@ -548,7 +548,7 @@ func (model Model) detailStats() string {
 }
 
 func (model Model) listHelp() []string {
-	return helpSegments(dashboardKeys.List.HelpItems()...)
+	return helpSegments(dashboardKeys.List.HelpItems(model.Selected().Actions)...)
 }
 
 func (model Model) addHelp() []string {
@@ -719,7 +719,7 @@ func statusLabel(status string) string {
 	case "error":
 		return "Error"
 	case "removed":
-		return "Removed"
+		return "Error"
 	default:
 		if status == "" {
 			return "Unknown"
@@ -744,10 +744,8 @@ func statusTone(status string) rgb {
 		return rgb{240, 160, 100}
 	case "complete":
 		return rgb{115, 145, 245}
-	case "error":
+	case "error", "removed":
 		return rgb{242, 124, 124}
-	case "removed":
-		return rgb{145, 150, 160}
 	default:
 		return bodyTextColor
 	}

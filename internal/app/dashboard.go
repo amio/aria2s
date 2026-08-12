@@ -2,11 +2,13 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"sync/atomic"
+	"time"
 
 	"github.com/amio/aria2s/internal/aria2"
 	"github.com/amio/aria2s/internal/jobs"
@@ -410,19 +412,7 @@ func (session *DashboardSession) Remove(ctx context.Context, gid string) error {
 	if session.managed(gid) {
 		return session.app.RemoveManaged(ctx, gid)
 	}
-	return session.mutate(ctx, func(ctx context.Context) error { return session.rpc.Remove(ctx, session.identity, gid) })
-}
-
-func (session *DashboardSession) Delete(ctx context.Context, gid string) error {
-	if session.managed(gid) {
-		return session.app.DeleteManaged(ctx, gid)
-	}
-	return session.mutate(ctx, func(ctx context.Context) error {
-		if err := session.rpc.Remove(ctx, session.identity, gid); err != nil {
-			return err
-		}
-		return session.rpc.ClearStopped(ctx, session.identity, gid)
-	})
+	return session.mutate(ctx, func(ctx context.Context) error { return session.removeNativeTask(ctx, gid) })
 }
 
 func (session *DashboardSession) managed(gid string) bool {
@@ -430,11 +420,72 @@ func (session *DashboardSession) managed(gid string) bool {
 	return repository.Exists(gid)
 }
 
-func (session *DashboardSession) ClearStopped(ctx context.Context, gid string) error {
-	if session.managed(gid) {
-		return session.app.ClearManaged(ctx, gid)
+func (session *DashboardSession) removeNativeTask(ctx context.Context, gid string) error {
+	detail, err := session.rpc.TaskDetail(ctx, session.identity, gid)
+	if aria2.IsNotFound(err) {
+		return nil
 	}
-	return session.mutate(ctx, func(ctx context.Context) error { return session.rpc.ClearStopped(ctx, session.identity, gid) })
+	if err != nil {
+		return err
+	}
+	var uncertainRemove error
+	switch detail.Status {
+	case "active", "waiting", "paused":
+		if err := session.rpc.Remove(ctx, session.identity, gid); err != nil {
+			if aria2.IsNotFound(err) {
+				return nil
+			}
+			if !errors.Is(err, aria2.ErrOutcomeUnknown) {
+				return err
+			}
+			uncertainRemove = err
+		}
+	case "complete", "error", "removed":
+		return session.clearNativeTaskResult(ctx, gid)
+	default:
+		return fmt.Errorf("cannot remove native task in status %q", detail.Status)
+	}
+
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		detail, err = session.rpc.TaskDetail(ctx, session.identity, gid)
+		if aria2.IsNotFound(err) {
+			return nil
+		}
+		if err != nil {
+			if uncertainRemove != nil {
+				return errors.Join(uncertainRemove, err)
+			}
+			return err
+		}
+		if detail.Status == "complete" || detail.Status == "error" || detail.Status == "removed" {
+			return session.clearNativeTaskResult(ctx, gid)
+		}
+		select {
+		case <-ctx.Done():
+			if uncertainRemove != nil {
+				return uncertainRemove
+			}
+			return ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (session *DashboardSession) clearNativeTaskResult(ctx context.Context, gid string) error {
+	err := session.rpc.ClearStopped(ctx, session.identity, gid)
+	if err == nil || aria2.IsNotFound(err) {
+		return nil
+	}
+	if !errors.Is(err, aria2.ErrOutcomeUnknown) {
+		return err
+	}
+	_, observedErr := session.rpc.TaskDetail(ctx, session.identity, gid)
+	if aria2.IsNotFound(observedErr) {
+		return nil
+	}
+	return err
 }
 
 func (session *DashboardSession) mutate(ctx context.Context, operation func(context.Context) error) error {

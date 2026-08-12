@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -25,7 +26,10 @@ type dashboardRPCStub struct {
 	source       aria2.RetrySource
 	addGID       string
 	addErr       error
+	removeErr    error
 	cleanupErr   error
+	cleanupGone  bool
+	cleared      bool
 	detail       aria2.DownloadDetail
 	detailErr    error
 	queries      []aria2.ReadBatchQuery
@@ -44,6 +48,9 @@ func (rpc *dashboardRPCStub) ReadBatch(_ context.Context, current state.State, q
 }
 func (rpc *dashboardRPCStub) TaskDetail(_ context.Context, _ state.State, gid string) (aria2.DownloadDetail, error) {
 	rpc.detailGIDs = append(rpc.detailGIDs, gid)
+	if rpc.cleared {
+		return aria2.DownloadDetail{}, &aria2.RPCError{Method: "aria2.tellStatus", Code: 1, Message: "GID is not found"}
+	}
 	return rpc.detail, rpc.detailErr
 }
 
@@ -144,15 +151,19 @@ func (rpc *dashboardRPCStub) AddURIs(context.Context, state.State, []string, ari
 }
 func (rpc *dashboardRPCStub) Remove(context.Context, state.State, string) error {
 	rpc.calls = append(rpc.calls, "remove")
-	return nil
+	rpc.detail.Status = "removed"
+	return rpc.removeErr
 }
 func (rpc *dashboardRPCStub) ClearStopped(context.Context, state.State, string) error {
 	rpc.calls = append(rpc.calls, "cleanup")
+	if rpc.cleanupGone {
+		rpc.cleared = true
+	}
 	return rpc.cleanupErr
 }
 
-func TestDashboardDeleteRemovesUnmanagedMetadataAndItsResult(t *testing.T) {
-	rpc := &dashboardRPCStub{}
+func TestDashboardRemoveRetiresUnmanagedTransferAndItsResult(t *testing.T) {
+	rpc := &dashboardRPCStub{detail: aria2.DownloadDetail{GID: "metadata", Status: "active"}}
 	session := &DashboardSession{
 		app: New(Options{
 			Paths:                    paths.NewDarwin(t.TempDir()),
@@ -162,11 +173,46 @@ func TestDashboardDeleteRemovesUnmanagedMetadataAndItsResult(t *testing.T) {
 		rpc:      rpc,
 	}
 
-	if err := session.Delete(context.Background(), "metadata"); err != nil {
+	if err := session.Remove(context.Background(), "metadata"); err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(rpc.calls, []string{"remove", "cleanup"}) {
 		t.Fatalf("metadata delete order = %v", rpc.calls)
+	}
+}
+
+func TestDashboardRemoveClearsTerminalTaskWithoutNativeRemove(t *testing.T) {
+	rpc := &dashboardRPCStub{detail: aria2.DownloadDetail{GID: "complete", Status: "complete"}}
+	session := &DashboardSession{
+		app: New(Options{Paths: paths.NewDarwin(t.TempDir()), DashboardMutationTimeout: time.Second}),
+		rpc: rpc,
+	}
+
+	if err := session.Remove(context.Background(), "complete"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(rpc.calls, []string{"cleanup"}) {
+		t.Fatalf("terminal removal calls = %v", rpc.calls)
+	}
+}
+
+func TestDashboardRemoveReconcilesUnknownMutationsWithoutResubmission(t *testing.T) {
+	rpc := &dashboardRPCStub{
+		detail:      aria2.DownloadDetail{GID: "active", Status: "active"},
+		removeErr:   fmt.Errorf("remove uncertain: %w", aria2.ErrOutcomeUnknown),
+		cleanupErr:  fmt.Errorf("cleanup uncertain: %w", aria2.ErrOutcomeUnknown),
+		cleanupGone: true,
+	}
+	session := &DashboardSession{
+		app: New(Options{Paths: paths.NewDarwin(t.TempDir()), DashboardMutationTimeout: time.Second}),
+		rpc: rpc,
+	}
+
+	if err := session.Remove(context.Background(), "active"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(rpc.calls, []string{"remove", "cleanup"}) {
+		t.Fatalf("uncertain removal was resubmitted: %v", rpc.calls)
 	}
 }
 
@@ -324,7 +370,7 @@ func TestDashboardSnapshotDecoratesDetailWhenListFails(t *testing.T) {
 	}
 	if read.Detail == nil || read.Detail.CanonicalStatus != string(StatusMetadata) ||
 		read.Detail.Ownership != string(OwnershipUnmanaged) ||
-		!reflect.DeepEqual(read.Detail.Actions, []string{"pause", "delete"}) {
+		!reflect.DeepEqual(read.Detail.Actions, []string{"pause", "remove"}) {
 		t.Fatalf("detail classification = %#v", read.Detail)
 	}
 }
@@ -422,11 +468,11 @@ func TestDashboardKeepsCompletedManagedMetadataInMetadataStateUntilPromotion(t *
 	)
 
 	if len(got.Downloads.Stopped) != 1 || got.Downloads.Stopped[0].CanonicalStatus != string(StatusMetadata) ||
-		!reflect.DeepEqual(got.Downloads.Stopped[0].Actions, []string{"pause", "delete"}) {
+		!reflect.DeepEqual(got.Downloads.Stopped[0].Actions, []string{"pause", "remove"}) {
 		t.Fatalf("managed metadata row classification = %#v", got.Downloads.Stopped)
 	}
 	if got.Detail == nil || got.Detail.CanonicalStatus != string(StatusMetadata) ||
-		!reflect.DeepEqual(got.Detail.Actions, []string{"pause", "delete"}) {
+		!reflect.DeepEqual(got.Detail.Actions, []string{"pause", "remove"}) {
 		t.Fatalf("managed metadata detail classification = %#v", got.Detail)
 	}
 }
@@ -452,13 +498,13 @@ func TestDashboardProjectsDetachedPublishingAsRecoverableManifestDetail(t *testi
 		t.Fatalf("manifest row count = %d", len(got.Downloads.Stopped))
 	}
 	row := got.Downloads.Stopped[0]
-	if row.CanonicalStatus != string(StatusError) || row.IssueCode != "PublicationRecoveryRequired" || row.IssueText == "" || !reflect.DeepEqual(row.Actions, []string{"retry"}) {
+	if row.CanonicalStatus != string(StatusError) || row.IssueCode != "PublicationRecoveryRequired" || row.IssueText == "" || !reflect.DeepEqual(row.Actions, []string{"retry", "remove"}) {
 		t.Fatalf("manifest recovery row = %#v", row)
 	}
 	if got.Detail == nil || got.Detail.GID != gid || got.Detail.CanonicalStatus != string(StatusError) ||
 		got.Detail.IssueCode != "PublicationRecoveryRequired" ||
 		got.Detail.PrimaryURI != job.Source || got.Detail.DownloadDir != job.TargetDir ||
-		!reflect.DeepEqual(got.Detail.Actions, []string{"retry"}) ||
+		!reflect.DeepEqual(got.Detail.Actions, []string{"retry", "remove"}) ||
 		got.DetailErr != nil || got.DetailSourceErr != nil {
 		t.Fatalf("manifest recovery detail = %#v detailErr=%v sourceErr=%v", got.Detail, got.DetailErr, got.DetailSourceErr)
 	}
@@ -508,7 +554,7 @@ func TestDashboardPassesRetainedMetainfoAsStartSeedingCapability(t *testing.T) {
 		aria2.ReadBatchQuery{DetailGID: executionGID},
 		jobID,
 	)
-	want := []string{"start-seeding", "clear"}
+	want := []string{"reseed", "remove"}
 	if len(got.Downloads.Stopped) != 1 || !reflect.DeepEqual(got.Downloads.Stopped[0].Actions, want) {
 		t.Fatalf("row actions = %#v", got.Downloads.Stopped)
 	}

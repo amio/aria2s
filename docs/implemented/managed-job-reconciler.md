@@ -100,9 +100,9 @@ adding a new service layer.
   does not select a separate recovery implementation.
 - At most one durable issue is retained. The reconciler replaces or clears it
   from current observation; it does not maintain issue history.
-- Retry may prepare explicit removed-task revival or unpublished-target
-  recovery under the JobID lock, then invokes the same live reconciliation
-  path. It contains no Retry-specific convergence logic.
+- Retry rejects a pending removal, but may prepare unpublished-target recovery
+  under the JobID lock before invoking the same live reconciliation path. It
+  contains no Retry-specific convergence mode.
 - Every destructive or externally visible side effect remains guarded by
   JobID lock, manifest CAS, native identity validation, and the existing
   publication lock where applicable.
@@ -244,10 +244,13 @@ binding. A stopped seed may remain paused with its binding; Resume reuses it.
 - **Add** creates the job and calls live reconciliation.
 - **Pause/Resume** changes only `ActivityIntent`, saves it, and calls live
   reconciliation.
-- **Remove** sets `Removed=true`, saves it, and calls live reconciliation.
-- **Retry** holds the JobID lock while it first completes any pending removal,
-  revives the durable intent, and validates, creates, or adopts a same-path
-  target for unpublished staging work. It then enters ordinary live
+- **Remove** sets `Removed=true`, saves it, and calls live reconciliation. The
+  reconciler retires native state, cleans unpublished staging, preserves a
+  published payload, and deletes the manifest when cleanup succeeds; a failure
+  retains the removal marker for another Remove attempt.
+- **Retry** rejects a pending removal. Otherwise it holds the JobID lock while
+  validating, creating, or adopting a same-path target for unpublished staging
+  work, then enters ordinary live
   reconciliation without a Retry-specific convergence mode. It does not clear
   an issue in advance; successful observation clears it, while an unchanged
   blocker remains.
@@ -312,8 +315,10 @@ safe.
   transfer candidate until observation proves absence;
 - `published`: published payload; a running unrenamed torrent gets the old GID
   as a candidate binding, otherwise no binding;
-- `removed`: `Removed=true`, retaining published payload metadata when present
-  and the old GID as a candidate binding until absence is proven;
+- `removed`: `Removed=true` as a transient cleanup transaction, retaining
+  published payload metadata when present and the old GID as a candidate
+  binding until absence is proven; startup or live Remove deletes the manifest
+  after cleanup rather than exposing removed history;
 - `ProblemCode`: converted to the corresponding single issue code.
 
 Candidate legacy bindings are always validated against saved session or live

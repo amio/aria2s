@@ -1,5 +1,9 @@
 # Unified Dashboard Status
 
+> The public `removed` status described here is superseded by
+> [Unified Remove Task](unified-remove-task.md). Native and managed removal
+> phases now project as Error until cleanup succeeds and the task disappears.
+
 ## Context & Goals
 
 The dashboard currently exposes three overlapping vocabularies:

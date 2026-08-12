@@ -1,5 +1,9 @@
 # Removed Task Restart
 
+> Superseded by [Unified Remove Task](unified-remove-task.md). `Removed` is no
+> longer a public status, successful Remove deletes the manifest, and Retry
+> never revives a removal transaction. This document remains historical context.
+
 ## Context & Goals
 
 The Dashboard currently sorts `removed` before `complete`. Pressing `r` on a

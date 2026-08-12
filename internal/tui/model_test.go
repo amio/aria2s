@@ -89,14 +89,6 @@ func (service *fakeService) Remove(_ context.Context, gid string) error {
 	service.actions = append(service.actions, "remove:"+gid)
 	return nil
 }
-func (service *fakeService) Delete(_ context.Context, gid string) error {
-	service.actions = append(service.actions, "delete:"+gid)
-	return nil
-}
-func (service *fakeService) ClearStopped(_ context.Context, gid string) error {
-	service.actions = append(service.actions, "clear:"+gid)
-	return nil
-}
 
 func TestRefreshCoordinatorCoalescesTriggersAndRejectsOldGeneration(t *testing.T) {
 	service := &fakeService{}
@@ -160,7 +152,7 @@ func TestItemsGroupByCanonicalStatusAndSortActiveSections(t *testing.T) {
 		},
 		Stopped: []app.TaskRow{
 			{GID: "complete-new", Status: "complete", CanonicalStatus: "complete"},
-			{GID: "removed", Status: "removed", CanonicalStatus: "removed"},
+			{GID: "removal-error", Status: "removed", CanonicalStatus: "error"},
 			{GID: "error", Status: "error", CanonicalStatus: "error"},
 			{GID: "complete-old", Status: "complete", CanonicalStatus: "complete"},
 		},
@@ -177,9 +169,8 @@ func TestItemsGroupByCanonicalStatusAndSortActiveSections(t *testing.T) {
 		"waiting-first", "waiting-second",
 		"paused-high", "paused-low",
 		"seed-alpha", "seed-beta", "seed-zulu",
-		"error",
+		"removal-error", "error",
 		"complete-new", "complete-old",
-		"removed",
 	}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("ordered GIDs got %v, want %v", got, want)
@@ -637,7 +628,7 @@ func TestListResumeKeyDispatchesAdvertisedAction(t *testing.T) {
 	}{
 		{name: "paused resumes", native: "paused", canonical: "paused", actions: []string{"resume"}, want: "resume:g1"},
 		{name: "error retries", native: "error", canonical: "error", actions: []string{"retry"}, want: "retry:g1"},
-		{name: "removed restarts", native: "removed", canonical: "removed", actions: []string{"retry"}, want: "retry:g1"},
+		{name: "complete reseeds", native: "complete", canonical: "complete", actions: []string{"reseed"}, want: "resume:g1"},
 		{name: "complete is no-op", native: "complete", canonical: "complete"},
 		{name: "downloading without action is no-op", native: "active", canonical: "downloading"},
 		{name: "waiting without action is no-op", native: "waiting", canonical: "waiting"},
@@ -683,6 +674,9 @@ func TestListResumeKeyDispatchesAdvertisedAction(t *testing.T) {
 			if len(service.actions) != 1 || service.actions[0] != tc.want {
 				t.Fatalf("actions got %v, want [%s]", service.actions, tc.want)
 			}
+			if hasAction(tc.actions, "reseed") && pendingStatus(model.pending["g1"]) != "Reseeding..." {
+				t.Fatalf("reseed pending status = %q", pendingStatus(model.pending["g1"]))
+			}
 			if _, ok := model.pending["g1"]; !ok {
 				t.Fatal("pending action not recorded")
 			}
@@ -697,7 +691,7 @@ func TestListRemoveKeyUsesXAndPermanentlyDeletesMetadata(t *testing.T) {
 		GID:             "metadata",
 		Status:          "active",
 		CanonicalStatus: "metadata",
-		Actions:         []string{"pause", "delete"},
+		Actions:         []string{"pause", "remove"},
 	}}
 
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'd', Text: "d"})
@@ -712,13 +706,13 @@ func TestListRemoveKeyUsesXAndPermanentlyDeletesMetadata(t *testing.T) {
 		t.Fatal("metadata delete did not dispatch a command")
 	}
 	msg, ok := cmd().(actionResultMsg)
-	if !ok || msg.kind != actionDelete || msg.err != nil {
+	if !ok || msg.kind != actionRemove || msg.err != nil {
 		t.Fatalf("metadata delete result = %#v", msg)
 	}
-	if len(service.actions) != 1 || service.actions[0] != "delete:metadata" {
+	if len(service.actions) != 1 || service.actions[0] != "remove:metadata" {
 		t.Fatalf("metadata x action = %v", service.actions)
 	}
-	if pendingStatus(model.pending["metadata"]) != "Deleting..." {
+	if pendingStatus(model.pending["metadata"]) != "Removing..." {
 		t.Fatalf("metadata pending action = %q", pendingStatus(model.pending["metadata"]))
 	}
 }

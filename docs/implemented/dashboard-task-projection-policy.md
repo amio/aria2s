@@ -1,5 +1,9 @@
 # Dashboard Task Projection Policy
 
+> Removal actions and `start-seeding` terminology in this document are
+> superseded by [Unified Remove Task](unified-remove-task.md): the current action
+> contract uses `remove` and `reseed`, with no public Delete, Clear, or Removed.
+
 Status: Implemented.
 
 ## Context & Goals
