@@ -6,8 +6,23 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
+
+func TestStableStorageIDFallsBackWhenVolumeUUIDIsUnsupported(t *testing.T) {
+	for _, errno := range []syscall.Errno{syscall.EINVAL, syscall.ENOTSUP} {
+		id, supported, err := decodeStableStorageID(make([]byte, 20), errno)
+		if err != nil || supported || id != "" {
+			t.Fatalf("errno %v: id=%q supported=%t err=%v", errno, id, supported, err)
+		}
+	}
+
+	_, _, err := decodeStableStorageID(make([]byte, 20), syscall.EPERM)
+	if !os.IsPermission(err) {
+		t.Fatalf("permission error = %v", err)
+	}
+}
 
 func TestStableStorageIDIsSharedByPathsOnVolume(t *testing.T) {
 	root := t.TempDir()

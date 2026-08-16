@@ -5,6 +5,7 @@ package publication
 import (
 	"encoding/binary"
 	"fmt"
+	"syscall"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
@@ -45,6 +46,15 @@ func StableStorageID(path string) (string, bool, error) {
 		0,
 		0,
 	)
+	return decodeStableStorageID(buffer[:], errno)
+}
+
+func decodeStableStorageID(buffer []byte, errno syscall.Errno) (string, bool, error) {
+	if errno == syscall.EINVAL || errno == syscall.ENOTSUP {
+		// Network and portable filesystems can reject ATTR_VOL_UUID even though
+		// the path itself is valid. Let the app bind its on-storage marker.
+		return "", false, nil
+	}
 	if errno != 0 {
 		return "", false, errno
 	}
