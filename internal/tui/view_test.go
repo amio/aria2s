@@ -11,11 +11,12 @@ import (
 )
 
 func TestTableShowsPeerMetricsAtWideViewport(t *testing.T) {
-	const contentWidth = 158
+	const contentWidth = 169
 	model := Model{}
 	header := model.tableHeader(contentWidth)
 	if !strings.Contains(header, "Seeds") || !strings.Contains(header, "Peers") ||
-		!strings.Contains(header, "Uploaded") || !strings.Contains(header, "Added Ago") {
+		!strings.Contains(header, "ETA") || !strings.Contains(header, "Uploaded") ||
+		!strings.Contains(header, "Added Ago") {
 		t.Fatalf("wide header missing optional metrics: %q", header)
 	}
 
@@ -24,12 +25,17 @@ func TestTableShowsPeerMetricsAtWideViewport(t *testing.T) {
 		Name:              "torrent",
 		NumSeeders:        73,
 		Connections:       41,
+		CompletedLength:   1000,
+		TotalLength:       3700,
+		LengthKnown:       true,
+		DownloadSpeed:     10,
 		UploadLength:      2500,
 		UploadLengthKnown: true,
 		AddedAt:           time.Now().Add(-2*time.Hour - 5*time.Minute),
 	}, false))
 	if !strings.Contains(row, "73") || !strings.Contains(row, "41") ||
-		!strings.Contains(row, "2.5K") || !strings.Contains(row, "2h 05m") {
+		!strings.Contains(row, "4m 30s") || !strings.Contains(row, "2.5K") ||
+		!strings.Contains(row, "2h 05m") {
 		t.Fatalf("wide row missing optional metrics: %q", row)
 	}
 }
@@ -156,6 +162,33 @@ func TestCompleteTaskProgressIsSemanticForUnknownOrZeroLength(t *testing.T) {
 	}
 }
 
+func TestETAFormattingUsesRemainingBytesAndCurrentSpeed(t *testing.T) {
+	tests := []struct {
+		name          string
+		completed     int64
+		total         int64
+		lengthKnown   bool
+		downloadSpeed int64
+		want          string
+	}{
+		{name: "unknown length", total: 100, downloadSpeed: 10, want: "—"},
+		{name: "stalled", total: 100, lengthKnown: true, want: "—"},
+		{name: "complete", completed: 100, total: 100, lengthKnown: true, downloadSpeed: 10, want: "—"},
+		{name: "rounds partial second up", completed: 1, total: 2, lengthKnown: true, downloadSpeed: 2, want: "1s"},
+		{name: "seconds", total: 590, lengthKnown: true, downloadSpeed: 10, want: "59s"},
+		{name: "minutes", total: 3_661, lengthKnown: true, downloadSpeed: 10, want: "6m 07s"},
+		{name: "hours", total: 18_300, lengthKnown: true, downloadSpeed: 1, want: "5h 05m"},
+		{name: "days", total: 176_400, lengthKnown: true, downloadSpeed: 1, want: "2d 01h"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := formatTaskETA(test.completed, test.total, test.lengthKnown, test.downloadSpeed); got != test.want {
+				t.Fatalf("formatTaskETA() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 func TestKnownStatusTonesAreDistinct(t *testing.T) {
 	statuses := []string{
 		"active",
@@ -178,22 +211,27 @@ func TestKnownStatusTonesAreDistinct(t *testing.T) {
 }
 
 func TestTableColumnsHideByPriority(t *testing.T) {
-	full := computeLayout(158)
-	if full.uploadedWidth == 0 || full.addedAgoWidth == 0 {
+	full := computeLayout(169)
+	if full.etaWidth == 0 || full.uploadedWidth == 0 || full.addedAgoWidth == 0 {
 		t.Fatalf("new metrics hidden in full layout: %#v", full)
 	}
 	if full.nameWidth < minNameWidth {
 		t.Fatalf("full layout name width got %d, want at least %d", full.nameWidth, minNameWidth)
 	}
 
-	addedAgoHidden := computeLayout(157)
+	addedAgoHidden := computeLayout(168)
 	if addedAgoHidden.addedAgoWidth != 0 || addedAgoHidden.uploadedWidth == 0 {
 		t.Fatalf("added age did not hide before uploaded: %#v", addedAgoHidden)
 	}
 
-	uploadedHidden := computeLayout(140)
-	if uploadedHidden.uploadedWidth != 0 || uploadedHidden.peersWidth == 0 {
-		t.Fatalf("uploaded did not hide before peer metrics: %#v", uploadedHidden)
+	uploadedHidden := computeLayout(151)
+	if uploadedHidden.uploadedWidth != 0 || uploadedHidden.etaWidth == 0 {
+		t.Fatalf("uploaded did not hide before ETA: %#v", uploadedHidden)
+	}
+
+	etaHidden := computeLayout(137)
+	if etaHidden.etaWidth != 0 || etaHidden.peersWidth == 0 {
+		t.Fatalf("ETA did not hide before peer metrics: %#v", etaHidden)
 	}
 
 	peerMetricsHidden := computeLayout(124)
@@ -219,7 +257,7 @@ func TestTableColumnsHideByPriority(t *testing.T) {
 	if requiredOnly.downloadedWidth != 0 || requiredOnly.downWidth != 0 ||
 		requiredOnly.upWidth != 0 ||
 		requiredOnly.seedsWidth != 0 || requiredOnly.peersWidth != 0 ||
-		requiredOnly.uploadedWidth != 0 || requiredOnly.addedAgoWidth != 0 {
+		requiredOnly.etaWidth != 0 || requiredOnly.uploadedWidth != 0 || requiredOnly.addedAgoWidth != 0 {
 		t.Fatalf("optional columns survived required-only layout: %#v", requiredOnly)
 	}
 	if requiredOnly.nameWidth != minNameWidth {
@@ -232,9 +270,14 @@ func TestTableColumnsHideByPriority(t *testing.T) {
 }
 
 func TestWideHeaderUsesCompactColumnSpacing(t *testing.T) {
-	header := Model{}.tableHeader(158)
-	titles := []string{"Size", "Downloaded", "Progress", "Down Speed", "Up Speed", "Seeds", "Peers", "Uploaded", "Added Ago"}
+	header := Model{}.tableHeader(169)
+	titles := []string{"Size", "Downloaded", "Progress", "Down Speed", "Up Speed", "Seeds", "Peers", "ETA", "Uploaded", "Added Ago"}
 	for i := 0; i < len(titles)-1; i++ {
+		// ETA is deliberately compact enough for values such as "59m 59s";
+		// its short title therefore has more internal right-alignment padding.
+		if titles[i] == "Peers" || titles[i] == "ETA" {
+			continue
+		}
 		left := strings.Index(header, titles[i])
 		right := strings.Index(header, titles[i+1])
 		gap := right - (left + len(titles[i]))
@@ -242,7 +285,7 @@ func TestWideHeaderUsesCompactColumnSpacing(t *testing.T) {
 			t.Fatalf("gap between %q and %q = %d, want at most 3", titles[i], titles[i+1], gap)
 		}
 	}
-	if got := computeLayout(158).sizeWidth; got != 9 {
+	if got := computeLayout(169).sizeWidth; got != 9 {
 		t.Fatalf("size width = %d, want 9", got)
 	}
 }

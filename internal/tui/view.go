@@ -34,6 +34,7 @@ const (
 	upBaseWidth         = 10
 	seedsBaseWidth      = 7
 	peersBaseWidth      = 7
+	etaBaseWidth        = 7
 	uploadedBaseWidth   = 10
 	addedAgoBaseWidth   = 10
 
@@ -44,8 +45,9 @@ const (
 	upColumnPriority         = 3
 	seedsColumnPriority      = 4
 	peersColumnPriority      = 4
-	uploadedColumnPriority   = 5
-	addedAgoColumnPriority   = 6
+	etaColumnPriority        = 5
+	uploadedColumnPriority   = 6
+	addedAgoColumnPriority   = 7
 
 	// Required columns are Status, Name, Size, and Progress.
 	minTableWidth = statusBaseWidth + minNameWidth + sizeBaseWidth +
@@ -336,7 +338,7 @@ func (model Model) tableHeader(contentWidth int) string {
 		return fitLeft("Status  Name  Progress  Down Speed", contentWidth)
 	}
 	l := computeLayout(contentWidth)
-	parts := make([]string, 0, 11)
+	parts := make([]string, 0, 12)
 	add := func(text string, width int, right bool) {
 		if width > 0 {
 			if right {
@@ -355,6 +357,7 @@ func (model Model) tableHeader(contentWidth int) string {
 	add("Up Speed", l.upWidth, true)
 	add("Seeds", l.seedsWidth, true)
 	add("Peers", l.peersWidth, true)
+	add("ETA", l.etaWidth, true)
 	add("Uploaded", l.uploadedWidth, true)
 	add("Added Ago", l.addedAgoWidth, true)
 	return strings.Join(parts, columnGap)
@@ -479,7 +482,7 @@ func (model Model) centeredBodyLine(width int, text string) string {
 func (model Model) downloadRow(width int, download app.TaskRow, selected bool) string {
 	contentWidth := contentInner(width)
 	l := computeLayout(contentWidth)
-	parts := make([]string, 0, 11)
+	parts := make([]string, 0, 12)
 	add := func(text string, width int, right bool) {
 		if width > 0 {
 			if right {
@@ -506,6 +509,7 @@ func (model Model) downloadRow(width int, download app.TaskRow, selected bool) s
 	add(formatSpeed(download.UploadSpeed), l.upWidth, true)
 	add(fmt.Sprintf("%d", download.NumSeeders), l.seedsWidth, true)
 	add(fmt.Sprintf("%d", download.Connections), l.peersWidth, true)
+	add(formatTaskETA(download.CompletedLength, download.TotalLength, download.LengthKnown, download.DownloadSpeed), l.etaWidth, true)
 	add(formatTaskBytes(download.UploadLength, download.UploadLengthKnown), l.uploadedWidth, true)
 	add(formatAddedAge(download.AddedAt, time.Now()), l.addedAgoWidth, true)
 
@@ -571,9 +575,9 @@ func (model Model) viewport() (int, int) {
 	return width, height
 }
 
-func tableColumnWidths(width int) (int, int, int, int, int, int, int, int, int, int, int) {
+func tableColumnWidths(width int) (int, int, int, int, int, int, int, int, int, int, int, int) {
 	l := computeLayout(width)
-	return l.statusWidth, l.nameWidth, l.sizeWidth, l.downloadedWidth, l.progressWidth, l.downWidth, l.upWidth, l.seedsWidth, l.peersWidth, l.uploadedWidth, l.addedAgoWidth
+	return l.statusWidth, l.nameWidth, l.sizeWidth, l.downloadedWidth, l.progressWidth, l.downWidth, l.upWidth, l.seedsWidth, l.peersWidth, l.etaWidth, l.uploadedWidth, l.addedAgoWidth
 }
 
 // tableLayout holds the computed column widths for a given content width.
@@ -588,6 +592,7 @@ type tableLayout struct {
 	upWidth         int
 	seedsWidth      int
 	peersWidth      int
+	etaWidth        int
 	uploadedWidth   int
 	addedAgoWidth   int
 }
@@ -604,6 +609,7 @@ func computeLayout(width int) tableLayout {
 		upWidth:         upBaseWidth,
 		seedsWidth:      seedsBaseWidth,
 		peersWidth:      peersBaseWidth,
+		etaWidth:        etaBaseWidth,
 		uploadedWidth:   uploadedBaseWidth,
 		addedAgoWidth:   addedAgoBaseWidth,
 	}
@@ -616,7 +622,7 @@ func computeLayout(width int) tableLayout {
 
 // fixed returns the total width of all non-name columns plus column gaps.
 func (l tableLayout) fixed() int {
-	w := l.statusWidth + l.sizeWidth + l.downloadedWidth + l.progressWidth + l.downWidth + l.upWidth + l.seedsWidth + l.peersWidth + l.uploadedWidth + l.addedAgoWidth
+	w := l.statusWidth + l.sizeWidth + l.downloadedWidth + l.progressWidth + l.downWidth + l.upWidth + l.seedsWidth + l.peersWidth + l.etaWidth + l.uploadedWidth + l.addedAgoWidth
 	n := l.visible()
 	if n > 1 {
 		w += (n - 1) * len(columnGap)
@@ -648,6 +654,9 @@ func (l tableLayout) visible() int {
 	if l.peersWidth > 0 {
 		n++
 	}
+	if l.etaWidth > 0 {
+		n++
+	}
 	if l.uploadedWidth > 0 {
 		n++
 	}
@@ -674,6 +683,7 @@ func (l *tableLayout) hideLowestPriorityColumns() bool {
 		{width: &l.upWidth, priority: upColumnPriority},
 		{width: &l.seedsWidth, priority: seedsColumnPriority},
 		{width: &l.peersWidth, priority: peersColumnPriority},
+		{width: &l.etaWidth, priority: etaColumnPriority},
 		{width: &l.uploadedWidth, priority: uploadedColumnPriority},
 		{width: &l.addedAgoWidth, priority: addedAgoColumnPriority},
 	}
@@ -803,6 +813,27 @@ func formatTaskProgress(completed int64, total int64, status string) string {
 		return "100.0%"
 	}
 	return formatProgress(completed, total)
+}
+
+func formatTaskETA(completed, total int64, lengthKnown bool, downloadSpeed int64) string {
+	remaining := total - completed
+	if !lengthKnown || remaining <= 0 || downloadSpeed <= 0 {
+		return "—"
+	}
+	seconds := remaining / downloadSpeed
+	if remaining%downloadSpeed != 0 {
+		seconds++
+	}
+	switch {
+	case seconds < 60:
+		return fmt.Sprintf("%ds", seconds)
+	case seconds < 60*60:
+		return fmt.Sprintf("%dm %02ds", seconds/60, seconds%60)
+	case seconds < 24*60*60:
+		return fmt.Sprintf("%dh %02dm", seconds/(60*60), seconds%(60*60)/60)
+	default:
+		return fmt.Sprintf("%dd %02dh", seconds/(24*60*60), seconds%(24*60*60)/(60*60))
+	}
 }
 
 func formatAddedAge(addedAt, now time.Time) string {
