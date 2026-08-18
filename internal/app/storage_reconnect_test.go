@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/amio/aria2s/internal/jobs"
@@ -125,11 +127,23 @@ func TestRetryDoesNotReconnectOverMountedIdentityMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	job, _, _ := repository.Load(result.Task.JobID)
-	scope, _ := repository.LoadStorage(job.StorageID)
+	job, _, err := repository.Load(result.Task.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, err := repository.LoadStorage(job.StorageID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	scope.ReconnectURL = "smb://nas.local/Public"
-	scope.Marker.ObjectID++
 	if err := repository.SaveStorage(scope); err != nil {
+		t.Fatal(err)
+	}
+	storageRoot := filepath.Join(scope.StagingAnchor, ".aria2s_staging", scope.ID)
+	if err := os.Rename(storageRoot, storageRoot+".replaced"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(storageRoot, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	connector := &fakeStorageReconnecter{mounted: true, reconnectURL: scope.ReconnectURL}
