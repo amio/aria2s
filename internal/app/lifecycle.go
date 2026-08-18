@@ -595,6 +595,9 @@ func (app *App) RemoveManaged(ctx context.Context, jobID string) error {
 
 func (app *App) RetryManaged(ctx context.Context, jobID string) error {
 	repository := jobs.New(app.options.Paths.StateDir)
+	if err := app.reconnectStorageForRetry(ctx, repository, jobID); err != nil {
+		return err
+	}
 	unlock, err := repository.Lock(ctx, jobID)
 	if err != nil {
 		return err
@@ -724,6 +727,10 @@ func (app *App) AddManaged(ctx context.Context, request AddRequest) (ManagedAddR
 	}
 	repository := jobs.New(app.options.Paths.StateDir)
 	scope, err := ensureStorageScope(repository, target)
+	if err != nil {
+		return ManagedAddResult{}, err
+	}
+	scope, err = app.bindStorageReconnect(repository, scope)
 	if err != nil {
 		return ManagedAddResult{}, err
 	}

@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -60,6 +61,7 @@ type StorageScope struct {
 	MountPoint    string         `json:"mountPoint"`
 	StagingAnchor string         `json:"stagingAnchor"`
 	StableID      string         `json:"stableId,omitempty"`
+	ReconnectURL  string         `json:"reconnectUrl,omitempty"`
 	Marker        ObjectIdentity `json:"marker"`
 }
 
@@ -263,7 +265,7 @@ func (repository *Repository) SaveStorage(scope StorageScope) error {
 	if scope.Version == 0 {
 		scope.Version = CurrentStorageVersion
 	}
-	if scope.Version != CurrentStorageVersion || !ValidID(scope.ID) || scope.MountPoint == "" || scope.StagingAnchor == "" {
+	if scope.Version != CurrentStorageVersion || !ValidID(scope.ID) || scope.MountPoint == "" || scope.StagingAnchor == "" || !validReconnectURL(scope.ReconnectURL) {
 		return errors.New("invalid storage scope")
 	}
 	data, err := json.MarshalIndent(scope, "", "  ")
@@ -288,7 +290,25 @@ func (repository *Repository) LoadStorage(id string) (StorageScope, error) {
 	if scope.Version != CurrentStorageVersion || scope.ID != id {
 		return StorageScope{}, errors.New("unsupported or mismatched storage scope")
 	}
+	if !validReconnectURL(scope.ReconnectURL) {
+		return StorageScope{}, errors.New("invalid storage reconnect URL")
+	}
 	return scope, nil
+}
+
+func validReconnectURL(value string) bool {
+	if value == "" {
+		return true
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Scheme != "smb" || parsed.Host == "" || strings.Trim(parsed.Path, "/") == "" || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" {
+		return false
+	}
+	if parsed.User != nil {
+		_, hasPassword := parsed.User.Password()
+		return !hasPassword
+	}
+	return true
 }
 
 func (repository *Repository) ScanStorages() ([]StorageScope, error) {

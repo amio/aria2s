@@ -51,6 +51,13 @@ type dashboardRPC interface {
 	ClearStopped(context.Context, state.State, string) error
 }
 
+// StorageReconnecter exposes platform mount facts and a user-session reconnect
+// request. The app remains responsible for deciding when the request is safe.
+type StorageReconnecter interface {
+	Observe(string) (reconnectURL string, mounted bool, err error)
+	Request(context.Context, string) error
+}
+
 type Options struct {
 	Paths                    paths.Paths
 	DownloadDir              string
@@ -67,6 +74,7 @@ type Options struct {
 	RPCSlowThreshold         time.Duration
 	DashboardReadTimeout     time.Duration
 	DashboardMutationTimeout time.Duration
+	StorageReconnecter       StorageReconnecter
 }
 
 const (
@@ -118,6 +126,9 @@ func New(options Options) *App {
 	}
 	if options.DashboardMutationTimeout == 0 {
 		options.DashboardMutationTimeout = defaultRPCOperationTimeout
+	}
+	if options.StorageReconnecter == nil && inferServicePlatform(options.Paths) == "darwin" {
+		options.StorageReconnecter = newPlatformStorageReconnecter()
 	}
 	return &App{options: options}
 }

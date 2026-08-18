@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -201,5 +202,32 @@ func TestRepositoryRejectsInvalidLegacyPhaseAndStorageVersion(t *testing.T) {
 	scope := StorageScope{Version: 2, ID: "6666666666666666", MountPoint: "/tmp", StagingAnchor: "/tmp"}
 	if err := repository.SaveStorage(scope); err == nil {
 		t.Fatal("unsupported storage version was written")
+	}
+}
+
+func TestStorageReconnectURLRejectsCredentialsAndMalformedSources(t *testing.T) {
+	repository := New(t.TempDir())
+	valid := []string{"", "smb://nas.local/Public", "smb://user@nas.local/Public"}
+	for index, reconnectURL := range valid {
+		scope := StorageScope{ID: fmt.Sprintf("%016x", index+1), MountPoint: "/tmp", StagingAnchor: "/tmp", ReconnectURL: reconnectURL}
+		if err := repository.SaveStorage(scope); err != nil {
+			t.Fatalf("valid reconnect URL %q: %v", reconnectURL, err)
+		}
+	}
+
+	invalid := []string{
+		"https://nas.local/Public",
+		"smb://nas.local",
+		"smb://user:secret@nas.local/Public",
+		"smb:///Public",
+		"smb://nas.local/Public?",
+		"smb://nas.local/Public?option=value",
+		"smb://nas.local/Public#fragment",
+	}
+	for index, reconnectURL := range invalid {
+		scope := StorageScope{ID: fmt.Sprintf("%016x", index+100), MountPoint: "/tmp", StagingAnchor: "/tmp", ReconnectURL: reconnectURL}
+		if err := repository.SaveStorage(scope); err == nil {
+			t.Fatalf("invalid reconnect URL %q was accepted", reconnectURL)
+		}
 	}
 }
