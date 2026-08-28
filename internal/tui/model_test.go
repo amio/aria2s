@@ -194,6 +194,7 @@ func TestDetailSourceFailureRetainsPriorSourceForSameGID(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.detailState = DetailState{RequestedGID: "a", AppliedGID: "a", HasDetail: true, SourceResolved: false, Detail: app.TaskDetail{GID: "a", PrimaryURI: "magnet:?old"}}
 	model.detail = model.detailState.Detail
+	model.detailCache["a"] = cachedTaskDetail{Detail: model.detailState.Detail}
 	detail := app.TaskDetail{GID: "a"}
 	query := model.query()
 	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: query, read: app.DashboardRead{Downloads: app.TaskSnapshot{}, Detail: &detail, DetailSourceErr: errors.New("source timeout")}})
@@ -390,6 +391,100 @@ func TestDetailNavigationRestoresAppliedDetailDuringQueuedRead(t *testing.T) {
 	}
 	if strings.Contains(ansi.Strip(model.View().Content), "Loading details") {
 		t.Fatal("navigating back to applied detail rendered a loading shell")
+	}
+}
+
+func TestDetailNavigationUsesCacheWhileRevalidating(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.mode = ModeDetail
+	model.snapshot.Active = []app.TaskRow{
+		{GID: "a", Name: "task-a"},
+		{GID: "b", Name: "task-b", Status: "active", CanonicalStatus: "downloading", CompletedLength: 25, TotalLength: 100, LengthKnown: true, DownloadSpeed: 7, Actions: []string{"pause"}, InfoHash: "hash-b", Dir: "/downloads"},
+	}
+	model.detailCache["b"] = cachedTaskDetail{
+		Detail: app.TaskDetail{
+			GID: "b", Name: "task-b", Status: "paused", CanonicalStatus: "paused",
+			CompletedLength: 10, TotalLength: 100, LengthKnown: true, PrimaryURI: "magnet:?b",
+			InfoHash: "hash-b", DownloadDir: "/downloads", Files: []app.TaskFile{{Path: "/downloads/file", Length: 100, CompletedLength: 10}},
+		},
+		SourceResolved: true,
+		UpdatedAt:      time.Now(),
+	}
+	model.refreshState.InFlight = false
+
+	index, found := indexOfGID(model.items(), "b")
+	if !found {
+		t.Fatal("task b missing")
+	}
+	updated, cmd := model.openDetailAt(index)
+	model = updated.(Model)
+	if cmd == nil {
+		t.Fatal("cache hit did not request list refresh")
+	}
+	if model.detail.Name != "task-b" || model.detail.CompletedLength != 10 || model.detail.CanonicalStatus != "paused" || len(model.detail.Files) != 1 || model.detail.PrimaryURI != "magnet:?b" {
+		t.Fatalf("cached detail was not restored immediately: %#v", model.detail)
+	}
+	query := model.query()
+	if query.DetailGID != "" || query.ResolveDetailSource {
+		t.Fatalf("fresh cache requested full detail: %+v", query)
+	}
+}
+
+func TestExpiredDetailCacheRequestsFullRevalidation(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.detailState.RequestedGID = "a"
+	model.detailState.AppliedGID = "a"
+	model.detailState.SourceResolved = true
+	model.detailCache["a"] = cachedTaskDetail{Detail: app.TaskDetail{GID: "a"}, SourceResolved: true, UpdatedAt: time.Now().Add(-detailCacheFreshFor)}
+	if query := model.query(); query.DetailGID != "a" || query.ResolveDetailSource {
+		t.Fatalf("expired cache query = %+v", query)
+	}
+}
+
+func TestSuccessfulActionExpiresCachedDetail(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.pending["a"] = actionPause
+	model.detailCache["a"] = cachedTaskDetail{Detail: app.TaskDetail{GID: "a"}, SourceResolved: true, UpdatedAt: time.Now()}
+	updated, _ := model.Update(actionResultMsg{kind: actionPause, gid: "a"})
+	if !updated.(Model).detailCache["a"].UpdatedAt.IsZero() {
+		t.Fatal("successful action did not expire cached detail")
+	}
+}
+
+func TestListRefreshUpdatesLiveFieldsWithoutDroppingCachedDetail(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.detailState = DetailState{RequestedGID: "a", AppliedGID: "a", HasDetail: true, SourceResolved: true}
+	cached := cachedTaskDetail{Detail: app.TaskDetail{GID: "a", PrimaryURI: "magnet:?a", Files: []app.TaskFile{{Path: "/downloads/file"}}}, SourceResolved: true, UpdatedAt: time.Now()}
+	model.detailCache["a"] = cached
+	row := app.TaskRow{GID: "a", Name: "task-a", CompletedLength: 30, TotalLength: 100, LengthKnown: true, DownloadSpeed: 7, CanonicalStatus: "downloading", Actions: []string{"pause"}}
+
+	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: app.DashboardQuery{}, read: app.DashboardRead{Downloads: app.TaskSnapshot{Active: []app.TaskRow{row}}}})
+	detail := updated.(Model).detail
+	if detail.CompletedLength != 30 || detail.DownloadSpeed != 7 || len(detail.Files) != 1 || detail.PrimaryURI != "magnet:?a" || !reflect.DeepEqual(detail.Actions, []string{"pause"}) {
+		t.Fatalf("merged detail = %#v", detail)
+	}
+}
+
+func TestSupersededDetailResultPopulatesCacheWithoutApplyingPage(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.refreshState.Generation = 2
+	model.detailState.RequestedGID = "b"
+	detail := app.TaskDetail{GID: "a", Name: "task-a", Files: []app.TaskFile{{Path: "/downloads/a"}}}
+	updated, _ := model.Update(snapshotResultMsg{
+		generation: 1,
+		query:      app.DashboardQuery{DetailGID: "a"},
+		read:       app.DashboardRead{Detail: &detail},
+	})
+	model = updated.(Model)
+
+	if _, ok := model.detailCache["a"]; !ok {
+		t.Fatal("successful superseded detail was not cached")
+	}
+	if !model.detailCache["a"].UpdatedAt.IsZero() {
+		t.Fatal("superseded detail should require revalidation before reuse")
+	}
+	if model.detail.GID == "a" || model.detailState.AppliedGID == "a" {
+		t.Fatalf("superseded detail was applied to current page: detail=%#v state=%#v", model.detail, model.detailState)
 	}
 }
 

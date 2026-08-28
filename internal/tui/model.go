@@ -68,6 +68,14 @@ type DetailState struct {
 	SourceError    error
 }
 
+type cachedTaskDetail struct {
+	Detail         app.TaskDetail
+	SourceResolved bool
+	UpdatedAt      time.Time
+}
+
+const detailCacheFreshFor = 10 * time.Second
+
 type RefreshState struct {
 	InFlight   bool
 	Queued     bool
@@ -92,6 +100,7 @@ type Model struct {
 	mode            Mode
 	list            ListState
 	detailState     DetailState
+	detailCache     map[string]cachedTaskDetail
 	refreshState    RefreshState
 	pending         map[string]actionKind
 	actionErrors    map[string]error
@@ -174,7 +183,7 @@ func NewModel(ctx context.Context, service DashboardService, refreshInterval tim
 	if version == "" {
 		version = "dev"
 	}
-	return Model{ctx: ctx, service: service, refreshInterval: refreshInterval, mode: ModeList, stoppedLimit: 100, version: version, pending: make(map[string]actionKind), actionErrors: make(map[string]error), refreshState: RefreshState{Generation: 1, InFlight: true}, list: ListState{Requested: app.DashboardListWindow{WaitingLimit: 100, StoppedLimit: 100}}}
+	return Model{ctx: ctx, service: service, refreshInterval: refreshInterval, mode: ModeList, stoppedLimit: 100, version: version, pending: make(map[string]actionKind), actionErrors: make(map[string]error), detailCache: make(map[string]cachedTaskDetail), refreshState: RefreshState{Generation: 1, InFlight: true}, list: ListState{Requested: app.DashboardListWindow{WaitingLimit: 100, StoppedLimit: 100}}}
 }
 
 func (model Model) Init() tea.Cmd {
@@ -227,6 +236,12 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return model, nil
 		}
 		delete(model.pending, msg.gid)
+		if msg.err == nil {
+			if cached, ok := model.detailCache[msg.gid]; ok {
+				cached.UpdatedAt = time.Time{}
+				model.detailCache[msg.gid] = cached
+			}
+		}
 		model.refreshState.Generation++
 		if msg.replacement != "" {
 			model.desiredGID = msg.replacement
@@ -300,6 +315,9 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (model Model) query() app.DashboardQuery {
 	query := app.DashboardQuery{List: model.list.Requested, DetailGID: model.detailState.RequestedGID}
+	if cached, ok := model.detailCache[query.DetailGID]; ok && cached.SourceResolved && time.Since(cached.UpdatedAt) < detailCacheFreshFor {
+		query.DetailGID = ""
+	}
 	query.ResolveDetailSource = query.DetailGID != "" && (model.detailState.AppliedGID != query.DetailGID || !model.detailState.SourceResolved)
 	return query
 }
@@ -325,6 +343,7 @@ func (model Model) snapshotCmd(generation uint64, query app.DashboardQuery) tea.
 
 func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 	model.refreshState.InFlight = false
+	model.retainSnapshotDetail(&msg)
 	current := msg.generation == model.refreshState.Generation
 	if current {
 		model.loaded = true
@@ -354,16 +373,17 @@ func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 				model.selected = model.indexOf(selectedGID)
+				model.refreshCachedDetailFromRow()
 			}
 			if msg.query.DetailGID != "" {
 				model.detailState.LastError = msg.read.DetailErr
 				if msg.read.Detail != nil {
-					if msg.read.Detail.PrimaryURI == "" && msg.read.DetailSourceErr != nil && model.detailState.AppliedGID == msg.query.DetailGID {
-						msg.read.Detail.PrimaryURI = model.detailState.Detail.PrimaryURI
-					}
 					model.detailState.Detail, model.detail = *msg.read.Detail, *msg.read.Detail
 					model.detailState.AppliedGID, model.detailState.HasDetail = msg.query.DetailGID, true
 					model.detailState.LoadingVisible = false
+					if cached, ok := model.detailCache[msg.query.DetailGID]; ok {
+						model.detailState.SourceResolved = cached.SourceResolved
+					}
 				} else if msg.read.DetailErr != nil {
 					model.detailState.LoadingVisible = true
 				}
@@ -371,19 +391,10 @@ func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 				// already carry files/magnet; completed downloads often permanently answer
 				// "No URI data is available", which must not retry every poll as SOURCE noise.
 				model.detailState.SourceError = msg.read.DetailSourceErr
-				if msg.read.Detail != nil {
-					switch {
-					case msg.read.Detail.PrimaryURI != "":
-						model.detailState.SourceError = nil
-						model.detailState.SourceResolved = true
-					case msg.read.DetailSourceErr == nil:
-						model.detailState.SourceResolved = true
-					case isAbsentURIData(msg.read.DetailSourceErr):
-						model.detailState.SourceError = nil
-						model.detailState.SourceResolved = true
-					}
-					// Transient getUris faults with empty PrimaryURI keep SourceError and retry.
+				if msg.read.Detail != nil && model.detailState.SourceResolved {
+					model.detailState.SourceError = nil
 				}
+				// Transient getUris faults with empty PrimaryURI keep SourceError and retry.
 			}
 		}
 	}
@@ -573,10 +584,10 @@ func (model Model) handleDetailKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case key.Matches(msg, dashboardKeys.Detail.Open):
 		return model.startOpen()
 	case key.Matches(msg, dashboardKeys.Detail.Retry):
-		if hasAction(model.detail.Actions, "retry") {
+		if hasTaskAction(model.Selected(), "retry") {
 			return model.startAction(actionRetry)
 		}
-		return model.flashInapplicable("retry", model.detail.CanonicalStatus)
+		return model.flashInapplicable("retry", model.Selected().CanonicalStatus)
 	}
 	return model, nil
 }
@@ -594,7 +605,12 @@ func (model Model) openDetailAt(index int) (tea.Model, tea.Cmd) {
 		model.detailState.LoadingVisible = false
 		model.detailState.LoadingToken++
 		model.refreshState.Generation++
-		if model.detailState.AppliedGID == gid && model.detailState.HasDetail {
+		if cached, ok := model.detailCache[gid]; ok {
+			model.detail = cached.Detail
+			model.detailState.AppliedGID, model.detailState.HasDetail = gid, true
+			model.detailState.Detail = model.detail
+			model.detailState.SourceResolved = cached.SourceResolved
+		} else if model.detailState.AppliedGID == gid && model.detailState.HasDetail {
 			model.detail = model.detailState.Detail
 		} else {
 			model.detail = projectDownloadDetail(selected)
@@ -605,6 +621,53 @@ func (model Model) openDetailAt(index int) (tea.Model, tea.Cmd) {
 		return model, tea.Batch(refreshCmd, detailLoadingTick(gid, token))
 	}
 	return model.requestRefresh(true)
+}
+
+// retainSnapshotDetail preserves independently valid detail reads even when
+// navigation has already advanced the model generation. Only the current
+// generation may apply list or detail state to the visible page.
+func (model *Model) retainSnapshotDetail(msg *snapshotResultMsg) {
+	if msg.err != nil || msg.query.DetailGID == "" || msg.read.Detail == nil {
+		return
+	}
+	gid := msg.query.DetailGID
+	detail := *msg.read.Detail
+	previous, hadPrevious := model.detailCache[gid]
+	entry := cachedTaskDetail{Detail: detail, UpdatedAt: time.Now()}
+	if msg.generation != model.refreshState.Generation {
+		entry.UpdatedAt = time.Time{}
+	}
+	if hadPrevious {
+		entry.SourceResolved = previous.SourceResolved
+		if detail.PrimaryURI == "" {
+			entry.Detail.PrimaryURI = previous.Detail.PrimaryURI
+		}
+	}
+	if entry.Detail.PrimaryURI != "" || msg.query.ResolveDetailSource && (msg.read.DetailSourceErr == nil || isAbsentURIData(msg.read.DetailSourceErr)) {
+		entry.SourceResolved = true
+	}
+	model.detailCache[gid] = entry
+	msg.read.Detail = &entry.Detail
+}
+
+func (model *Model) refreshCachedDetailFromRow() {
+	row := model.Selected()
+	cached, ok := model.detailCache[model.detailState.RequestedGID]
+	if !ok || row.GID != model.detailState.RequestedGID {
+		return
+	}
+	cached.Detail = mergeDetailRow(row, cached.Detail)
+	model.detailCache[row.GID] = cached
+	model.detailState.Detail, model.detail = cached.Detail, cached.Detail
+}
+
+func mergeDetailRow(row app.TaskRow, detail app.TaskDetail) app.TaskDetail {
+	live := projectDownloadDetail(row)
+	live.VerifiedLength, live.VerifyIntegrityPending = detail.VerifiedLength, detail.VerifyIntegrityPending
+	live.PieceLength, live.NumPieces = detail.PieceLength, detail.NumPieces
+	live.PrimaryURI, live.TargetDir = detail.PrimaryURI, detail.TargetDir
+	live.ErrorCode, live.ErrorMessage, live.Files = detail.ErrorCode, detail.ErrorMessage, detail.Files
+	return live
 }
 
 // projectDownloadDetail keeps detail navigation visually stable while the
