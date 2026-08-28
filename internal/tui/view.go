@@ -824,6 +824,7 @@ func formatTaskETA(completed, total int64, lengthKnown bool, downloadSpeed int64
 	if remaining%downloadSpeed != 0 {
 		seconds++
 	}
+	days := seconds / (24 * 60 * 60)
 	switch {
 	case seconds < 60:
 		return fmt.Sprintf("%ds", seconds)
@@ -831,8 +832,10 @@ func formatTaskETA(completed, total int64, lengthKnown bool, downloadSpeed int64
 		return fmt.Sprintf("%dm %02ds", seconds/60, seconds%60)
 	case seconds < 24*60*60:
 		return fmt.Sprintf("%dh %02dm", seconds/(60*60), seconds%(60*60)/60)
+	case days >= 100:
+		return fmt.Sprintf("%dd", days)
 	default:
-		return fmt.Sprintf("%dd %02dh", seconds/(24*60*60), seconds%(24*60*60)/(60*60))
+		return fmt.Sprintf("%dd %02dh", days, seconds%(24*60*60)/(60*60))
 	}
 }
 
