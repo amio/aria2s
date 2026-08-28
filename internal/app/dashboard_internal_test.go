@@ -106,8 +106,57 @@ func TestDashboardTaskDetailFallsBackToPublishedManifestAfterNativeDetach(t *tes
 	}
 	if detail.DownloadDir != job.TargetDir || detail.Name != job.Payload.FinalRoot ||
 		detail.CanonicalStatus != string(StatusComplete) || detail.CompletedLength != length ||
-		detail.TotalLength != length || !detail.LengthKnown {
+		detail.TotalLength != length || !detail.LengthKnown || len(detail.Files) != 1 ||
+		detail.Files[0].Path != filepath.Join(job.TargetDir, job.Payload.FinalRoot) ||
+		detail.Files[0].Length != length || detail.Files[0].CompletedLength != length ||
+		!detail.Files[0].Selected {
 		t.Fatalf("manifest detail = %#v", detail)
+	}
+}
+
+func TestDashboardTaskDetailRestoresPublishedTorrentFileListFromMetainfo(t *testing.T) {
+	const gid = "938cecc78f5f8415"
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	length := int64(5)
+	job := jobs.Job{
+		ID:             gid,
+		Source:         "magnet:?xt=urn:btih:test",
+		TargetDir:      filepath.Join(root, "downloads"),
+		TargetIdentity: jobs.ObjectIdentity{MountID: 1, ObjectID: 1},
+		StorageID:      "938cecc78f5f8414",
+		ActivityIntent: jobs.ActivityStopped,
+		Payload: jobs.PayloadState{Location: jobs.PayloadPublished, Root: "original", FinalRoot: "renamed",
+			Identity: jobs.ObjectIdentity{MountID: 1, ObjectID: 2}, Length: &length},
+	}
+	repository := jobs.New(servicePaths.StateDir)
+	if _, err := repository.Create(job); err != nil {
+		t.Fatal(err)
+	}
+	metainfo := []byte("d4:infod5:filesld6:lengthi2e4:pathl3:dir5:a.txteed6:lengthi3e4:pathl5:b.txteee4:name8:original12:piece lengthi1e6:pieces20:01234567890123456789ee")
+	if err := repository.WriteMetainfo(gid, metainfo); err != nil {
+		t.Fatal(err)
+	}
+	session := &DashboardSession{app: New(Options{Paths: servicePaths}), rpc: &dashboardRPCStub{}}
+
+	detail, err := session.TaskDetail(context.Background(), gid)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []TaskFile{
+		{Path: filepath.Join(job.TargetDir, "renamed", "dir", "a.txt"), Name: "a.txt", Length: 2, CompletedLength: 2, Selected: true},
+		{Path: filepath.Join(job.TargetDir, "renamed", "b.txt"), Name: "b.txt", Length: 3, CompletedLength: 3, Selected: true},
+	}
+	if !reflect.DeepEqual(detail.Files, want) {
+		t.Fatalf("published torrent files = %#v, want %#v", detail.Files, want)
+	}
+}
+
+func TestPublishedTorrentFileProjectionRejectsEscapingComponents(t *testing.T) {
+	job := jobs.Job{TargetDir: "/downloads", Payload: jobs.PayloadState{Root: "root", FinalRoot: "root"}}
+	layout := aria2.MetainfoLayout{MultiFile: true, Files: []aria2.MetainfoFile{{Path: []string{"..", "escape"}, Length: 1}}}
+	if files := projectPublishedTorrentFiles(job, layout); files != nil {
+		t.Fatalf("escaping metainfo path projected as %#v", files)
 	}
 }
 

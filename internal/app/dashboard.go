@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -222,7 +223,68 @@ func (session *DashboardSession) manifestDetail(job jobs.Job) TaskDetail {
 	}
 	applyTaskDetailProjection(&detail, session.projectTask(job, true, taskObservation{absent: true}))
 	applyPublishedMetrics(&detail.CompletedLength, &detail.TotalLength, &detail.LengthKnown, job)
+	detail.Files = session.publishedManifestFiles(job)
 	return detail
+}
+
+// publishedManifestFiles restores detail-only file facts after managed aria2
+// state has been retired. Retained torrent metainfo owns multi-file layout;
+// downloads without metainfo have the single published payload root.
+func (session *DashboardSession) publishedManifestFiles(job jobs.Job) []TaskFile {
+	if job.Payload.Location != jobs.PayloadPublished || job.FinalRoot() == "" {
+		return nil
+	}
+	repository := jobs.New(session.app.options.Paths.StateDir)
+	metainfo, err := repository.ReadMetainfo(job.ID)
+	if err == nil {
+		layout, layoutErr := aria2.MetainfoFileLayout(metainfo)
+		if layoutErr != nil {
+			return nil
+		}
+		return projectPublishedTorrentFiles(job, layout)
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if job.Payload.Length == nil {
+		return nil
+	}
+	length := *job.Payload.Length
+	path := filepath.Join(job.TargetDir, job.FinalRoot())
+	return []TaskFile{{Path: path, Name: filepath.Base(path), Length: length, CompletedLength: length, Selected: true}}
+}
+
+func projectPublishedTorrentFiles(job jobs.Job, layout aria2.MetainfoLayout) []TaskFile {
+	root := filepath.Join(job.TargetDir, job.FinalRoot())
+	files := make([]TaskFile, 0, len(layout.Files))
+	for _, file := range layout.Files {
+		path := root
+		if layout.MultiFile {
+			if !safeMetainfoPath(file.Path) {
+				return nil
+			}
+			path = filepath.Join(append([]string{root}, file.Path...)...)
+		}
+		files = append(files, TaskFile{
+			Path: path, Name: filepath.Base(path), Length: file.Length,
+			CompletedLength: file.Length, Selected: true,
+		})
+	}
+	return files
+}
+
+func safeMetainfoPath(path []string) bool {
+	if len(path) == 0 {
+		return false
+	}
+	for _, component := range path {
+		if component == "" || component == "." || component == ".." ||
+			filepath.IsAbs(component) || filepath.Base(component) != component ||
+			strings.IndexByte(component, 0) >= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func manifestDisplayName(job jobs.Job) string {
