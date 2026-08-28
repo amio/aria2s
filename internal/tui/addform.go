@@ -111,17 +111,13 @@ func (form AddForm) BodyLines() []string {
 	lines = append(lines, "")
 	lines = append(lines, form.DirField().Lines(form.cursorVisible)...)
 	if form.focus == focusDir && len(form.recentDirs) > 0 {
-		lines = append(lines, "", "  Recent (↑↓ select)")
+		lines = append(lines, "", "  Recent "+dimText("(↑↓ select, Ctrl+D delete)"))
 		for i, dir := range form.recentDirs {
 			marker := "     "
 			if i == form.dirPick {
 				marker = "  ›  "
 			}
-			line := marker + dir
-			if i == form.dirPick {
-				line += dimText("  Ctrl+D delete")
-			}
-			lines = append(lines, line)
+			lines = append(lines, marker+dir)
 		}
 	}
 	return lines

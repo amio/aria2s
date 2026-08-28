@@ -79,10 +79,13 @@ func TestAddFormBodyLinesUseStackedFieldsAndFocusedRecents(t *testing.T) {
 
 	form.focus = focusDir
 	focused := strings.Join(form.BodyLines(), "\n")
-	if !strings.Contains(focused, "  Recent (↑↓ select)") ||
-		!strings.Contains(focused, "  ›  /data/Movies"+dimText("  Ctrl+D delete")) ||
+	if !strings.Contains(focused, "  Recent "+dimText("(↑↓ select, Ctrl+D delete)")) ||
+		!strings.Contains(focused, "  ›  /data/Movies") ||
 		!strings.Contains(focused, "     /data/Music") {
 		t.Fatalf("focused recent picker has unexpected layout:\n%s", focused)
+	}
+	if strings.Contains(focused, "/data/Movies"+dimText("  Ctrl+D delete")) {
+		t.Fatalf("delete hint is still attached to selected recent:\n%s", focused)
 	}
 }
 
