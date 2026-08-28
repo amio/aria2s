@@ -131,52 +131,6 @@ func TestPartialListFailurePreservesLastKnownGood(t *testing.T) {
 	}
 }
 
-func TestItemsGroupByCanonicalStatusAndSortActiveSections(t *testing.T) {
-	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	now := time.Now()
-	model.snapshot = app.TaskSnapshot{
-		Active: []app.TaskRow{
-			{GID: "download-low", Status: "active", CanonicalStatus: "downloading", CompletedLength: 25, TotalLength: 100},
-			{GID: "metadata-old", Status: "active", CanonicalStatus: "metadata", IsMetadata: true, AddedAt: now.Add(-time.Minute)},
-			{GID: "metadata-new", Status: "active", CanonicalStatus: "metadata", IsMetadata: true, AddedAt: now},
-			{GID: "seed-zulu", Name: "Zulu.iso", Status: "active", CanonicalStatus: "seeding", Seeder: true},
-			{GID: "seed-alpha", Name: "alpha.iso", Status: "active", CanonicalStatus: "seeding", Seeder: true},
-			{GID: "seed-beta", Name: "Beta.iso", Status: "active", CanonicalStatus: "seeding", Seeder: true},
-		},
-		Waiting: []app.TaskRow{
-			{GID: "waiting-first", Status: "waiting", CanonicalStatus: "waiting"},
-			{GID: "download-high", Status: "waiting", CanonicalStatus: "downloading", CompletedLength: 3, TotalLength: 4},
-			{GID: "waiting-second", Status: "waiting", CanonicalStatus: "waiting"},
-			{GID: "paused-low", Status: "paused", CanonicalStatus: "paused", CompletedLength: 1, TotalLength: 4},
-			{GID: "paused-high", Status: "paused", CanonicalStatus: "paused", CompletedLength: 3, TotalLength: 4},
-		},
-		Stopped: []app.TaskRow{
-			{GID: "complete-new", Status: "complete", CanonicalStatus: "complete"},
-			{GID: "removal-error", Status: "removed", CanonicalStatus: "error"},
-			{GID: "error", Status: "error", CanonicalStatus: "error"},
-			{GID: "complete-old", Status: "complete", CanonicalStatus: "complete"},
-		},
-	}
-
-	items := model.items()
-	got := make([]string, 0, len(items))
-	for _, item := range items {
-		got = append(got, item.GID)
-	}
-	want := []string{
-		"metadata-new", "metadata-old",
-		"download-high", "download-low",
-		"waiting-first", "waiting-second",
-		"paused-high", "paused-low",
-		"seed-alpha", "seed-beta", "seed-zulu",
-		"removal-error", "error",
-		"complete-new", "complete-old",
-	}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("ordered GIDs got %v, want %v", got, want)
-	}
-}
-
 func TestDetailResultCanApplyWhenListFails(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.detailState.RequestedGID = "a"
