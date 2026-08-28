@@ -281,7 +281,7 @@ func (model Model) detailView() string {
 		lines = appendDetailErrorLines(lines, "Action", actionErr.Error(), contentWidth)
 	}
 	if len(detail.Files) > 0 {
-		lines = append(lines, "", detailLabelPrefix("Files"), "")
+		lines = append(lines, "", detailLabelPrefix(fmt.Sprintf("Files (%d)", len(detail.Files))), "")
 		for _, file := range detail.Files {
 			pct := float64(file.CompletedLength) / float64(file.Length)
 			if file.Length <= 0 {

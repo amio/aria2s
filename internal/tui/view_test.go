@@ -125,6 +125,28 @@ func TestStatusLabelsRenderCanonicalStatusWithoutAttributeOverrides(t *testing.T
 	}
 }
 
+func TestDetailFilesTitleShowsFileCount(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.loaded = true
+	model.width = 180
+	model.height = 40
+	model.mode = ModeDetail
+	model.detailState = DetailState{RequestedGID: "a", AppliedGID: "a", HasDetail: true}
+	model.detail = app.TaskDetail{
+		GID:  "a",
+		Name: "task-a",
+		Files: []app.TaskFile{
+			{Path: "/downloads/first", Length: 1},
+			{Path: "/downloads/second", Length: 1},
+		},
+	}
+
+	view := ansi.Strip(model.View().Content)
+	if !strings.Contains(view, "Files (2):") {
+		t.Fatalf("detail file count missing from title:\n%s", view)
+	}
+}
+
 func TestListStatsSummarizesOnlyPresentCanonicalStatuses(t *testing.T) {
 	model := Model{}
 	model.snapshot.Active = []app.TaskRow{
