@@ -493,8 +493,8 @@ func (model Model) downloadRow(width int, download app.TaskRow, selected bool) s
 		}
 	}
 	status := downloadStatusLabel(download)
-	if kind, ok := model.pending[download.GID]; ok {
-		status = pendingStatus(kind)
+	if action, ok := model.pending[download.GID]; ok {
+		status = pendingStatus(action.kind)
 	}
 	add(status, l.statusWidth, false)
 	name := download.Name

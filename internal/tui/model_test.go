@@ -397,7 +397,7 @@ func TestExpiredDetailCacheRequestsFullRevalidation(t *testing.T) {
 
 func TestSuccessfulActionExpiresCachedDetail(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.pending["a"] = actionPause
+	model.pending["a"] = pendingAction{kind: actionPause}
 	model.detailCache["a"] = cachedTaskDetail{Detail: app.TaskDetail{GID: "a"}, SourceResolved: true, UpdatedAt: time.Now()}
 	updated, _ := model.Update(actionResultMsg{kind: actionPause, gid: "a"})
 	if !updated.(Model).detailCache["a"].UpdatedAt.IsZero() {
@@ -477,7 +477,7 @@ func TestDesiredSelectionWaitsUntilReplacementAppears(t *testing.T) {
 func TestRetryReplacementRetargetsOpenDetail(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.mode = ModeDetail
-	model.pending["old"] = actionRetry
+	model.pending["old"] = pendingAction{kind: actionRetry}
 	model.detailState.RequestedGID = "old"
 	updated, _ := model.Update(actionResultMsg{kind: actionRetry, gid: "old", replacement: "new", warning: errors.New("cleanup failed")})
 	model = updated.(Model)
@@ -723,8 +723,8 @@ func TestListResumeKeyDispatchesAdvertisedAction(t *testing.T) {
 			if len(service.actions) != 1 || service.actions[0] != tc.want {
 				t.Fatalf("actions got %v, want [%s]", service.actions, tc.want)
 			}
-			if hasAction(tc.actions, "reseed") && pendingStatus(model.pending["g1"]) != "Reseeding..." {
-				t.Fatalf("reseed pending status = %q", pendingStatus(model.pending["g1"]))
+			if hasAction(tc.actions, "reseed") && pendingStatus(model.pending["g1"].kind) != "Reseeding..." {
+				t.Fatalf("reseed pending status = %q", pendingStatus(model.pending["g1"].kind))
 			}
 			if _, ok := model.pending["g1"]; !ok {
 				t.Fatal("pending action not recorded")
@@ -761,9 +761,94 @@ func TestListRemoveKeyUsesXAndPermanentlyDeletesMetadata(t *testing.T) {
 	if len(service.actions) != 1 || service.actions[0] != "remove:metadata" {
 		t.Fatalf("metadata x action = %v", service.actions)
 	}
-	if pendingStatus(model.pending["metadata"]) != "Removing..." {
-		t.Fatalf("metadata pending action = %q", pendingStatus(model.pending["metadata"]))
+	if pendingStatus(model.pending["metadata"].kind) != "Removing..." {
+		t.Fatalf("metadata pending action = %q", pendingStatus(model.pending["metadata"].kind))
 	}
+}
+
+func TestPendingRemoveKeepsOriginalPositionUntilActionFinishes(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.snapshot.Active = []app.TaskRow{
+		{GID: "before", CanonicalStatus: "downloading", CompletedLength: 10, TotalLength: 100, LengthKnown: true},
+		{GID: "removing", CanonicalStatus: "downloading", CompletedLength: 20, TotalLength: 100, LengthKnown: true, Actions: []string{"remove"}},
+		{GID: "after", CanonicalStatus: "downloading", CompletedLength: 30, TotalLength: 100, LengthKnown: true},
+	}
+	model.selected = 1
+	updated, _ := model.startAction(actionRemove)
+	model = updated.(Model)
+
+	updated, _ = model.Update(snapshotResultMsg{
+		generation: model.refreshState.Generation,
+		query:      model.query(),
+		read: app.DashboardRead{Downloads: app.TaskSnapshot{
+			Active: []app.TaskRow{
+				{GID: "before", CanonicalStatus: "downloading", CompletedLength: 10, TotalLength: 100, LengthKnown: true},
+				{GID: "after", CanonicalStatus: "downloading", CompletedLength: 30, TotalLength: 100, LengthKnown: true},
+			},
+			Stopped: []app.TaskRow{{GID: "removing", CanonicalStatus: "error", Actions: []string{"remove"}}},
+		}},
+	})
+	model = updated.(Model)
+
+	if got, want := taskGIDs(model.items()), []string{"before", "removing", "after"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("pending removal order = %v, want %v", got, want)
+	}
+	if model.Selected().GID != "removing" {
+		t.Fatalf("selection moved during removal: %q", model.Selected().GID)
+	}
+
+	updated, _ = model.Update(actionResultMsg{kind: actionRemove, gid: "removing", err: errors.New("cleanup failed")})
+	model = updated.(Model)
+	if got, want := taskGIDs(model.items()), []string{"removing", "before", "after"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("failed removal order = %v, want %v", got, want)
+	}
+	if model.Selected().GID != "removing" {
+		t.Fatalf("selection did not follow failed removal: %q", model.Selected().GID)
+	}
+}
+
+func TestSuccessfulRemoveDisappearsBeforeRefresh(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.snapshot.Active = []app.TaskRow{
+		{GID: "before", CanonicalStatus: "downloading", CompletedLength: 10, TotalLength: 100, LengthKnown: true},
+		{GID: "removing", CanonicalStatus: "downloading", CompletedLength: 20, TotalLength: 100, LengthKnown: true, Actions: []string{"remove"}},
+		{GID: "after", CanonicalStatus: "downloading", CompletedLength: 30, TotalLength: 100, LengthKnown: true},
+	}
+	model.selected = 1
+	updated, _ := model.startAction(actionRemove)
+	model = updated.(Model)
+	updated, _ = model.Update(snapshotResultMsg{
+		generation: model.refreshState.Generation,
+		query:      model.query(),
+		read: app.DashboardRead{Downloads: app.TaskSnapshot{
+			Active: []app.TaskRow{
+				{GID: "before", CanonicalStatus: "downloading", CompletedLength: 10, TotalLength: 100, LengthKnown: true},
+				{GID: "after", CanonicalStatus: "downloading", CompletedLength: 30, TotalLength: 100, LengthKnown: true},
+			},
+			Stopped: []app.TaskRow{{GID: "removing", CanonicalStatus: "error", Actions: []string{"remove"}}},
+		}},
+	})
+	model = updated.(Model)
+	updated, _ = model.Update(actionResultMsg{kind: actionRemove, gid: "removing"})
+	model = updated.(Model)
+
+	if got, want := taskGIDs(model.items()), []string{"before", "after"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("successful removal order = %v, want %v", got, want)
+	}
+	if _, ok := model.pending["removing"]; ok {
+		t.Fatal("successful removal remained pending")
+	}
+	if model.Selected().GID != "after" {
+		t.Fatalf("selection after removal = %q, want after", model.Selected().GID)
+	}
+}
+
+func taskGIDs(items []app.TaskRow) []string {
+	gids := make([]string, len(items))
+	for index, item := range items {
+		gids[index] = item.GID
+	}
+	return gids
 }
 
 func TestListPauseKeyOnlyTargetsLiveRows(t *testing.T) {

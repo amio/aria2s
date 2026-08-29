@@ -93,6 +93,11 @@ const (
 	actionRemove actionKind = "remove"
 )
 
+type pendingAction struct {
+	kind          actionKind
+	originalIndex int
+}
+
 type Model struct {
 	ctx             context.Context
 	service         DashboardService
@@ -102,7 +107,7 @@ type Model struct {
 	detailState     DetailState
 	detailCache     map[string]cachedTaskDetail
 	refreshState    RefreshState
-	pending         map[string]actionKind
+	pending         map[string]pendingAction
 	actionErrors    map[string]error
 	addPending      bool
 	addError        error
@@ -183,7 +188,7 @@ func NewModel(ctx context.Context, service DashboardService, refreshInterval tim
 	if version == "" {
 		version = "dev"
 	}
-	return Model{ctx: ctx, service: service, refreshInterval: refreshInterval, mode: ModeList, stoppedLimit: 100, version: version, pending: make(map[string]actionKind), actionErrors: make(map[string]error), detailCache: make(map[string]cachedTaskDetail), refreshState: RefreshState{Generation: 1, InFlight: true}, list: ListState{Requested: app.DashboardListWindow{WaitingLimit: 100, StoppedLimit: 100}}}
+	return Model{ctx: ctx, service: service, refreshInterval: refreshInterval, mode: ModeList, stoppedLimit: 100, version: version, pending: make(map[string]pendingAction), actionErrors: make(map[string]error), detailCache: make(map[string]cachedTaskDetail), refreshState: RefreshState{Generation: 1, InFlight: true}, list: ListState{Requested: app.DashboardListWindow{WaitingLimit: 100, StoppedLimit: 100}}}
 }
 
 func (model Model) Init() tea.Cmd {
@@ -232,10 +237,17 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		model.addForm = model.addForm.WithoutRecentDir(msg.dir)
 	case actionResultMsg:
-		if pending, ok := model.pending[msg.gid]; !ok || pending != msg.kind {
+		if pending, ok := model.pending[msg.gid]; !ok || pending.kind != msg.kind {
 			return model, nil
 		}
+		selectedGID := model.Selected().GID
 		delete(model.pending, msg.gid)
+		if msg.kind == actionRemove && msg.err == nil {
+			model.removeSnapshotTask(msg.gid)
+		}
+		if msg.kind == actionRemove {
+			model.selected = model.indexOf(selectedGID)
+		}
 		if msg.err == nil {
 			if cached, ok := model.detailCache[msg.gid]; ok {
 				cached.UpdatedAt = time.Time{}
@@ -707,7 +719,11 @@ func (model Model) startAction(kind actionKind) (tea.Model, tea.Cmd) {
 	if _, exists := model.pending[gid]; exists {
 		return model, nil
 	}
-	model.pending[gid] = kind
+	pending := pendingAction{kind: kind, originalIndex: -1}
+	if kind == actionRemove {
+		pending.originalIndex = model.selected
+	}
+	model.pending[gid] = pending
 	return model, func() tea.Msg {
 		var replacement string
 		var warning, err error
@@ -806,7 +822,61 @@ func (model Model) items() []app.TaskRow {
 			return false
 		}
 	})
-	return items
+	return pinPendingRemovals(items, model.pending)
+}
+
+type pinnedRemoval struct {
+	row   app.TaskRow
+	index int
+}
+
+// pinPendingRemovals keeps a locally dispatched Remove at its original list
+// position while authoritative snapshots expose the transaction's Error state.
+// Once the command finishes, ordinary status ordering becomes authoritative again.
+func pinPendingRemovals(items []app.TaskRow, pending map[string]pendingAction) []app.TaskRow {
+	pinned := make([]pinnedRemoval, 0)
+	remaining := make([]app.TaskRow, 0, len(items))
+	for _, item := range items {
+		action, ok := pending[item.GID]
+		if !ok || action.kind != actionRemove || action.originalIndex < 0 {
+			remaining = append(remaining, item)
+			continue
+		}
+		pinned = append(pinned, pinnedRemoval{row: item, index: action.originalIndex})
+	}
+	if len(pinned) == 0 {
+		return items
+	}
+	sort.Slice(pinned, func(left, right int) bool {
+		if pinned[left].index != pinned[right].index {
+			return pinned[left].index < pinned[right].index
+		}
+		return pinned[left].row.GID < pinned[right].row.GID
+	})
+	for _, item := range pinned {
+		index := min(item.index, len(remaining))
+		remaining = append(remaining, app.TaskRow{})
+		copy(remaining[index+1:], remaining[index:])
+		remaining[index] = item.row
+	}
+	return remaining
+}
+
+func (model *Model) removeSnapshotTask(gid string) {
+	remove := func(rows []app.TaskRow) []app.TaskRow {
+		for index, row := range rows {
+			if row.GID == gid {
+				copy(rows[index:], rows[index+1:])
+				rows[len(rows)-1] = app.TaskRow{}
+				return rows[:len(rows)-1]
+			}
+		}
+		return rows
+	}
+	model.snapshot.Active = remove(model.snapshot.Active)
+	model.snapshot.Waiting = remove(model.snapshot.Waiting)
+	model.snapshot.Stopped = remove(model.snapshot.Stopped)
+	model.list.Snapshot = model.snapshot
 }
 
 var dashboardStatusOrder = []app.TaskStatus{
