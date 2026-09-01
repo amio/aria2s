@@ -965,8 +965,8 @@ func TestRemoveManagedAfterTargetDirectoryRename(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if blocked.Issue == nil || blocked.Issue.Code != "StorageOffline" {
-		t.Fatalf("renamed target issue = %+v, want StorageOffline", blocked.Issue)
+	if blocked.Issue == nil || blocked.Issue.Code != "TargetUnavailable" {
+		t.Fatalf("renamed target issue = %+v, want TargetUnavailable", blocked.Issue)
 	}
 
 	if err := application.RemoveManaged(context.Background(), job.ID); err != nil {
@@ -1118,7 +1118,7 @@ func TestRetryDoesNotAdoptRecreatedTargetAfterPublication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if loaded.TargetIdentity.ObjectID != job.TargetIdentity.ObjectID || loaded.Issue == nil || loaded.Issue.Code != "StorageOffline" {
+	if loaded.TargetIdentity.ObjectID != job.TargetIdentity.ObjectID || loaded.Issue == nil || loaded.Issue.Code != "TargetMismatch" {
 		t.Fatalf("published target replacement was not rejected: %+v", loaded)
 	}
 }

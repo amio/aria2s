@@ -195,8 +195,18 @@ func lifecycleProblem(code, jobID, evidence string) Issue {
 	}
 	recovery := "Open Dashboard and use Retry after correcting the reported condition."
 	switch code {
-	case "StorageOffline", "StorageMismatch":
-		recovery = "Reconnect the original storage, verify the target, then use Retry."
+	case "StorageOffline":
+		recovery = "Mount or reconnect the original storage at its registered path, then use Retry."
+	case "StorageMismatch":
+		recovery = "Verify that the original storage and aria2s staging marker are present at the registered mount path, then use Retry."
+	case "StorageStateUnavailable":
+		recovery = "Restore or repair the matching storage record in the aria2s state directory, then use Retry."
+	case "TargetUnavailable":
+		recovery = "Restore access to the task's registered download directory, then use Retry."
+	case "TargetMismatch":
+		recovery = "Restore the original download directory; published payloads are not automatically relocated. Then use Retry or remove the task."
+	case "PayloadStorageMismatch":
+		recovery = "Inspect the payload and download paths, restore them to the registered storage relationship, then use Retry."
 	case "PublicationConflict":
 		recovery = "Use Retry to publish the retained staging payload under the next available suffixed name."
 	case "PublicationRecoveryRequired", "PublicationPayloadMismatch", "PublicationPayloadMissing", "PublicationStateUncertain":

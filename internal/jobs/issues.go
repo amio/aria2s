@@ -17,6 +17,7 @@ var issueMetadata = map[string]IssueMetadata{
 	"FinalSeedPathMismatch":          {"error", "seed files are missing or changed; restore them to the download location and retry, or remove the task", []string{"retry", "remove"}},
 	"FinalSeedStartFailed":           {"error", "published payload could not be reseeded", []string{"retry", "remove"}},
 	"ManagedIdentityConflict":        {"error", "native execution does not match managed ownership", []string{"retry"}},
+	"PayloadStorageMismatch":         {"error", "payload and download location no longer belong to the same storage", []string{"retry", "remove"}},
 	"PublicationConflict":            {"error", "publication destination conflicts with another payload", []string{"retry"}},
 	"PublicationPayloadMismatch":     {"error", "payload identity changed during publication", []string{"retry"}},
 	"PublicationPayloadMissing":      {"error", "prepared payload is missing", []string{"retry"}},
@@ -27,8 +28,11 @@ var issueMetadata = map[string]IssueMetadata{
 	"RemovalFailed":                  {"error", "task removal is incomplete", []string{"remove"}},
 	"RestartCheckpointFailed":        {"warning", "aria2 restart state could not be saved", []string{"retry"}},
 	"RestartStateMissing":            {"error", "native restart state is missing or invalid", []string{"retry", "remove"}},
-	"StorageOffline":                 {"error", "registered storage is unavailable or changed", []string{"retry", "remove"}},
-	"StorageMismatch":                {"error", "registered storage identity changed", []string{"retry"}},
+	"StorageOffline":                 {"error", "registered storage is not mounted or cannot be accessed", []string{"retry", "remove"}},
+	"StorageMismatch":                {"error", "mounted storage does not match the registered storage", []string{"retry"}},
+	"StorageStateUnavailable":        {"error", "registered storage metadata is missing or unreadable", []string{"retry", "remove"}},
+	"TargetMismatch":                 {"error", "download location was moved, replaced, or now resolves elsewhere", []string{"retry", "remove"}},
+	"TargetUnavailable":              {"error", "download location is missing or cannot be accessed", []string{"retry", "remove"}},
 }
 
 func LookupIssue(code string) (IssueMetadata, bool) {

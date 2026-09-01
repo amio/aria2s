@@ -38,7 +38,9 @@ Non-goals:
 3. Rebinding is permitted only when the stable scope identity matches, the target resolves to the
    registered mount point with its registered object ID, and target and staging marker report the
    same current mount ID.
-4. A failed observation performs no durable identity update and remains `StorageOffline`.
+4. A failed storage-scope observation performs no durable identity update and reports
+   `StorageOffline` or `StorageMismatch`; target-path failures are reported separately as
+   `TargetUnavailable` or `TargetMismatch`.
 5. The storage-scope marker is normalized before its jobs; a crash between those atomic writes is
    recoverable because each later job observation independently proves marker and target facts.
 6. A job's target identity and any non-zero payload mount ID are normalized before publication,

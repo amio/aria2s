@@ -155,6 +155,13 @@ func TestRetryDoesNotReconnectOverMountedIdentityMismatch(t *testing.T) {
 	if len(connector.requests) != 0 {
 		t.Fatalf("identity mismatch triggered mount requests: %v", connector.requests)
 	}
+	loaded, _, err := repository.Load(job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.Issue == nil || loaded.Issue.Code != "StorageMismatch" {
+		t.Fatalf("mounted storage identity issue = %+v, want StorageMismatch", loaded.Issue)
+	}
 }
 
 func TestRetryReconnectWaitHonorsCancellation(t *testing.T) {

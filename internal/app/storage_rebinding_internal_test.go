@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -10,6 +11,43 @@ import (
 	"github.com/amio/aria2s/internal/jobs"
 	"github.com/amio/aria2s/internal/publication"
 )
+
+func TestStorageFailureIssueCodesRemainDistinct(t *testing.T) {
+	tests := []struct {
+		kind storageFailureKind
+		want string
+	}{
+		{storageUnavailable, "StorageOffline"},
+		{storageIdentityChanged, "StorageMismatch"},
+		{storageStateUnavailable, "StorageStateUnavailable"},
+		{targetUnavailable, "TargetUnavailable"},
+		{targetIdentityChanged, "TargetMismatch"},
+		{payloadStorageMismatch, "PayloadStorageMismatch"},
+	}
+	seenText := map[string]string{}
+	for _, test := range tests {
+		cause := errors.New("filesystem cause")
+		err := storageFailure(test.kind, cause)
+		got := storageFailureIssueCode(err)
+		if got != test.want {
+			t.Errorf("storage failure %d issue = %q, want %q", test.kind, got, test.want)
+		}
+		if !errors.Is(err, cause) {
+			t.Errorf("storage failure %d lost its cause", test.kind)
+		}
+		metadata, ok := jobs.LookupIssue(got)
+		if !ok || metadata.Text == "" {
+			t.Errorf("storage failure %d has no issue copy for %q", test.kind, got)
+		} else if previous, duplicate := seenText[metadata.Text]; duplicate {
+			t.Errorf("storage failures %s and %s share ambiguous copy %q", previous, got, metadata.Text)
+		} else {
+			seenText[metadata.Text] = got
+		}
+	}
+	if got := storageFailureIssueCode(errors.New("unclassified state failure")); got != "StorageStateUnavailable" {
+		t.Errorf("unclassified storage-boundary issue = %q, want StorageStateUnavailable", got)
+	}
+}
 
 func TestEnsureStorageScopeRebindsChangedMountID(t *testing.T) {
 	repository := jobs.New(t.TempDir())

@@ -108,7 +108,7 @@ func (app *App) reconcileLiveLocked(ctx context.Context, repository *jobs.Reposi
 	}
 	scope, job, token, err := rebindJobStorage(repository, job, token)
 	if err != nil {
-		return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("registered storage is unavailable or mismatched"), err))
+		return ReconcileResult{}, persistIssue(repository, job, token, storageFailureIssueCode(err), err)
 	}
 	if job.Payload.Location == jobs.PayloadStaging && job.Payload.FinalRoot != "" {
 		if job.Execution != nil {
@@ -386,9 +386,9 @@ func (app *App) reconcilePublishedLive(ctx context.Context, repository *jobs.Rep
 
 func (app *App) reconcileRemovedLive(ctx context.Context, repository *jobs.Repository, env liveEnvironment, job jobs.Job, token jobs.Token) (ReconcileResult, error) {
 	if job.Execution != nil {
-		scope, err := repository.LoadStorage(job.StorageID)
+		scope, err := loadRegisteredStorageScope(repository, job.StorageID)
 		if err != nil {
-			return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", err)
+			return ReconcileResult{}, persistIssue(repository, job, token, storageFailureIssueCode(err), err)
 		}
 		_, present, err := validatedManagedNative(ctx, env, job, scope)
 		if err != nil {
@@ -408,7 +408,7 @@ func (app *App) reconcileRemovedLive(ctx context.Context, repository *jobs.Repos
 	if job.Payload.Location == jobs.PayloadStaging {
 		scope, err := loadObservedStorageScope(repository, job.StorageID)
 		if err != nil {
-			return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("cannot clean changed storage"), err))
+			return ReconcileResult{}, persistIssue(repository, job, token, storageFailureIssueCode(err), errors.Join(errors.New("cannot clean changed storage"), err))
 		}
 		if err := removeWorkDir(jobs.WorkDir(scope, job.ID)); err != nil {
 			return ReconcileResult{}, persistIssue(repository, job, token, "RemovalFailed", err)
@@ -436,7 +436,7 @@ func (app *App) reconcileStartupLocked(ctx context.Context, repository *jobs.Rep
 	}
 	scope, job, token, err := rebindJobStorage(repository, job, token)
 	if err != nil {
-		return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("registered storage unavailable"), err))
+		return ReconcileResult{}, persistIssue(repository, job, token, storageFailureIssueCode(err), err)
 	}
 	if job.Payload.Location == jobs.PayloadStaging && job.Payload.FinalRoot != "" {
 		if job.Execution != nil {
@@ -539,7 +539,7 @@ func (app *App) reconcileRemovedStartup(repository *jobs.Repository, job jobs.Jo
 	if job.Payload.Location == jobs.PayloadStaging {
 		scope, err := loadObservedStorageScope(repository, job.StorageID)
 		if err != nil {
-			return ReconcileResult{}, persistIssue(repository, job, token, "StorageOffline", errors.Join(errors.New("cannot clean changed storage"), err))
+			return ReconcileResult{}, persistIssue(repository, job, token, storageFailureIssueCode(err), errors.Join(errors.New("cannot clean changed storage"), err))
 		}
 		if err := removeWorkDir(jobs.WorkDir(scope, job.ID)); err != nil {
 			return ReconcileResult{}, persistIssue(repository, job, token, "RemovalFailed", err)

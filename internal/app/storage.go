@@ -14,6 +14,74 @@ import (
 
 const storageMarkerName = ".aria2s-storage"
 
+type storageFailureKind uint8
+
+const (
+	storageUnavailable storageFailureKind = iota
+	storageIdentityChanged
+	storageStateUnavailable
+	targetUnavailable
+	targetIdentityChanged
+	payloadStorageMismatch
+)
+
+// storageFailureError preserves the filesystem cause while carrying the
+// product-level distinction that lifecycle issue presentation needs.
+type storageFailureError struct {
+	kind  storageFailureKind
+	cause error
+}
+
+func (err *storageFailureError) Error() string { return err.cause.Error() }
+func (err *storageFailureError) Unwrap() error { return err.cause }
+
+func storageFailure(kind storageFailureKind, cause error) error {
+	return &storageFailureError{kind: kind, cause: cause}
+}
+
+func storageFailureIssueCode(err error) string {
+	var failure *storageFailureError
+	if !errors.As(err, &failure) {
+		return "StorageStateUnavailable"
+	}
+	switch failure.kind {
+	case storageIdentityChanged:
+		return "StorageMismatch"
+	case storageStateUnavailable:
+		return "StorageStateUnavailable"
+	case targetUnavailable:
+		return "TargetUnavailable"
+	case targetIdentityChanged:
+		return "TargetMismatch"
+	case payloadStorageMismatch:
+		return "PayloadStorageMismatch"
+	default:
+		return "StorageOffline"
+	}
+}
+
+func loadRegisteredStorageScope(repository *jobs.Repository, id string) (jobs.StorageScope, error) {
+	scope, err := repository.LoadStorage(id)
+	if err != nil {
+		return jobs.StorageScope{}, storageFailure(storageStateUnavailable, fmt.Errorf("load registered storage state: %w", err))
+	}
+	return scope, nil
+}
+
+func registeredMountAvailable(path string) bool {
+	path = filepath.Clean(path)
+	identity, err := publication.Identify(path)
+	if err != nil {
+		return false
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return true
+	}
+	parentIdentity, err := publication.Identify(parent)
+	return err == nil && identity.MountID != parentIdentity.MountID
+}
+
 // observeStorageScope treats MountID as a mount-session fact. A native volume
 // UUID or portable marker is the durable storage identity; the legacy marker
 // object is accepted only once to bootstrap that stable identity.
@@ -21,27 +89,35 @@ func observeStorageScope(scope jobs.StorageScope) (jobs.StorageScope, bool, erro
 	stagingRoot := filepath.Join(scope.StagingAnchor, ".aria2s_staging", scope.ID)
 	observed, err := publication.InspectTarget(stagingRoot)
 	if err != nil {
-		return jobs.StorageScope{}, false, err
+		kind := storageUnavailable
+		if errors.Is(err, os.ErrNotExist) && registeredMountAvailable(scope.MountPoint) {
+			kind = storageIdentityChanged
+		}
+		return jobs.StorageScope{}, false, storageFailure(kind, fmt.Errorf("inspect registered staging root: %w", err))
 	}
 	needsStableBinding := scope.StableID == ""
 	if needsStableBinding {
 		if observed.Identity.ObjectID != scope.Marker.ObjectID {
-			return jobs.StorageScope{}, false, errors.New("legacy staging marker object changed")
+			return jobs.StorageScope{}, false, storageFailure(storageIdentityChanged, errors.New("legacy staging marker object changed"))
 		}
 	} else if strings.HasPrefix(scope.StableID, "aria2s-marker:") {
 		if err := validateStorageMarker(stagingRoot, scope.StableID); err != nil {
-			return jobs.StorageScope{}, false, err
+			kind := storageIdentityChanged
+			if errors.Is(err, os.ErrPermission) {
+				kind = storageUnavailable
+			}
+			return jobs.StorageScope{}, false, storageFailure(kind, fmt.Errorf("validate registered storage marker: %w", err))
 		}
 	} else {
 		stableID, supported, err := publication.StableStorageID(stagingRoot)
 		if err != nil {
-			return jobs.StorageScope{}, false, err
+			return jobs.StorageScope{}, false, storageFailure(storageUnavailable, fmt.Errorf("read registered volume identity: %w", err))
 		}
 		if !supported || stableID != scope.StableID {
-			return jobs.StorageScope{}, false, errors.New("registered volume identity changed")
+			return jobs.StorageScope{}, false, storageFailure(storageIdentityChanged, errors.New("registered volume identity changed"))
 		}
 		if observed.Identity.ObjectID != scope.Marker.ObjectID {
-			return jobs.StorageScope{}, false, errors.New("registered staging marker object changed")
+			return jobs.StorageScope{}, false, storageFailure(storageIdentityChanged, errors.New("registered staging marker object changed"))
 		}
 	}
 	scope.Marker = jobIdentity(observed.Identity)
@@ -70,19 +146,19 @@ func commitStorageObservation(repository *jobs.Repository, stored, observed jobs
 	if needsStableBinding {
 		observed, err = bindStableStorageIdentity(observed)
 		if err != nil {
-			return jobs.StorageScope{}, err
+			return jobs.StorageScope{}, storageFailure(storageUnavailable, fmt.Errorf("bind stable storage identity: %w", err))
 		}
 	}
 	if observed != stored {
 		if err := repository.SaveStorage(observed); err != nil {
-			return jobs.StorageScope{}, err
+			return jobs.StorageScope{}, storageFailure(storageStateUnavailable, fmt.Errorf("save registered storage state: %w", err))
 		}
 	}
 	return observed, nil
 }
 
 func loadObservedStorageScope(repository *jobs.Repository, id string) (jobs.StorageScope, error) {
-	stored, err := repository.LoadStorage(id)
+	stored, err := loadRegisteredStorageScope(repository, id)
 	if err != nil {
 		return jobs.StorageScope{}, err
 	}
@@ -97,7 +173,7 @@ func loadObservedStorageScope(repository *jobs.Repository, id string) (jobs.Stor
 // both the app-owned staging marker and the registered target independently
 // prove that the original storage scope is mounted at its original path.
 func rebindJobStorage(repository *jobs.Repository, job jobs.Job, token jobs.Token) (jobs.StorageScope, jobs.Job, jobs.Token, error) {
-	storedScope, err := repository.LoadStorage(job.StorageID)
+	storedScope, err := loadRegisteredStorageScope(repository, job.StorageID)
 	if err != nil {
 		return jobs.StorageScope{}, job, token, err
 	}
@@ -108,16 +184,16 @@ func rebindJobStorage(repository *jobs.Repository, job jobs.Job, token jobs.Toke
 
 	target, err := publication.InspectTarget(job.TargetDir)
 	if err != nil {
-		return jobs.StorageScope{}, job, token, err
+		return jobs.StorageScope{}, job, token, storageFailure(targetUnavailable, fmt.Errorf("inspect registered target directory: %w", err))
 	}
 	if filepath.Clean(target.MountPoint) != filepath.Clean(observedScope.MountPoint) {
-		return jobs.StorageScope{}, job, token, errors.New("registered target resolves to a different mount point")
+		return jobs.StorageScope{}, job, token, storageFailure(targetIdentityChanged, errors.New("registered target resolves to a different mount point"))
 	}
 	if target.Identity.MountID != observedScope.Marker.MountID {
-		return jobs.StorageScope{}, job, token, errors.New("registered target and staging marker are on different mounts")
+		return jobs.StorageScope{}, job, token, storageFailure(targetIdentityChanged, errors.New("registered target and staging marker are on different mounts"))
 	}
 	if target.Identity.ObjectID != job.TargetIdentity.ObjectID {
-		return jobs.StorageScope{}, job, token, errors.New("registered target object changed")
+		return jobs.StorageScope{}, job, token, storageFailure(targetIdentityChanged, errors.New("registered target object changed"))
 	}
 
 	normalized := job
@@ -127,7 +203,7 @@ func rebindJobStorage(repository *jobs.Repository, job jobs.Job, token jobs.Toke
 		if registeredPayloadMount != job.TargetIdentity.MountID &&
 			registeredPayloadMount != storedScope.Marker.MountID &&
 			registeredPayloadMount != target.Identity.MountID {
-			return jobs.StorageScope{}, job, token, errors.New("registered payload belongs to a different mount")
+			return jobs.StorageScope{}, job, token, storageFailure(payloadStorageMismatch, errors.New("registered payload belongs to a different mount"))
 		}
 		normalized.Payload.Identity.MountID = target.Identity.MountID
 	}
@@ -141,7 +217,7 @@ func rebindJobStorage(repository *jobs.Repository, job jobs.Job, token jobs.Toke
 	if normalized.TargetIdentity != job.TargetIdentity || normalized.Payload.Identity != job.Payload.Identity {
 		next, err := repository.SaveCAS(normalized, token)
 		if err != nil {
-			return jobs.StorageScope{}, job, token, err
+			return jobs.StorageScope{}, job, token, storageFailure(storageStateUnavailable, fmt.Errorf("save rebound job state: %w", err))
 		}
 		token = next
 	}
