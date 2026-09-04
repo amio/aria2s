@@ -531,8 +531,8 @@ func (model Model) listStats() string {
 		upTotal += item.UploadSpeed
 		statusCounts[item.CanonicalStatus]++
 	}
-	statusSummary := make([]string, 0, len(dashboardStatusOrder))
-	for _, status := range dashboardStatusOrder {
+	statusSummary := make([]string, 0, len(dashboardSummaryStatuses))
+	for _, status := range dashboardSummaryStatuses {
 		statusName := string(status)
 		if count := statusCounts[statusName]; count > 0 {
 			statusSummary = append(statusSummary, fmt.Sprintf("%s%d", strings.ToUpper(statusName[:1]), count))

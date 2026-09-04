@@ -802,26 +802,7 @@ func (model Model) items() []app.TaskRow {
 	items = append(items, model.snapshot.Active...)
 	items = append(items, model.snapshot.Waiting...)
 	items = append(items, model.snapshot.Stopped...)
-	// Stable ordering retains source order when the group comparator considers
-	// two rows equivalent.
-	sort.SliceStable(items, func(left, right int) bool {
-		leftRank, rightRank := downloadStatusRank(items[left]), downloadStatusRank(items[right])
-		if leftRank != rightRank {
-			return leftRank < rightRank
-		}
-		switch app.TaskStatus(items[left].CanonicalStatus) {
-		case app.StatusMetadata:
-			return newerAddedTask(items[left], items[right])
-		case app.StatusSeeding, app.StatusComplete:
-			return taskNameLess(items[left], items[right])
-		case app.StatusDownloading:
-			return lessCompleteTask(items[left], items[right])
-		case app.StatusPaused:
-			return moreCompleteTask(items[left], items[right])
-		default:
-			return false
-		}
-	})
+	sortTaskRows(items)
 	return pinPendingRemovals(items, model.pending)
 }
 
@@ -877,64 +858,6 @@ func (model *Model) removeSnapshotTask(gid string) {
 	model.snapshot.Waiting = remove(model.snapshot.Waiting)
 	model.snapshot.Stopped = remove(model.snapshot.Stopped)
 	model.list.Snapshot = model.snapshot
-}
-
-var dashboardStatusOrder = []app.TaskStatus{
-	app.StatusError,
-	app.StatusPaused,
-	app.StatusMetadata,
-	app.StatusDownloading,
-	app.StatusWaiting,
-	app.StatusSeeding,
-	app.StatusComplete,
-}
-
-func downloadStatusRank(download app.TaskRow) int {
-	status := app.TaskStatus(download.CanonicalStatus)
-	for rank, known := range dashboardStatusOrder {
-		if status == known {
-			return rank
-		}
-	}
-	// Unknown states remain visible near other exceptional states.
-	return len(dashboardStatusOrder) - 1
-}
-
-func newerAddedTask(left, right app.TaskRow) bool {
-	if left.AddedAt.IsZero() != right.AddedAt.IsZero() {
-		return !left.AddedAt.IsZero()
-	}
-	return left.AddedAt.After(right.AddedAt)
-}
-
-func taskNameLess(left, right app.TaskRow) bool {
-	return strings.ToLower(left.Name) < strings.ToLower(right.Name)
-}
-
-func moreCompleteTask(left, right app.TaskRow) bool {
-	leftKnown, rightKnown := left.TotalLength > 0, right.TotalLength > 0
-	if leftKnown != rightKnown {
-		return leftKnown
-	}
-	if !leftKnown {
-		return false
-	}
-	leftProgress := float64(left.CompletedLength) / float64(left.TotalLength)
-	rightProgress := float64(right.CompletedLength) / float64(right.TotalLength)
-	return leftProgress > rightProgress
-}
-
-func lessCompleteTask(left, right app.TaskRow) bool {
-	leftKnown, rightKnown := left.TotalLength > 0, right.TotalLength > 0
-	if leftKnown != rightKnown {
-		return leftKnown
-	}
-	if !leftKnown {
-		return false
-	}
-	leftProgress := float64(left.CompletedLength) / float64(left.TotalLength)
-	rightProgress := float64(right.CompletedLength) / float64(right.TotalLength)
-	return leftProgress < rightProgress
 }
 
 func (model Model) indexOf(gid string) int {
