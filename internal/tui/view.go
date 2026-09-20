@@ -747,9 +747,9 @@ func statusTone(status string) rgb {
 	case "seeding":
 		return rgb{99, 215, 222}
 	case "metadata":
-		return rgb{168, 180, 224}
-	case "waiting":
 		return rgb{225, 194, 105}
+	case "waiting":
+		return rgb{168, 180, 224}
 	case "paused":
 		return rgb{240, 160, 100}
 	case "complete":
