@@ -24,10 +24,10 @@ type taskGroup struct {
 // while a paused payload at 100% is a finished one waiting to seed.
 var dashboardGroups = []taskGroup{
 	{status: app.StatusError, before: keepSnapshotOrder},
+	{status: app.StatusWaiting, before: keepSnapshotOrder},
 	{status: app.StatusMetadata, before: newerAddedTask},
 	{status: app.StatusPaused, holds: partiallyDownloaded, before: moreCompleteTask},
 	{status: app.StatusDownloading, before: lessCompleteTask},
-	{status: app.StatusWaiting, before: keepSnapshotOrder},
 	{status: app.StatusSeeding, before: taskNameLess},
 	{status: app.StatusPaused, holds: fullyDownloaded, before: taskNameLess},
 	{status: app.StatusComplete, before: taskNameLess},

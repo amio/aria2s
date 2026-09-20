@@ -286,8 +286,8 @@ func TestDetailNavigationProjectsSelectedItemUntilDetailArrives(t *testing.T) {
 	model.mode = ModeDetail
 	model.loaded = true
 	model.snapshot.Active = []app.TaskRow{
-		{GID: "a", Name: "task-a", CanonicalStatus: "downloading"},
-		{GID: "b", Name: "task-b", CanonicalStatus: "waiting", CompletedLength: 25, TotalLength: 100, LengthKnown: true},
+		{GID: "a", Name: "task-a", CanonicalStatus: "downloading", CompletedLength: 10, TotalLength: 100, LengthKnown: true},
+		{GID: "b", Name: "task-b", CanonicalStatus: "downloading", CompletedLength: 25, TotalLength: 100, LengthKnown: true},
 	}
 	model.detailState = DetailState{
 		RequestedGID: "a",

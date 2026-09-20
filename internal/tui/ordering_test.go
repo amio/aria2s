@@ -25,7 +25,7 @@ func TestSortTaskRowsGroupsPausedByProgressAmongOtherStatuses(t *testing.T) {
 	sortTaskRows(rows)
 
 	want := []string{
-		"error", "metadata", "paused-partial", "downloading", "waiting",
+		"error", "waiting", "metadata", "paused-partial", "downloading",
 		"seeding", "paused-done", "complete", "unknown",
 	}
 	if got := taskGIDs(rows); !reflect.DeepEqual(got, want) {
@@ -54,10 +54,10 @@ func TestSortTaskRowsAppliesGroupLocalRules(t *testing.T) {
 	sortTaskRows(rows)
 
 	want := []string{
+		"queued-first", "queued-second",
 		"metadata-new", "metadata-old",
 		"paused-high", "paused-low",
 		"downloading-near", "downloading-far", "downloading-unsized",
-		"queued-first", "queued-second",
 		"seeding-a", "seeding-b",
 		"paused-done-a", "paused-done-b",
 	}
@@ -68,8 +68,8 @@ func TestSortTaskRowsAppliesGroupLocalRules(t *testing.T) {
 
 func TestDashboardSummaryStatusesListEachStatusOnce(t *testing.T) {
 	want := []app.TaskStatus{
-		app.StatusError, app.StatusMetadata, app.StatusPaused, app.StatusDownloading,
-		app.StatusWaiting, app.StatusSeeding, app.StatusComplete,
+		app.StatusError, app.StatusWaiting, app.StatusMetadata, app.StatusPaused,
+		app.StatusDownloading, app.StatusSeeding, app.StatusComplete,
 	}
 	if got := dashboardSummaryStatuses; !reflect.DeepEqual(got, want) {
 		t.Fatalf("summary statuses = %v, want %v", got, want)
