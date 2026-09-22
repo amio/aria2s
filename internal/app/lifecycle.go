@@ -750,7 +750,7 @@ func (app *App) AddManaged(ctx context.Context, request AddRequest) (ManagedAddR
 		return ManagedAddResult{}, err
 	}
 	result.Warning = reconciled.Warning
-	if err := app.recordDir(target.Path); result.Warning == nil && err != nil {
+	if err := app.recordDir(ctx, target.Path); result.Warning == nil && err != nil {
 		result.Warning = err
 	}
 	return result, nil

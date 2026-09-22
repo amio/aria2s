@@ -1035,6 +1035,109 @@ func TestRebindManagedControllerRefreshesIdentityWithoutRestart(t *testing.T) {
 	}
 }
 
+func TestRuntimeWorkflowsPreserveConcurrentStateUpdates(t *testing.T) {
+	for _, operation := range []string{"rebind", "install"} {
+		for _, concurrentChange := range []string{"preferences", "runtime"} {
+			t.Run(operation+"/"+concurrentChange, func(t *testing.T) {
+				root := t.TempDir()
+				servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+				aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+				current := writeInstalledStateAndConfig(t, servicePaths, aria2c)
+				current.ControllerIdentity = strings.Repeat("0", 64)
+				current.RecentDirs = []string{"/old", "/keep"}
+				if err := state.Save(servicePaths.StateFile, current); err != nil {
+					t.Fatal(err)
+				}
+				artifact, err := service.RenderLaunchAgent(current)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Dir(servicePaths.ServiceFile), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(servicePaths.ServiceFile, []byte(artifact), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				var application *app.App
+				application = newTestApp(servicePaths, aria2c, &recordingService{loaded: true, running: true}, fixedRPC{version: "1.37.0"}, app.Options{
+					RenderService: func(st state.State) (string, error) {
+						// Rendering occurs after the workflow captured its proposal.
+						// Commit an independent update before it writes that proposal.
+						if concurrentChange == "preferences" {
+							if err := application.DeleteRecentDir(context.Background(), "/old"); err != nil {
+								return "", err
+							}
+						} else if _, err := state.Update(context.Background(), servicePaths.StateFile, func(latest *state.State) error {
+							latest.RPCSecret = "concurrent-runtime-secret"
+							return nil
+						}); err != nil {
+							return "", err
+						}
+						return service.RenderLaunchAgent(st)
+					},
+				})
+				if operation == "rebind" {
+					_, err = application.RebindManagedController(context.Background())
+				} else {
+					err = application.InstallManaged(context.Background(), app.InstallRequest{})
+				}
+				if concurrentChange == "runtime" {
+					if !errors.Is(err, state.ErrRuntimeChanged) {
+						t.Fatalf("conflicting runtime proposal was not rejected: %v", err)
+					}
+				} else if err != nil {
+					t.Fatal(err)
+				}
+				updated, err := state.Load(servicePaths.StateFile)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if concurrentChange == "preferences" {
+					if !slices.Equal(updated.RecentDirs, []string{"/keep"}) || updated.ControllerIdentity == current.ControllerIdentity {
+						t.Fatalf("runtime or preference update lost: %#v", updated)
+					}
+				} else {
+					current.RPCSecret = "concurrent-runtime-secret"
+					if !reflect.DeepEqual(updated, current) {
+						t.Fatalf("rejected runtime proposal overwrote state: %#v", updated)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestInstallRejectsRuntimeChangedWhileResolvingDesiredState(t *testing.T) {
+	root := t.TempDir()
+	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
+	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
+	current := writeInstalledStateAndConfig(t, servicePaths, aria2c)
+	backend := &recordingService{}
+	application := app.New(app.Options{
+		Paths:   servicePaths,
+		Service: backend,
+		RPC:     fixedRPC{},
+		LookPath: func(string) (string, error) {
+			_, err := state.Update(context.Background(), servicePaths.StateFile, func(latest *state.State) error {
+				latest.RPCSecret = "concurrent-runtime-secret"
+				return nil
+			})
+			return aria2c, err
+		},
+	})
+	if err := application.InstallManaged(context.Background(), app.InstallRequest{}); !errors.Is(err, state.ErrRuntimeChanged) {
+		t.Fatalf("runtime baseline was refreshed after building the proposal: %v", err)
+	}
+	updated, err := state.Load(servicePaths.StateFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.RPCSecret = "concurrent-runtime-secret"
+	if !reflect.DeepEqual(updated, current) || len(backend.calls) != 0 {
+		t.Fatalf("conflicting install committed or started: state=%#v service=%v", updated, backend.calls)
+	}
+}
+
 func TestRebindManagedControllerReconcilesChangedServiceDefinition(t *testing.T) {
 	root := t.TempDir()
 	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))

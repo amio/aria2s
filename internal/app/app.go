@@ -236,18 +236,16 @@ func (app *App) RebindManagedController(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	if !serviceChanged && current.ServiceIdentity == serviceIdentity {
-		if current.ControllerPath != rebound.ControllerPath || current.ControllerIdentity != rebound.ControllerIdentity {
-			if err := state.Save(app.options.Paths.StateFile, rebound); err != nil {
-				return false, fmt.Errorf("save managed controller identity: %w", err)
-			}
+		if _, err := state.CommitRuntime(ctx, app.options.Paths.StateFile, &current, rebound); err != nil {
+			return false, fmt.Errorf("save managed controller identity: %w", err)
 		}
 		return true, nil
 	}
-	desired, err := app.desiredManagedState(current.Aria2cPath)
+	desired, err := app.desiredManagedState(current, current.Aria2cPath)
 	if err != nil {
 		return false, err
 	}
-	if _, err := app.reconcileManagedRuntime(ctx, desired); err != nil {
+	if _, err := app.reconcileManagedRuntime(ctx, &current, desired); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -257,11 +255,18 @@ func (app *App) InstallManaged(ctx context.Context, request InstallRequest) erro
 	if err := app.legacyInstallGate(ctx, request.DiscardLegacyTasks); err != nil {
 		return err
 	}
-	desired, err := app.desiredManagedState("")
+	current, err := state.Load(app.options.Paths.StateFile)
+	var expected *state.State
+	if err == nil {
+		expected = &current
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("load state: %w", err)
+	}
+	desired, err := app.desiredManagedState(current, "")
 	if err != nil {
 		return err
 	}
-	current, err := app.reconcileManagedRuntime(ctx, desired)
+	current, err = app.reconcileManagedRuntime(ctx, expected, desired)
 	if err != nil || !request.Start {
 		return err
 	}
@@ -271,7 +276,7 @@ func (app *App) InstallManaged(ctx context.Context, request InstallRequest) erro
 	return app.waitForRPC(ctx, current)
 }
 
-func (app *App) desiredManagedState(storedExecutable string) (state.State, error) {
+func (app *App) desiredManagedState(current state.State, storedExecutable string) (state.State, error) {
 	aria2c := storedExecutable
 	var err error
 	if !isExecutable(aria2c) {
@@ -282,14 +287,6 @@ func (app *App) desiredManagedState(storedExecutable string) (state.State, error
 		aria2c, err = app.options.Abs(aria2c)
 		if err != nil {
 			return state.State{}, err
-		}
-	}
-	current, err := state.Load(app.options.Paths.StateFile)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			current = state.State{}
-		} else {
-			return state.State{}, fmt.Errorf("load state: %w", err)
 		}
 	}
 	desired := current
@@ -321,25 +318,20 @@ func (app *App) desiredManagedState(storedExecutable string) (state.State, error
 	return desired, nil
 }
 
-func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State) (state.State, error) {
-	current, err := state.Load(app.options.Paths.StateFile)
-	stateExists := true
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			current, stateExists = state.State{}, false
-		} else {
-			return state.State{}, fmt.Errorf("load state: %w", err)
-		}
+func (app *App) reconcileManagedRuntime(ctx context.Context, expected *state.State, desired state.State) (state.State, error) {
+	var previous state.State
+	stateExists := expected != nil
+	if stateExists {
+		previous = *expected
 	}
-	previous := current
 	serviceFile, err := app.options.RenderService(desired)
 	if err != nil {
 		return state.State{}, err
 	}
 	serviceHash := sha256.Sum256([]byte(serviceFile))
 	desired.ServiceIdentity = hex.EncodeToString(serviceHash[:])
-	stateChanged := !stateExists || !sameState(current, desired)
-	current = desired
+	stateChanged := !stateExists || !previous.SameRuntime(desired)
+	current := desired
 	configNeedsCreate, err := fileMissing(app.options.Paths.ConfigFile)
 	if err != nil {
 		return state.State{}, err
@@ -365,7 +357,7 @@ func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State
 		return state.State{}, err
 	}
 	if !stateChanged && !configNeedsCreate && !sessionNeedsRepair && !logDirNeedsCreate && !serviceChanged && serviceLoaded {
-		return current, nil
+		return state.CommitRuntime(ctx, app.options.Paths.StateFile, expected, current)
 	}
 	if configNeedsCreate {
 		if err := aria2.WriteConfig(app.options.Paths.ConfigFile, aria2.DefaultConfig(app.defaultDownloadDir())); err != nil {
@@ -414,10 +406,9 @@ func (app *App) reconcileManagedRuntime(ctx context.Context, desired state.State
 	if err != nil || string(installedService) != serviceFile {
 		return state.State{}, errors.New("InstallIncomplete: service artifact readback does not match rendered configuration")
 	}
-	if stateChanged {
-		if err := state.Save(app.options.Paths.StateFile, current); err != nil {
-			return state.State{}, err
-		}
+	current, err = state.CommitRuntime(ctx, app.options.Paths.StateFile, expected, current)
+	if err != nil {
+		return state.State{}, err
 	}
 	if app.options.Service != nil {
 		if !serviceLoaded {
@@ -883,51 +874,42 @@ func (app *App) RecentDirs(context.Context) ([]string, error) {
 	return current.RecentDirs, nil
 }
 
-func (app *App) DeleteRecentDir(_ context.Context, dir string) error {
+func (app *App) DeleteRecentDir(ctx context.Context, dir string) error {
 	if dir == "" {
 		return nil
 	}
-	current, err := state.Load(app.options.Paths.StateFile)
-	if err != nil {
-		return err
-	}
-	filtered := make([]string, 0, len(current.RecentDirs))
-	removed := false
-	for _, existing := range current.RecentDirs {
-		if existing == dir {
-			removed = true
-			continue
+	_, err := state.Update(ctx, app.options.Paths.StateFile, func(current *state.State) error {
+		filtered := make([]string, 0, len(current.RecentDirs))
+		for _, existing := range current.RecentDirs {
+			if existing != dir {
+				filtered = append(filtered, existing)
+			}
 		}
-		filtered = append(filtered, existing)
-	}
-	if !removed {
+		current.RecentDirs = filtered
 		return nil
-	}
-	current.RecentDirs = filtered
-	return state.Save(app.options.Paths.StateFile, current)
+	})
+	return err
 }
 
-func (app *App) recordDir(dir string) error {
+func (app *App) recordDir(ctx context.Context, dir string) error {
 	if dir == "" {
 		return nil
 	}
-	current, err := state.Load(app.options.Paths.StateFile)
-	if err != nil {
-		return err
-	}
-	filtered := make([]string, 0, len(current.RecentDirs)+1)
-	for _, existing := range current.RecentDirs {
-		if existing != dir {
-			filtered = append(filtered, existing)
+	_, err := state.Update(ctx, app.options.Paths.StateFile, func(current *state.State) error {
+		filtered := []string{dir}
+		for _, existing := range current.RecentDirs {
+			if existing != dir {
+				filtered = append(filtered, existing)
+			}
 		}
-	}
-	filtered = append([]string{dir}, filtered...)
-	const recentDirLimit = 8
-	if len(filtered) > recentDirLimit {
-		filtered = filtered[:recentDirLimit]
-	}
-	current.RecentDirs = filtered
-	return state.Save(app.options.Paths.StateFile, current)
+		const recentDirLimit = 8
+		if len(filtered) > recentDirLimit {
+			filtered = filtered[:recentDirLimit]
+		}
+		current.RecentDirs = filtered
+		return nil
+	})
+	return err
 }
 
 func (app *App) Paths() paths.Paths {
@@ -1173,29 +1155,6 @@ func touch0600(path string) error {
 		return err
 	}
 	return atomicfile.SyncDirectory(filepath.Dir(path))
-}
-
-func sameState(left, right state.State) bool {
-	if left.RuntimeSchemaVersion != right.RuntimeSchemaVersion ||
-		left.ControllerPath != right.ControllerPath ||
-		left.ControllerIdentity != right.ControllerIdentity ||
-		left.ServiceIdentity != right.ServiceIdentity ||
-		left.Aria2cPath != right.Aria2cPath ||
-		left.RPCPort != right.RPCPort ||
-		left.RPCSecret != right.RPCSecret ||
-		left.SessionPath != right.SessionPath || left.StartupInputPath != right.StartupInputPath ||
-		left.LogPath != right.LogPath ||
-		left.ErrorLogPath != right.ErrorLogPath ||
-		left.ServiceName != right.ServiceName ||
-		len(left.RecentDirs) != len(right.RecentDirs) {
-		return false
-	}
-	for index := range left.RecentDirs {
-		if left.RecentDirs[index] != right.RecentDirs[index] {
-			return false
-		}
-	}
-	return true
 }
 
 func needs0600File(path string) bool {

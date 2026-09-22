@@ -64,6 +64,10 @@ preferences. Runtime changes derived from a prior identity must reject an
 incompatible concurrent identity change rather than silently overwrite it.
 Keep state locks short and context-cancellable; do not hold them over supervisor
 or RPC waits. Lock files are coordination artifacts, not a new data schema.
+The proposal retains the original runtime baseline through preparation and commit.
+This does not make service-artifact preparation and JSON publication one
+cross-file transaction: a conflicting runtime installer can require a subsequent
+explicit install to reconcile an already-prepared artifact.
 
 ### D. Installer verification
 
