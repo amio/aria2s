@@ -154,8 +154,9 @@ func customRootHelp(cmd *cobra.Command, _ []string) {
 
 	// Usage with inline comments.
 	fmt.Fprintln(w, "Usage:")
-	fmt.Fprintf(w, "  \033[1m%s\033[0m             Ensure setup/start, then open the dashboard\n", cmd.CommandPath())
+	fmt.Fprintf(w, "  \033[1m%s\033[0m             Open the dashboard; start the installed service if needed\n", cmd.CommandPath())
 	fmt.Fprintf(w, "  \033[1m%s\033[0m [command]   Run a management command\n", cmd.CommandPath())
+	fmt.Fprintf(w, "\nSetup or repair: %s install [--start]\n", cmd.CommandPath())
 
 	// Collect grouped commands and find max name length for alignment.
 	type groupEntry struct {

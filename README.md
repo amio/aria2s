@@ -37,14 +37,18 @@ rm "$(command -v aria2s)"  # remove the binary
 
 ```bash
 aria2s install --start     # install & launch the background service
-aria2s dashboard           # open the interactive terminal dashboard to manage downloads
+aria2s dashboard          # open the interactive terminal dashboard to manage downloads
 ```
 
-or simply:
+After installation, the daily entrypoint is:
 
 ```bash
-aria2s                     # ensure install/start, open the terminal dashboard
+aria2s                    # open the dashboard; start the installed service if needed
 ```
+
+`aria2s` and `aria2s dashboard` reuse the running managed service. If it is stopped,
+they validate and start the installed service. For first-time setup or incomplete
+installation, run `aria2s install` explicitly; add `--start` to launch it immediately.
 
 ## How it works
 
@@ -57,7 +61,7 @@ aria2s                     # ensure install/start, open the terminal dashboard
 
 | Command | What it does |
 |---------|-------------|
-| `aria2s` | Daily entrypoint: repair managed setup if needed, start the service, then open the responsive full-screen dashboard without blocking on RPC readiness. |
+| `aria2s` | Open the full-screen dashboard, reusing the running managed service or validating and starting the installed service without blocking on RPC readiness. Setup and repair require an explicit `aria2s install`. |
 | `aria2s install [--start]` | Set up `aria2c` as a background service through `launchd` on macOS or `systemd --user` on Linux. Re-running it reasserts the managed service state and writes a default `~/.aria2/aria2.conf` only when that file is missing. |
 | `aria2s uninstall` | Remove the registered background service. |
 | `aria2s start` / `stop` / `restart` | Control the background service. `start` returns immediately when the service is already healthy. Stop & restart save the session first. |
@@ -67,11 +71,15 @@ aria2s                     # ensure install/start, open the terminal dashboard
 | `aria2s version` / `-v` / `--version` | Print the aria2s version. |
 | `aria2s logs` | Print recent log output. |
 | `aria2s add <url-or-magnet>` | Submit a download via RPC — no need to remember the port or token. |
-| `aria2s dashboard` | Explicit dashboard entrypoint. Uses the same repair/start flow as bare `aria2s`; while aria2 reconnects, the UI stays interactive and preserves the last successful in-memory snapshot. |
+| `aria2s dashboard` | Same as bare `aria2s`. While aria2 reconnects, the UI stays interactive and preserves the last successful in-memory snapshot. |
 
 `aria2s` is a thin wrapper around `aria2c`: user-tuned download settings live in `~/.aria2/aria2.conf`, while the managed RPC and session flags are passed to `aria2c` through the service definition.
 
-The default config enables `bt-save-metadata` and `bt-load-saved-metadata` so BitTorrent downloads survive restarts without re-fetching magnet metadata. Managed staged torrents explicitly verify existing bytes when native resume proof is unavailable; only already-published final seeds use `bt-seed-unverified`. Since `install` never overwrites an existing `aria2.conf`, add the two metadata lines manually if your config predates them.
+Managed magnet downloads save metadata and reuse retained torrent metainfo during
+restart recovery, even when an existing `aria2.conf` lacks metadata settings. No manual
+metadata configuration is needed for managed downloads, and `install` preserves your
+existing config. Unfinished staged torrents verify existing bytes when native resume
+state is unavailable; only already-published final seeds use `bt-seed-unverified`.
 
 Dashboard reads are bounded, batched RPC requests. Slow or unavailable RPC never blocks
 navigation or quit, failed refreshes keep last-known-good rows visible, and mutations with an
@@ -86,18 +94,28 @@ make test         # run all tests
 
 Dashboard runtime and shortcut-key migration notes live in `docs/implemented/bubbletea-v2-upgrade.md`.
 
-Smoke-test in an isolated environment:
+Smoke-test in a dedicated OS test account or VM. A different `HOME` directory does not
+isolate the service: launchd labels and systemd unit names are shared within the same
+user account. On Linux, log in with a live `systemd --user` session.
 
-> Linux note: service startup still needs a live `systemd --user` session even when `HOME` is overridden for an isolated test directory.
+From a checkout in that test environment:
 
 ```bash
-TMP_HOME=$(mktemp -d)
-HOME="$TMP_HOME" ./bin/aria2s install --start
-HOME="$TMP_HOME" ./bin/aria2s status
-HOME="$TMP_HOME" ./bin/aria2s add https://example.com/file.zip
-HOME="$TMP_HOME" ./bin/aria2s uninstall
-rm -rf "$TMP_HOME"
+make build
+CANDIDATE="$(pwd)/bin/aria2s"
+"$CANDIDATE" install --start
+"$CANDIDATE" status
+"$CANDIDATE" dashboard
+# Add a small, known test download; check pause/resume, then quit the dashboard.
+"$CANDIDATE" restart
+"$CANDIDATE" dashboard
+# Confirm the task recovers and its completed payload is correct, then quit.
+"$CANDIDATE" uninstall
 ```
+
+Keep the candidate at the installed path while testing. After rebuilding or replacing
+it, rerun `"$CANDIDATE" install` to register its new identity before starting a stopped
+service. Uninstall removes the service registration; it leaves download data in place.
 
 ## License
 
