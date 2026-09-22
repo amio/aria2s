@@ -89,8 +89,6 @@ need_cmd() {
 
 need_cmd uname
 need_cmd mktemp
-need_cmd grep
-need_cmd sed
 need_cmd awk
 need_cmd tar
 
@@ -182,29 +180,36 @@ info "downloading ${URL}..."
 downloader "$URL" -o "${TMPDIR}/${TARBALL}" || err "failed to download ${TARBALL}"
 
 # --- verify checksum ---
-# macOS ships /sbin/sha256sum which looks like GNU sha256sum but does NOT
-# accept checksum lines on stdin with -c.  Use the native shasum on macOS
-# and the GNU-style sha256sum on Linux instead.
 info "verifying checksum..."
-downloader "$CHECKSUMS_URL" -o "${TMPDIR}/checksums.txt" 2>/dev/null \
-  || warn "could not download checksums file; skipping verification"
+downloader "$CHECKSUMS_URL" -o "${TMPDIR}/checksums.txt" \
+  || err "failed to download checksums file"
 
-if [ -f "${TMPDIR}/checksums.txt" ]; then
-  case "$OS" in
-    darwin)
-      EXPECTED="$(grep " ${TARBALL}$" "${TMPDIR}/checksums.txt" | awk '{print $1}')"
-      ACTUAL="$(shasum -a 256 "${TMPDIR}/${TARBALL}" | awk '{print $1}')"
-      [ "$EXPECTED" = "$ACTUAL" ] || err "checksum mismatch! expected ${EXPECTED}, got ${ACTUAL}"
-      ;;
-    linux)
-      # filter the single line we need so sha256sum -c only checks our file
-      grep " ${TARBALL}$" "${TMPDIR}/checksums.txt" > "${TMPDIR}/checksums_filtered.txt"
-      (cd "$TMPDIR" && sha256sum -c --quiet checksums_filtered.txt 2>/dev/null) \
-        || err "checksum verification failed"
-      ;;
-  esac
-  ok "checksum verified"
-fi
+EXPECTED="$(awk -v asset="$TARBALL" '
+  $2 == asset {
+    matches++
+    if (NF != 2 || length($1) != 64 || $1 ~ /[^0-9a-fA-F]/) invalid = 1
+    checksum = tolower($1)
+  }
+  END {
+    if (matches != 1 || invalid) exit 1
+    print checksum
+  }
+' "${TMPDIR}/checksums.txt")" \
+  || err "checksums file must contain exactly one valid SHA-256 entry for ${TARBALL}"
+
+case "$OS" in
+  darwin)
+    need_cmd shasum
+    ACTUAL="$(shasum -a 256 "${TMPDIR}/${TARBALL}")" || err "checksum verification failed"
+    ;;
+  linux)
+    need_cmd sha256sum
+    ACTUAL="$(sha256sum "${TMPDIR}/${TARBALL}")" || err "checksum verification failed"
+    ;;
+esac
+ACTUAL="${ACTUAL%% *}"
+[ "$EXPECTED" = "$ACTUAL" ] || err "checksum mismatch! expected ${EXPECTED}, got ${ACTUAL}"
+ok "checksum verified"
 
 # --- extract & install ---
 info "extracting..."
