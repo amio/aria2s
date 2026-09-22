@@ -1,5 +1,9 @@
 # Project maintenance: approved stage two
 
+Status: A–E implemented, independently reviewed, and committed. Automated
+validation passed at `2d7de73`; real-environment acceptance remains in
+[the maintenance validation report](maintenance-validation.md).
+
 ## Context and goals
 
 The whole-project maintenance audit found five confirmed defects at duplicated
@@ -29,7 +33,7 @@ while preserving the existing managed-download, Dashboard, and release workflows
 - Log presentation reads bounded tails while retaining its current output and
   missing-file behavior. Rotation remains a startup-time runtime responsibility.
 
-## Proposed solution and ownership
+## Implemented solution and ownership
 
 ### A. Managed transfer policy
 
@@ -116,7 +120,7 @@ and compilation on Darwin and Linux. Real launchd/systemd lifecycle, mounted
 storage, actual BitTorrent promotion/seeding, and Finder/file-manager behavior
 remain explicit manual checks.
 
-No persisted-data migration is planned. Existing JSON remains readable; rollback
+No persisted-data migration was required. Existing JSON remains readable; rollback
 retains format compatibility, although an older binary lacks the new concurrent
 update protection. Each item is a separate commit so it can be reviewed or
 reverted independently before deployment.
