@@ -45,7 +45,10 @@ submitted source was a magnet.
 
 Keep one accepted list snapshot and one full-detail cache indexed by stable JobID.
 Navigation and request/error/loading metadata remain separate from accepted data.
-Derive visible details from the requested task's cache and current row. Opening a
+Accepted list rows refresh cached live fields; a successful full detail from the
+same response is applied afterward, so an independent detail success is not
+overwritten by an older row when the list fails. Derive visible details from the
+requested task's cache, or project its row when no full detail exists. Opening a
 path must resolve the selected identity from that same source; if unavailable,
 fetch that identity explicitly. Remove synchronized snapshot/detail copies and
 derived flags where they no longer carry independent meaning.

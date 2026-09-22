@@ -57,7 +57,7 @@ func TestListHelpShowsOnlySelectedTaskActions(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 			if test.actions != nil {
-				model.snapshot.Active = []app.TaskRow{{GID: "g1", Actions: test.actions}}
+				model.list.Snapshot.Active = []app.TaskRow{{GID: "g1", Actions: test.actions}}
 			}
 			var dynamic []string
 			for _, segment := range model.listHelp() {
@@ -127,19 +127,19 @@ func TestStatusLabelsRenderCanonicalStatusWithoutAttributeOverrides(t *testing.T
 
 func TestDetailFilesTitleShowsFileCount(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.loaded = true
+	model.list.Attempted = true
 	model.width = 180
 	model.height = 40
 	model.mode = ModeDetail
-	model.detailState = DetailState{RequestedGID: "a", AppliedGID: "a", HasDetail: true}
-	model.detail = app.TaskDetail{
+	model.detailState = DetailState{RequestedGID: "a"}
+	model.detailCache["a"] = cachedTaskDetail{Detail: app.TaskDetail{
 		GID:  "a",
 		Name: "task-a",
 		Files: []app.TaskFile{
 			{Path: "/downloads/first", Length: 1},
 			{Path: "/downloads/second", Length: 1},
 		},
-	}
+	}}
 
 	view := ansi.Strip(model.View().Content)
 	if !strings.Contains(view, "Files (2):") {
@@ -149,12 +149,12 @@ func TestDetailFilesTitleShowsFileCount(t *testing.T) {
 
 func TestListStatsSummarizesOnlyPresentCanonicalStatuses(t *testing.T) {
 	model := Model{}
-	model.snapshot.Active = []app.TaskRow{
+	model.list.Snapshot.Active = []app.TaskRow{
 		{GID: "downloading", CanonicalStatus: "downloading"},
 		{GID: "seeding", CanonicalStatus: "seeding"},
 		{GID: "metadata", CanonicalStatus: "metadata"},
 	}
-	model.snapshot.Stopped = []app.TaskRow{
+	model.list.Snapshot.Stopped = []app.TaskRow{
 		{GID: "complete-first", CanonicalStatus: "complete"},
 		{GID: "complete-second", CanonicalStatus: "complete"},
 	}

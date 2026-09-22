@@ -167,9 +167,8 @@ func (model Model) addView() string {
 
 func (model Model) detailView() string {
 	width, height := model.viewport()
-	detail := model.detail
+	detail, detailReady := model.taskDetail(model.detailState.RequestedGID)
 	contentWidth := contentInner(width)
-	detailReady := model.detailState.AppliedGID == model.detailState.RequestedGID && model.detailState.HasDetail
 	if !detailReady && (model.detailState.LoadingVisible || detail.GID == "" || detail.GID != model.detailState.RequestedGID) {
 		message := "Loading details..."
 		if model.detailState.LastError != nil {
@@ -375,7 +374,7 @@ func (model Model) listBody(width int, height int) []string {
 		return body[:height]
 	}
 	if len(items) == 0 {
-		if !model.loaded || model.startupMessage != "" {
+		if !model.list.Attempted || model.startupMessage != "" {
 			return model.loadingBody(width, height)
 		}
 		if model.list.Attempted && !model.list.HasSnapshot && model.list.LastError != nil {
@@ -532,7 +531,7 @@ func (model Model) listStats() string {
 }
 
 func (model Model) detailStats() string {
-	return fmt.Sprintf("Detail view for %s", model.detail.GID)
+	return fmt.Sprintf("Detail view for %s", model.detailState.RequestedGID)
 }
 
 func (model Model) listHelp() []string {

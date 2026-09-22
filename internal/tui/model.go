@@ -1,6 +1,7 @@
 // Package tui renders app-owned canonical task state and dispatches only the
 // actions advertised for each row. It does not infer lifecycle ownership or
-// publication state from native aria2 buckets.
+// publication state from native aria2 buckets. ListState owns the accepted rows;
+// full details live only in the cache keyed by stable task identity.
 package tui
 
 import (
@@ -58,10 +59,6 @@ type ListState struct {
 
 type DetailState struct {
 	RequestedGID   string
-	AppliedGID     string
-	Detail         app.TaskDetail
-	HasDetail      bool
-	SourceResolved bool
 	LoadingVisible bool
 	LoadingToken   uint64
 	LastError      error
@@ -114,16 +111,11 @@ type Model struct {
 	openPending     bool
 	desiredGID      string
 	lastUnknownAdd  *addIntent
-	snapshot        app.TaskSnapshot
 	selected        int
 	width           int
 	height          int
-	stoppedPage     int
-	stoppedLimit    int
 	addForm         AddForm
-	detail          app.TaskDetail
 	detailScroll    int
-	loaded          bool
 	loadingFrame    int
 	startupMessage  string
 	version         string
@@ -188,7 +180,7 @@ func NewModel(ctx context.Context, service DashboardService, refreshInterval tim
 	if version == "" {
 		version = "dev"
 	}
-	return Model{ctx: ctx, service: service, refreshInterval: refreshInterval, mode: ModeList, stoppedLimit: 100, version: version, pending: make(map[string]pendingAction), actionErrors: make(map[string]error), detailCache: make(map[string]cachedTaskDetail), refreshState: RefreshState{Generation: 1, InFlight: true}, list: ListState{Requested: app.DashboardListWindow{WaitingLimit: 100, StoppedLimit: 100}}}
+	return Model{ctx: ctx, service: service, refreshInterval: refreshInterval, mode: ModeList, version: version, pending: make(map[string]pendingAction), actionErrors: make(map[string]error), detailCache: make(map[string]cachedTaskDetail), refreshState: RefreshState{Generation: 1, InFlight: true}, list: ListState{Requested: app.DashboardListWindow{WaitingLimit: 100, StoppedLimit: 100}}}
 }
 
 func (model Model) Init() tea.Cmd {
@@ -211,14 +203,15 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		model.startupMessage = msg.message
 		return model, startupStatusTick(model.service)
 	case detailLoadingMsg:
+		_, hasDetail := model.detailCache[msg.gid]
 		if msg.token != model.detailState.LoadingToken ||
 			msg.gid != model.detailState.RequestedGID ||
-			model.detailState.AppliedGID == msg.gid && model.detailState.HasDetail {
+			hasDetail {
 			return model, nil
 		}
 		model.detailState.LoadingVisible = true
 	case loadingTickMsg:
-		if model.loaded && model.startupMessage == "" {
+		if model.list.Attempted && model.startupMessage == "" {
 			return model, nil
 		}
 		model.loadingFrame++
@@ -259,10 +252,8 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			model.desiredGID = msg.replacement
 			if model.mode == ModeDetail {
 				model.detailState.RequestedGID = msg.replacement
-				model.detailState.SourceResolved = false
 				model.detailState.LastError = nil
 				model.detailState.SourceError = nil
-				model.detail = app.TaskDetail{}
 			}
 		}
 		feedbackGID := msg.gid
@@ -327,10 +318,11 @@ func (model Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (model Model) query() app.DashboardQuery {
 	query := app.DashboardQuery{List: model.list.Requested, DetailGID: model.detailState.RequestedGID}
-	if cached, ok := model.detailCache[query.DetailGID]; ok && cached.SourceResolved && time.Since(cached.UpdatedAt) < detailCacheFreshFor {
+	cached := model.detailCache[query.DetailGID]
+	if cached.SourceResolved && time.Since(cached.UpdatedAt) < detailCacheFreshFor {
 		query.DetailGID = ""
 	}
-	query.ResolveDetailSource = query.DetailGID != "" && (model.detailState.AppliedGID != query.DetailGID || !model.detailState.SourceResolved)
+	query.ResolveDetailSource = query.DetailGID != "" && !cached.SourceResolved
 	return query
 }
 
@@ -355,10 +347,8 @@ func (model Model) snapshotCmd(generation uint64, query app.DashboardQuery) tea.
 
 func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 	model.refreshState.InFlight = false
-	model.retainSnapshotDetail(&msg)
 	current := msg.generation == model.refreshState.Generation
 	if current {
-		model.loaded = true
 		model.list.Attempted = true
 		if msg.err != nil {
 			model.list.LastError = msg.err
@@ -376,7 +366,7 @@ func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 				model.list.LastError = msg.read.ListErr
 			} else {
 				selectedGID := model.Selected().GID
-				model.list.Snapshot, model.snapshot = msg.read.Downloads, msg.read.Downloads
+				model.list.Snapshot = msg.read.Downloads
 				model.list.Applied, model.list.HasSnapshot, model.list.LastError = msg.query.List, true, nil
 				model.list.LastSuccessAt = time.Now()
 				if model.desiredGID != "" {
@@ -385,17 +375,15 @@ func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 					}
 				}
 				model.selected = model.indexOf(selectedGID)
-				model.refreshCachedDetailFromRow()
+				model.refreshCachedDetailsFromRows()
 			}
+			// Full details succeed independently of the list. Apply them after row
+			// updates so an older accepted row cannot replace a fresh detail read.
+			model.retainSnapshotDetail(msg)
 			if msg.query.DetailGID != "" {
 				model.detailState.LastError = msg.read.DetailErr
 				if msg.read.Detail != nil {
-					model.detailState.Detail, model.detail = *msg.read.Detail, *msg.read.Detail
-					model.detailState.AppliedGID, model.detailState.HasDetail = msg.query.DetailGID, true
 					model.detailState.LoadingVisible = false
-					if cached, ok := model.detailCache[msg.query.DetailGID]; ok {
-						model.detailState.SourceResolved = cached.SourceResolved
-					}
 				} else if msg.read.DetailErr != nil {
 					model.detailState.LoadingVisible = true
 				}
@@ -403,12 +391,14 @@ func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 				// already carry files/magnet; completed downloads often permanently answer
 				// "No URI data is available", which must not retry every poll as SOURCE noise.
 				model.detailState.SourceError = msg.read.DetailSourceErr
-				if msg.read.Detail != nil && model.detailState.SourceResolved {
+				if msg.read.Detail != nil && model.detailCache[msg.query.DetailGID].SourceResolved {
 					model.detailState.SourceError = nil
 				}
 				// Transient getUris faults with empty PrimaryURI keep SourceError and retry.
 			}
 		}
+	} else {
+		model.retainSnapshotDetail(msg)
 	}
 	if model.refreshState.Queued {
 		model.refreshState.Queued = false
@@ -495,14 +485,12 @@ func (model Model) handleListKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		return model.flashInapplicable("remove", model.Selected().CanonicalStatus)
 	case key.Matches(msg, dashboardKeys.List.NextPage):
-		model.stoppedPage++
-		model.list.Requested.StoppedOffset = model.stoppedPage * model.stoppedLimit
+		model.list.Requested.StoppedOffset += model.list.Requested.StoppedLimit
 		model.refreshState.Generation++
 		return model.requestRefresh(true)
 	case key.Matches(msg, dashboardKeys.List.PrevPage):
-		if model.stoppedPage > 0 {
-			model.stoppedPage--
-			model.list.Requested.StoppedOffset = model.stoppedPage * model.stoppedLimit
+		if model.list.Requested.StoppedOffset > 0 {
+			model.list.Requested.StoppedOffset = max(0, model.list.Requested.StoppedOffset-model.list.Requested.StoppedLimit)
 			model.refreshState.Generation++
 			return model.requestRefresh(true)
 		}
@@ -609,23 +597,13 @@ func (model Model) openDetailAt(index int) (tea.Model, tea.Cmd) {
 		return model, nil
 	}
 	model.selected, model.mode, model.detailScroll = index, ModeDetail, 0
-	selected := items[index]
-	gid := selected.GID
+	gid := items[index].GID
 	if model.detailState.RequestedGID != gid {
-		model.detailState.RequestedGID, model.detailState.SourceResolved, model.detailState.LastError, model.detailState.SourceError = gid, false, nil, nil
+		model.detailState.RequestedGID, model.detailState.LastError, model.detailState.SourceError = gid, nil, nil
 		model.detailState.LoadingVisible = false
 		model.detailState.LoadingToken++
 		model.refreshState.Generation++
-		if cached, ok := model.detailCache[gid]; ok {
-			model.detail = cached.Detail
-			model.detailState.AppliedGID, model.detailState.HasDetail = gid, true
-			model.detailState.Detail = model.detail
-			model.detailState.SourceResolved = cached.SourceResolved
-		} else if model.detailState.AppliedGID == gid && model.detailState.HasDetail {
-			model.detail = model.detailState.Detail
-		} else {
-			model.detail = projectDownloadDetail(selected)
-		}
+
 		token := model.detailState.LoadingToken
 		updated, refreshCmd := model.requestRefresh(true)
 		model = updated.(Model)
@@ -636,8 +614,8 @@ func (model Model) openDetailAt(index int) (tea.Model, tea.Cmd) {
 
 // retainSnapshotDetail preserves independently valid detail reads even when
 // navigation has already advanced the model generation. Only the current
-// generation may apply list or detail state to the visible page.
-func (model *Model) retainSnapshotDetail(msg *snapshotResultMsg) {
+// generation may replace the list snapshot or update request feedback.
+func (model *Model) retainSnapshotDetail(msg snapshotResultMsg) {
 	if msg.err != nil || msg.query.DetailGID == "" || msg.read.Detail == nil {
 		return
 	}
@@ -658,18 +636,29 @@ func (model *Model) retainSnapshotDetail(msg *snapshotResultMsg) {
 		entry.SourceResolved = true
 	}
 	model.detailCache[gid] = entry
-	msg.read.Detail = &entry.Detail
 }
 
-func (model *Model) refreshCachedDetailFromRow() {
-	row := model.Selected()
-	cached, ok := model.detailCache[model.detailState.RequestedGID]
-	if !ok || row.GID != model.detailState.RequestedGID {
-		return
+func (model *Model) refreshCachedDetailsFromRows() {
+	for _, row := range model.items() {
+		if cached, ok := model.detailCache[row.GID]; ok {
+			cached.Detail = mergeDetailRow(row, cached.Detail)
+			model.detailCache[row.GID] = cached
+		}
 	}
-	cached.Detail = mergeDetailRow(row, cached.Detail)
-	model.detailCache[row.GID] = cached
-	model.detailState.Detail, model.detail = cached.Detail, cached.Detail
+}
+
+// taskDetail resolves data by stable task identity. A projected row is useful
+// for presentation but never proves file-level data is available to Open.
+func (model Model) taskDetail(gid string) (app.TaskDetail, bool) {
+	if cached, ok := model.detailCache[gid]; ok {
+		return cached.Detail, true
+	}
+	for _, row := range model.items() {
+		if row.GID == gid {
+			return projectDownloadDetail(row), false
+		}
+	}
+	return app.TaskDetail{}, false
 }
 
 func mergeDetailRow(row app.TaskRow, detail app.TaskDetail) app.TaskDetail {
@@ -682,9 +671,8 @@ func mergeDetailRow(row app.TaskRow, detail app.TaskDetail) app.TaskDetail {
 }
 
 // projectDownloadDetail keeps detail navigation visually stable while the
-// selected task's on-demand fields are still loading. AppliedGID and HasDetail
-// continue to describe only authoritative RPC detail, so consumers that need
-// file-level data still wait for or fetch the full payload.
+// selected task's on-demand fields are still loading. Only full RPC details
+// enter the cache; projection never makes file-level data authoritative.
 func projectDownloadDetail(download app.TaskRow) app.TaskDetail {
 	return app.TaskDetail{
 		GID:             download.GID,
@@ -753,12 +741,14 @@ func (model Model) startOpen() (tea.Model, tea.Cmd) {
 		return model, nil
 	}
 	model.openPending = true
+	// Commands run outside Update; capture the selected value before returning,
+	// rather than reading the shared cache while a later message updates it.
+	detail, full := model.taskDetail(gid)
 	return model, func() tea.Msg {
 		ctx, cancel := context.WithTimeout(model.ctx, localHelperTimeout)
 		defer cancel()
-		detail := model.detail
 		var err error
-		if model.detailState.AppliedGID != gid || !model.detailState.HasDetail {
+		if !full {
 			detail, err = model.service.TaskDetail(ctx, gid)
 		}
 		if err == nil {
@@ -797,10 +787,10 @@ func (model Model) handleClipboardAdd(msg clipboardContentMsg) (tea.Model, tea.C
 }
 
 func (model Model) items() []app.TaskRow {
-	items := make([]app.TaskRow, 0, len(model.snapshot.Active)+len(model.snapshot.Waiting)+len(model.snapshot.Stopped))
-	items = append(items, model.snapshot.Active...)
-	items = append(items, model.snapshot.Waiting...)
-	items = append(items, model.snapshot.Stopped...)
+	items := make([]app.TaskRow, 0, len(model.list.Snapshot.Active)+len(model.list.Snapshot.Waiting)+len(model.list.Snapshot.Stopped))
+	items = append(items, model.list.Snapshot.Active...)
+	items = append(items, model.list.Snapshot.Waiting...)
+	items = append(items, model.list.Snapshot.Stopped...)
 	sortTaskRows(items)
 	return pinPendingRemovals(items, model.pending)
 }
@@ -853,10 +843,9 @@ func (model *Model) removeSnapshotTask(gid string) {
 		}
 		return rows
 	}
-	model.snapshot.Active = remove(model.snapshot.Active)
-	model.snapshot.Waiting = remove(model.snapshot.Waiting)
-	model.snapshot.Stopped = remove(model.snapshot.Stopped)
-	model.list.Snapshot = model.snapshot
+	model.list.Snapshot.Active = remove(model.list.Snapshot.Active)
+	model.list.Snapshot.Waiting = remove(model.list.Snapshot.Waiting)
+	model.list.Snapshot.Stopped = remove(model.list.Snapshot.Stopped)
 }
 
 func (model Model) indexOf(gid string) int {

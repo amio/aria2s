@@ -3,6 +3,8 @@ package tui
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -28,6 +30,7 @@ type fakeService struct {
 	deletedRecentDirs  []string
 	deleteRecentDirErr error
 	snapshotFunc       func(context.Context, app.DashboardQuery) (app.DashboardRead, error)
+	taskDetailFunc     func(context.Context, string) (app.TaskDetail, error)
 }
 
 type presentableTestError struct{}
@@ -56,7 +59,10 @@ func (service *fakeService) Snapshot(ctx context.Context, query app.DashboardQue
 	service.reads = service.reads[1:]
 	return read, nil
 }
-func (*fakeService) TaskDetail(context.Context, string) (app.TaskDetail, error) {
+func (service *fakeService) TaskDetail(ctx context.Context, gid string) (app.TaskDetail, error) {
+	if service.taskDetailFunc != nil {
+		return service.taskDetailFunc(ctx, gid)
+	}
 	return app.TaskDetail{}, nil
 }
 func (service *fakeService) AddURI(context.Context, string, aria2.AddOptions) (app.AddResult, error) {
@@ -131,37 +137,125 @@ func TestPartialListFailurePreservesLastKnownGood(t *testing.T) {
 	}
 }
 
+func TestFailedPageRequestPreservesAppliedPageAndSelection(t *testing.T) {
+	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	query := model.query()
+	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: query, read: app.DashboardRead{
+		Downloads: app.TaskSnapshot{Stopped: []app.TaskRow{{GID: "a"}, {GID: "b"}}},
+	}})
+	model = updated.(Model)
+	updated, _ = model.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
+	model = updated.(Model)
+	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'n', Text: "n"})
+	model = updated.(Model)
+	if cmd == nil || model.list.Requested.StoppedOffset != 100 || model.list.Applied.StoppedOffset != 0 {
+		t.Fatalf("next page did not retain the applied window: %+v", model.list)
+	}
+	updated, _ = model.Update(snapshotResultMsg{generation: model.refreshState.Generation, query: model.query(), read: app.DashboardRead{ListErr: errors.New("unavailable")}})
+	model = updated.(Model)
+	if model.list.Applied.StoppedOffset != 0 || model.Selected().GID != "b" {
+		t.Fatalf("failed page replaced accepted data: page=%+v selection=%+v", model.list.Applied, model.Selected())
+	}
+	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'b', Text: "b"})
+	model = updated.(Model)
+	if cmd == nil || model.list.Requested.StoppedOffset != 0 || model.Selected().GID != "b" {
+		t.Fatalf("previous page did not return to the first window: %+v", model.list)
+	}
+}
+
+func TestOpenUsesSelectedTaskAfterDetailNavigation(t *testing.T) {
+	dir := t.TempDir()
+	for _, name := range []string{"a", "b"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oldCommand, oldOS := startExternalCommand, runtimeGOOS
+	t.Cleanup(func() { startExternalCommand, runtimeGOOS = oldCommand, oldOS })
+	runtimeGOOS = "darwin"
+	for _, selected := range []string{"a", "b"} {
+		t.Run(selected, func(t *testing.T) {
+			var opened []string
+			startExternalCommand = func(_ context.Context, command string, args ...string) error {
+				opened = append([]string{command}, args...)
+				return nil
+			}
+			var fetched []string
+			service := &fakeService{taskDetailFunc: func(_ context.Context, gid string) (app.TaskDetail, error) {
+				fetched = append(fetched, gid)
+				return app.TaskDetail{GID: gid, Files: []app.TaskFile{{Path: filepath.Join(dir, gid)}}}, nil
+			}}
+			model := NewModel(context.Background(), service, time.Second, "dev")
+			rows := app.TaskSnapshot{Active: []app.TaskRow{{GID: "a", Name: "a", Dir: dir}, {GID: "b", Name: "b", Dir: dir}}}
+			updated, _ := model.Update(snapshotResultMsg{generation: 1, query: model.query(), read: app.DashboardRead{Downloads: rows}})
+			model = updated.(Model)
+			updated, _ = model.openDetailAt(0)
+			model = updated.(Model)
+			detail := app.TaskDetail{GID: "a", Files: []app.TaskFile{{Path: filepath.Join(dir, "a")}}}
+			updated, _ = model.Update(snapshotResultMsg{generation: model.refreshState.Generation, query: model.query(), read: app.DashboardRead{Downloads: rows, Detail: &detail}})
+			model = updated.(Model)
+			for _, key := range []tea.KeyPressMsg{{Code: 'j', Text: "j"}, {Code: tea.KeyEsc}} {
+				updated, _ = model.Update(key)
+				model = updated.(Model)
+			}
+			if selected == "a" {
+				updated, _ = model.Update(tea.KeyPressMsg{Code: 'k', Text: "k"})
+				model = updated.(Model)
+			}
+			if model.Selected().GID != selected || model.mode != ModeList {
+				t.Fatalf("navigation selected %q in mode %q", model.Selected().GID, model.mode)
+			}
+			_, cmd := model.Update(tea.KeyPressMsg{Code: 'o', Text: "o"})
+			if cmd == nil {
+				t.Fatal("Open command missing")
+			}
+			// A later cache update must not redirect an already dispatched Open.
+			model.detailCache[selected] = cachedTaskDetail{Detail: app.TaskDetail{GID: selected, Files: []app.TaskFile{{Path: filepath.Join(dir, "other")}}}}
+			if result := cmd().(openResultMsg); result.err != nil {
+				t.Fatal(result.err)
+			}
+			if want := []string{"open", "-R", filepath.Join(dir, selected)}; !reflect.DeepEqual(opened, want) {
+				t.Fatalf("Open selected %q: got %q, want %q", selected, opened, want)
+			}
+			if selected == "a" && len(fetched) != 0 || selected == "b" && !reflect.DeepEqual(fetched, []string{"b"}) {
+				t.Fatalf("full detail reads = %q for selected %q", fetched, selected)
+			}
+		})
+	}
+}
+
 func TestDetailResultCanApplyWhenListFails(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
+	model.list.Snapshot.Active = []app.TaskRow{{GID: "a", Name: "old name", CanonicalStatus: "downloading", CompletedLength: 1}}
 	model.detailState.RequestedGID = "a"
 	query := model.query()
-	detail := app.TaskDetail{GID: "a", Name: "task"}
+	detail := app.TaskDetail{GID: "a", Name: "task", CanonicalStatus: "paused", CompletedLength: 20}
 	msg := snapshotResultMsg{generation: 1, query: query, read: app.DashboardRead{ListErr: errors.New("list"), Detail: &detail}}
 	updated, _ := model.Update(msg)
 	model = updated.(Model)
-	if model.detailState.AppliedGID != "a" || model.detail.Name != "task" {
-		t.Fatal("valid detail was discarded")
+	got, full := model.taskDetail("a")
+	if !full || got.Name != "task" || got.CanonicalStatus != "paused" || got.CompletedLength != 20 {
+		t.Fatalf("fresh detail was replaced by the old row: %+v", got)
 	}
 }
 
 func TestDetailSourceFailureRetainsPriorSourceForSameGID(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.detailState = DetailState{RequestedGID: "a", AppliedGID: "a", HasDetail: true, SourceResolved: false, Detail: app.TaskDetail{GID: "a", PrimaryURI: "magnet:?old"}}
-	model.detail = model.detailState.Detail
-	model.detailCache["a"] = cachedTaskDetail{Detail: model.detailState.Detail}
+	model.detailState = DetailState{RequestedGID: "a"}
+	model.detailCache["a"] = cachedTaskDetail{Detail: app.TaskDetail{GID: "a", PrimaryURI: "magnet:?old"}}
 	detail := app.TaskDetail{GID: "a"}
 	query := model.query()
 	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: query, read: app.DashboardRead{Downloads: app.TaskSnapshot{}, Detail: &detail, DetailSourceErr: errors.New("source timeout")}})
 	model = updated.(Model)
 	// Prior source is kept; known PrimaryURI means getUris fault is not user-facing SOURCE noise.
-	if model.detail.PrimaryURI != "magnet:?old" || model.detailState.SourceError != nil || !model.detailState.SourceResolved {
+	if got, _ := model.taskDetail("a"); got.PrimaryURI != "magnet:?old" || model.detailState.SourceError != nil || !model.detailCache["a"].SourceResolved {
 		t.Fatalf("source partial merge failed: %#v", model.detailState)
 	}
 }
 
 func TestDetailAbsentURIDataStopsSourceRetry(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.detailState = DetailState{RequestedGID: "a", SourceResolved: false}
+	model.detailState = DetailState{RequestedGID: "a"}
 	detail := app.TaskDetail{GID: "a"}
 	query := model.query()
 	if !query.ResolveDetailSource {
@@ -170,7 +264,7 @@ func TestDetailAbsentURIDataStopsSourceRetry(t *testing.T) {
 	sourceErr := &aria2.RPCError{Method: "aria2.getUris", Code: 1, Message: "No URI data is available for GID#a"}
 	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: query, read: app.DashboardRead{Downloads: app.TaskSnapshot{}, Detail: &detail, DetailSourceErr: sourceErr}})
 	model = updated.(Model)
-	if model.detailState.SourceError != nil || !model.detailState.SourceResolved {
+	if model.detailState.SourceError != nil || !model.detailCache["a"].SourceResolved {
 		t.Fatalf("permanent no-URI answer should resolve silently: %#v", model.detailState)
 	}
 	if model.query().ResolveDetailSource {
@@ -180,12 +274,12 @@ func TestDetailAbsentURIDataStopsSourceRetry(t *testing.T) {
 
 func TestDetailTransientSourceFaultRetries(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.detailState = DetailState{RequestedGID: "a", SourceResolved: false}
+	model.detailState = DetailState{RequestedGID: "a"}
 	detail := app.TaskDetail{GID: "a"}
 	query := model.query()
 	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: query, read: app.DashboardRead{Downloads: app.TaskSnapshot{}, Detail: &detail, DetailSourceErr: errors.New("source timeout")}})
 	model = updated.(Model)
-	if model.detailState.SourceError == nil || model.detailState.SourceResolved {
+	if model.detailState.SourceError == nil || model.detailCache["a"].SourceResolved {
 		t.Fatalf("transient source fault should surface and retry: %#v", model.detailState)
 	}
 	if !model.query().ResolveDetailSource {
@@ -195,7 +289,7 @@ func TestDetailTransientSourceFaultRetries(t *testing.T) {
 
 func TestUnknownMutationDoesNotRepeatAndQueuesReconciliation(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.snapshot.Active = []app.TaskRow{{GID: "a", Status: "active"}}
+	model.list.Snapshot.Active = []app.TaskRow{{GID: "a", Status: "active"}}
 	model.refreshState.InFlight = false
 	updated, cmd := model.startAction(actionPause)
 	model = updated.(Model)
@@ -224,7 +318,7 @@ func TestOutcomeMessageUsesUserFacingIssueText(t *testing.T) {
 
 func TestNavigationAndQuitRemainAvailableDuringRead(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.snapshot.Active = []app.TaskRow{{GID: "a"}, {GID: "b"}}
+	model.list.Snapshot.Active = []app.TaskRow{{GID: "a"}, {GID: "b"}}
 	updated, _ := model.Update(tea.KeyPressMsg{Code: tea.KeyDown})
 	model = updated.(Model)
 	if model.Selected().GID != "b" {
@@ -284,32 +378,28 @@ func TestAddCtrlDKeepsRecentWhenPersistenceFails(t *testing.T) {
 func TestDetailNavigationProjectsSelectedItemUntilDetailArrives(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.mode = ModeDetail
-	model.loaded = true
-	model.snapshot.Active = []app.TaskRow{
+	model.list.Attempted = true
+	model.list.Snapshot.Active = []app.TaskRow{
 		{GID: "a", Name: "task-a", CanonicalStatus: "downloading", CompletedLength: 10, TotalLength: 100, LengthKnown: true},
 		{GID: "b", Name: "task-b", CanonicalStatus: "downloading", CompletedLength: 25, TotalLength: 100, LengthKnown: true},
 	}
-	model.detailState = DetailState{
-		RequestedGID: "a",
-		AppliedGID:   "a",
-		Detail:       app.TaskDetail{GID: "a", Name: "task-a", CanonicalStatus: "downloading"},
-		HasDetail:    true,
-	}
-	model.detail = model.detailState.Detail
+	model.detailState = DetailState{RequestedGID: "a"}
+	model.detailCache["a"] = cachedTaskDetail{Detail: app.TaskDetail{GID: "a", Name: "task-a", CanonicalStatus: "downloading"}}
 	model.refreshState.InFlight = false
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
 	model = updated.(Model)
 
-	if model.detail.GID != "b" || model.detail.Name != "task-b" {
-		t.Fatalf("selected row was not projected into detail: %#v", model.detail)
+	detail, full := model.taskDetail("b")
+	if detail.GID != "b" || detail.Name != "task-b" || full {
+		t.Fatalf("selected row was not projected into detail: %#v (full: %v)", detail, full)
 	}
 	view := ansi.Strip(model.View().Content)
 	if strings.Contains(view, "Loading details") || !strings.Contains(view, "task-b") {
 		t.Fatalf("detail navigation rendered a loading shell instead of the selected item:\n%s", view)
 	}
-	if model.detailState.AppliedGID != "a" || !model.detailState.HasDetail {
-		t.Fatalf("projection changed authoritative detail state: %#v", model.detailState)
+	if _, full := model.taskDetail("a"); !full {
+		t.Fatal("navigation discarded the prior full detail")
 	}
 
 	updated, _ = model.Update(detailLoadingMsg{gid: "b", token: model.detailState.LoadingToken})
@@ -319,17 +409,12 @@ func TestDetailNavigationProjectsSelectedItemUntilDetailArrives(t *testing.T) {
 	}
 }
 
-func TestDetailNavigationRestoresAppliedDetailDuringQueuedRead(t *testing.T) {
+func TestDetailNavigationRestoresCachedDetailDuringQueuedRead(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.mode = ModeDetail
-	model.snapshot.Active = []app.TaskRow{{GID: "a", Name: "task-a"}, {GID: "b", Name: "task-b"}}
-	model.detailState = DetailState{
-		RequestedGID: "a",
-		AppliedGID:   "a",
-		Detail:       app.TaskDetail{GID: "a", Name: "full-task-a", PrimaryURI: "magnet:?a"},
-		HasDetail:    true,
-	}
-	model.detail = model.detailState.Detail
+	model.list.Snapshot.Active = []app.TaskRow{{GID: "a", Name: "task-a"}, {GID: "b", Name: "task-b"}}
+	model.detailState = DetailState{RequestedGID: "a"}
+	model.detailCache["a"] = cachedTaskDetail{Detail: app.TaskDetail{GID: "a", Name: "full-task-a", PrimaryURI: "magnet:?a"}}
 	model.refreshState.InFlight = true
 
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 'j', Text: "j"})
@@ -340,8 +425,9 @@ func TestDetailNavigationRestoresAppliedDetailDuringQueuedRead(t *testing.T) {
 	updated, _ = model.Update(staleLoading)
 	model = updated.(Model)
 
-	if model.detail.Name != "full-task-a" || model.detail.PrimaryURI != "magnet:?a" {
-		t.Fatalf("applied detail was not restored when navigating back: %#v", model.detail)
+	detail, full := model.taskDetail(model.detailState.RequestedGID)
+	if !full || detail.Name != "full-task-a" || detail.PrimaryURI != "magnet:?a" {
+		t.Fatalf("cached detail was not restored on return: %#v", detail)
 	}
 	if strings.Contains(ansi.Strip(model.View().Content), "Loading details") {
 		t.Fatal("navigating back to applied detail rendered a loading shell")
@@ -351,7 +437,7 @@ func TestDetailNavigationRestoresAppliedDetailDuringQueuedRead(t *testing.T) {
 func TestDetailNavigationUsesCacheWhileRevalidating(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.mode = ModeDetail
-	model.snapshot.Active = []app.TaskRow{
+	model.list.Snapshot.Active = []app.TaskRow{
 		{GID: "a", Name: "task-a"},
 		{GID: "b", Name: "task-b", Status: "active", CanonicalStatus: "downloading", CompletedLength: 25, TotalLength: 100, LengthKnown: true, DownloadSpeed: 7, Actions: []string{"pause"}, InfoHash: "hash-b", Dir: "/downloads"},
 	}
@@ -375,8 +461,9 @@ func TestDetailNavigationUsesCacheWhileRevalidating(t *testing.T) {
 	if cmd == nil {
 		t.Fatal("cache hit did not request list refresh")
 	}
-	if model.detail.Name != "task-b" || model.detail.CompletedLength != 10 || model.detail.CanonicalStatus != "paused" || len(model.detail.Files) != 1 || model.detail.PrimaryURI != "magnet:?b" {
-		t.Fatalf("cached detail was not restored immediately: %#v", model.detail)
+	detail, full := model.taskDetail(model.detailState.RequestedGID)
+	if !full || detail.Name != "task-b" || detail.CompletedLength != 10 || detail.CanonicalStatus != "paused" || len(detail.Files) != 1 || detail.PrimaryURI != "magnet:?b" {
+		t.Fatalf("cached detail was not restored immediately: %#v", detail)
 	}
 	query := model.query()
 	if query.DetailGID != "" || query.ResolveDetailSource {
@@ -387,8 +474,6 @@ func TestDetailNavigationUsesCacheWhileRevalidating(t *testing.T) {
 func TestExpiredDetailCacheRequestsFullRevalidation(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.detailState.RequestedGID = "a"
-	model.detailState.AppliedGID = "a"
-	model.detailState.SourceResolved = true
 	model.detailCache["a"] = cachedTaskDetail{Detail: app.TaskDetail{GID: "a"}, SourceResolved: true, UpdatedAt: time.Now().Add(-detailCacheFreshFor)}
 	if query := model.query(); query.DetailGID != "a" || query.ResolveDetailSource {
 		t.Fatalf("expired cache query = %+v", query)
@@ -407,15 +492,24 @@ func TestSuccessfulActionExpiresCachedDetail(t *testing.T) {
 
 func TestListRefreshUpdatesLiveFieldsWithoutDroppingCachedDetail(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.detailState = DetailState{RequestedGID: "a", AppliedGID: "a", HasDetail: true, SourceResolved: true}
+	model.detailState = DetailState{RequestedGID: "a"}
 	cached := cachedTaskDetail{Detail: app.TaskDetail{GID: "a", PrimaryURI: "magnet:?a", Files: []app.TaskFile{{Path: "/downloads/file"}}}, SourceResolved: true, UpdatedAt: time.Now()}
 	model.detailCache["a"] = cached
+	model.detailCache["b"] = cachedTaskDetail{Detail: app.TaskDetail{GID: "b", PrimaryURI: "magnet:?b", Files: []app.TaskFile{{Path: "/downloads/other"}}}}
 	row := app.TaskRow{GID: "a", Name: "task-a", CompletedLength: 30, TotalLength: 100, LengthKnown: true, DownloadSpeed: 7, CanonicalStatus: "downloading", Actions: []string{"pause"}}
+	other := app.TaskRow{GID: "b", Name: "task-b", CompletedLength: 50, CanonicalStatus: "paused"}
 
-	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: app.DashboardQuery{}, read: app.DashboardRead{Downloads: app.TaskSnapshot{Active: []app.TaskRow{row}}}})
-	detail := updated.(Model).detail
+	updated, _ := model.Update(snapshotResultMsg{generation: 1, query: app.DashboardQuery{}, read: app.DashboardRead{Downloads: app.TaskSnapshot{Active: []app.TaskRow{row, other}}}})
+	detail, _ := updated.(Model).taskDetail("a")
 	if detail.CompletedLength != 30 || detail.DownloadSpeed != 7 || len(detail.Files) != 1 || detail.PrimaryURI != "magnet:?a" || !reflect.DeepEqual(detail.Actions, []string{"pause"}) {
 		t.Fatalf("merged detail = %#v", detail)
+	}
+	background, _ := updated.(Model).taskDetail("b")
+	if background.CompletedLength != 50 || background.CanonicalStatus != "paused" || len(background.Files) != 1 || background.PrimaryURI != "magnet:?b" {
+		t.Fatalf("background cache did not receive row updates: %#v", background)
+	}
+	if !updated.(Model).detailCache["a"].UpdatedAt.Equal(cached.UpdatedAt) {
+		t.Fatal("list refresh extended full-detail freshness")
 	}
 }
 
@@ -437,8 +531,8 @@ func TestSupersededDetailResultPopulatesCacheWithoutApplyingPage(t *testing.T) {
 	if !model.detailCache["a"].UpdatedAt.IsZero() {
 		t.Fatal("superseded detail should require revalidation before reuse")
 	}
-	if model.detail.GID == "a" || model.detailState.AppliedGID == "a" {
-		t.Fatalf("superseded detail was applied to current page: detail=%#v state=%#v", model.detail, model.detailState)
+	if visible, full := model.taskDetail(model.detailState.RequestedGID); visible.GID == "a" || full {
+		t.Fatalf("superseded detail was applied to current page: detail=%#v state=%#v", visible, model.detailState)
 	}
 }
 
@@ -481,7 +575,8 @@ func TestRetryReplacementRetargetsOpenDetail(t *testing.T) {
 	model.detailState.RequestedGID = "old"
 	updated, _ := model.Update(actionResultMsg{kind: actionRetry, gid: "old", replacement: "new", warning: errors.New("cleanup failed")})
 	model = updated.(Model)
-	if model.detailState.RequestedGID != "new" || model.detail.GID != "" {
+	detail, _ := model.taskDetail(model.detailState.RequestedGID)
+	if model.detailState.RequestedGID != "new" || detail.GID != "" {
 		t.Fatalf("detail was not retargeted: %#v", model.detailState)
 	}
 	if model.actionErrors["new"] == nil {
@@ -507,13 +602,11 @@ func TestAddAndDetailErrorsRenderInTheirOwningViews(t *testing.T) {
 func TestDetailActionErrorRendersFullTextInBody(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
 	model.mode = ModeDetail
-	model.loaded = true
+	model.list.Attempted = true
 	model.list.HasSnapshot = true
-	model.snapshot.Active = []app.TaskRow{{GID: "a", Status: "active", Name: "task-a"}}
+	model.list.Snapshot.Active = []app.TaskRow{{GID: "a", Status: "active", Name: "task-a"}}
 	model.detailState.RequestedGID = "a"
-	model.detailState.AppliedGID = "a"
-	model.detailState.HasDetail = true
-	model.detail = app.TaskDetail{GID: "a", Name: "task-a", Status: "active"}
+	model.detailCache["a"] = cachedTaskDetail{Detail: app.TaskDetail{GID: "a", Name: "task-a", Status: "active"}}
 	full := "outcome unknown; the action may have succeeded and will not be repeated: aria2 mutation outcome unknown: context deadline exceeded"
 	model.actionErrors["a"] = errors.New(full)
 	view := ansi.Strip(model.View().Content)
@@ -530,12 +623,12 @@ func TestDetailActionErrorRendersFullTextInBody(t *testing.T) {
 
 func TestIssueRendersWithDetailErrorsAndInSelectedListFeedback(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.loaded = true
+	model.list.Attempted = true
 	model.width = 180
 	model.height = 40
 	issue := "restore the seed files and retry"
 	row := app.TaskRow{GID: "a", Name: "task-a", CanonicalStatus: "error", IssueCode: "FinalSeedPathMismatch", IssueText: issue}
-	model.snapshot.Stopped = []app.TaskRow{row}
+	model.list.Snapshot.Stopped = []app.TaskRow{row}
 	model.actionErrors["a"] = errors.New(issue)
 
 	listView := ansi.Strip(model.View().Content)
@@ -547,12 +640,12 @@ func TestIssueRendersWithDetailErrorsAndInSelectedListFeedback(t *testing.T) {
 	}
 
 	model.mode = ModeDetail
-	model.detailState = DetailState{RequestedGID: "a", AppliedGID: "a", HasDetail: true}
-	model.detail = app.TaskDetail{
+	model.detailState = DetailState{RequestedGID: "a"}
+	model.detailCache["a"] = cachedTaskDetail{Detail: app.TaskDetail{
 		GID: "a", Name: "task-a", CanonicalStatus: "error", Ownership: "managed",
 		IssueCode: "FinalSeedPathMismatch", IssueText: issue,
 		ErrorCode: "13", ErrorMessage: "native disk failure",
-	}
+	}}
 	detailView := ansi.Strip(model.View().Content)
 	errorIndex := strings.Index(detailView, "Error 13:")
 	issueIndex := strings.Index(detailView, "Issue:")
@@ -567,17 +660,17 @@ func TestIssueRendersWithDetailErrorsAndInSelectedListFeedback(t *testing.T) {
 
 func TestDetailShowsTargetAndOnlyDistinctTemporaryDirectory(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.loaded = true
+	model.list.Attempted = true
 	model.width = 180
 	model.height = 40
 	model.mode = ModeDetail
-	model.detailState = DetailState{RequestedGID: "a", AppliedGID: "a", HasDetail: true}
-	model.detail = app.TaskDetail{
+	model.detailState = DetailState{RequestedGID: "a"}
+	model.detailCache["a"] = cachedTaskDetail{Detail: app.TaskDetail{
 		GID:         "a",
 		Name:        "task-a",
 		TargetDir:   "/downloads",
 		DownloadDir: "/mnt/.aria2s_staging/storage/a",
-	}
+	}}
 
 	downloadingView := ansi.Strip(model.View().Content)
 	if !strings.Contains(downloadingView, "Download Dir:") || !strings.Contains(downloadingView, "/downloads") ||
@@ -585,7 +678,9 @@ func TestDetailShowsTargetAndOnlyDistinctTemporaryDirectory(t *testing.T) {
 		t.Fatalf("downloading detail directories =\n%s", downloadingView)
 	}
 
-	model.detail.DownloadDir = model.detail.TargetDir
+	cached := model.detailCache["a"]
+	cached.Detail.DownloadDir = cached.Detail.TargetDir
+	model.detailCache["a"] = cached
 	completedView := ansi.Strip(model.View().Content)
 	if !strings.Contains(completedView, "Download Dir:") || !strings.Contains(completedView, "/downloads") || strings.Contains(completedView, "Temporary Dir:") {
 		t.Fatalf("completed detail directories =\n%s", completedView)
@@ -594,7 +689,6 @@ func TestDetailShowsTargetAndOnlyDistinctTemporaryDirectory(t *testing.T) {
 
 func TestInitialFailureRendersUnavailablePlaceholder(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.loaded = true
 	model.list.Attempted = true
 	model.list.LastError = errors.New("offline")
 	if view := model.View().Content; !strings.Contains(view, "aria2 is unavailable") {
@@ -687,14 +781,14 @@ func TestListResumeKeyDispatchesAdvertisedAction(t *testing.T) {
 			service := &fakeService{}
 			model := NewModel(context.Background(), service, time.Second, "dev")
 			row := app.TaskRow{GID: "g1", Status: tc.native, CanonicalStatus: tc.canonical, Actions: tc.actions}
-			model.snapshot.Stopped = []app.TaskRow{row}
+			model.list.Snapshot.Stopped = []app.TaskRow{row}
 			if tc.native == "active" {
-				model.snapshot.Stopped = nil
-				model.snapshot.Active = []app.TaskRow{row}
+				model.list.Snapshot.Stopped = nil
+				model.list.Snapshot.Active = []app.TaskRow{row}
 			}
 			if tc.native == "waiting" {
-				model.snapshot.Stopped = nil
-				model.snapshot.Waiting = []app.TaskRow{row}
+				model.list.Snapshot.Stopped = nil
+				model.list.Snapshot.Waiting = []app.TaskRow{row}
 			}
 			updated, cmd := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
 			model = updated.(Model)
@@ -736,7 +830,7 @@ func TestListResumeKeyDispatchesAdvertisedAction(t *testing.T) {
 func TestListRemoveKeyUsesXAndPermanentlyDeletesMetadata(t *testing.T) {
 	service := &fakeService{}
 	model := NewModel(context.Background(), service, time.Second, "dev")
-	model.snapshot.Active = []app.TaskRow{{
+	model.list.Snapshot.Active = []app.TaskRow{{
 		GID:             "metadata",
 		Status:          "active",
 		CanonicalStatus: "metadata",
@@ -768,7 +862,7 @@ func TestListRemoveKeyUsesXAndPermanentlyDeletesMetadata(t *testing.T) {
 
 func TestPendingRemoveKeepsOriginalPositionUntilActionFinishes(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.snapshot.Active = []app.TaskRow{
+	model.list.Snapshot.Active = []app.TaskRow{
 		{GID: "before", CanonicalStatus: "downloading", CompletedLength: 10, TotalLength: 100, LengthKnown: true},
 		{GID: "removing", CanonicalStatus: "downloading", CompletedLength: 20, TotalLength: 100, LengthKnown: true, Actions: []string{"remove"}},
 		{GID: "after", CanonicalStatus: "downloading", CompletedLength: 30, TotalLength: 100, LengthKnown: true},
@@ -809,7 +903,7 @@ func TestPendingRemoveKeepsOriginalPositionUntilActionFinishes(t *testing.T) {
 
 func TestSuccessfulRemoveDisappearsBeforeRefresh(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.snapshot.Active = []app.TaskRow{
+	model.list.Snapshot.Active = []app.TaskRow{
 		{GID: "before", CanonicalStatus: "downloading", CompletedLength: 10, TotalLength: 100, LengthKnown: true},
 		{GID: "removing", CanonicalStatus: "downloading", CompletedLength: 20, TotalLength: 100, LengthKnown: true, Actions: []string{"remove"}},
 		{GID: "after", CanonicalStatus: "downloading", CompletedLength: 30, TotalLength: 100, LengthKnown: true},
@@ -854,7 +948,7 @@ func taskGIDs(items []app.TaskRow) []string {
 func TestListPauseKeyOnlyTargetsLiveRows(t *testing.T) {
 	service := &fakeService{}
 	model := NewModel(context.Background(), service, time.Second, "dev")
-	model.snapshot.Stopped = []app.TaskRow{{GID: "done", Status: "complete", CanonicalStatus: "complete"}}
+	model.list.Snapshot.Stopped = []app.TaskRow{{GID: "done", Status: "complete", CanonicalStatus: "complete"}}
 	updated, cmd := model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	model = updated.(Model)
 	if len(service.actions) != 0 {
@@ -868,8 +962,8 @@ func TestListPauseKeyOnlyTargetsLiveRows(t *testing.T) {
 	}
 
 	model.notice = ""
-	model.snapshot.Stopped = nil
-	model.snapshot.Active = []app.TaskRow{{GID: "live", Status: "active", CanonicalStatus: "downloading", Actions: []string{"pause"}}}
+	model.list.Snapshot.Stopped = nil
+	model.list.Snapshot.Active = []app.TaskRow{{GID: "live", Status: "active", CanonicalStatus: "downloading", Actions: []string{"pause"}}}
 	updated, cmd = model.Update(tea.KeyPressMsg{Code: 'p', Text: "p"})
 	model = updated.(Model)
 	if cmd == nil {
@@ -883,8 +977,8 @@ func TestListPauseKeyOnlyTargetsLiveRows(t *testing.T) {
 
 func TestInapplicableResumeNoticeRendersInListTopBar(t *testing.T) {
 	model := NewModel(context.Background(), &fakeService{}, time.Second, "dev")
-	model.loaded = true
-	model.snapshot.Stopped = []app.TaskRow{{GID: "done", Status: "complete", CanonicalStatus: "complete", Name: "done.iso"}}
+	model.list.Attempted = true
+	model.list.Snapshot.Stopped = []app.TaskRow{{GID: "done", Status: "complete", CanonicalStatus: "complete", Name: "done.iso"}}
 	updated, _ := model.Update(tea.KeyPressMsg{Code: 'r', Text: "r"})
 	model = updated.(Model)
 	view := model.View().Content
