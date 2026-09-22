@@ -7,7 +7,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/amio/aria2s/internal/aria2"
 	"github.com/amio/aria2s/internal/state"
 )
 
@@ -93,8 +92,14 @@ func (backend *SystemdBackend) run(ctx context.Context, args ...string) ([]byte,
 }
 
 func RenderSystemdUnit(current state.State) (string, error) {
+	if current.RuntimeSchemaVersion != 2 {
+		return "", fmt.Errorf("service rendering requires runtime v2")
+	}
 	if current.Aria2cPath == "" {
 		return "", fmt.Errorf("aria2c path is required")
+	}
+	if current.ControllerPath == "" {
+		return "", fmt.Errorf("controller path is required for runtime v2")
 	}
 	var builder strings.Builder
 	builder.WriteString("[Unit]\n")
@@ -103,15 +108,7 @@ func RenderSystemdUnit(current state.State) (string, error) {
 	builder.WriteString("[Service]\n")
 	builder.WriteString("Type=simple\n")
 	builder.WriteString("ExecStart=")
-	var command []string
-	if current.RuntimeSchemaVersion == 2 {
-		if current.ControllerPath == "" {
-			return "", fmt.Errorf("controller path is required for runtime v2")
-		}
-		command = []string{current.ControllerPath, "managed-exec"}
-	} else {
-		command = append([]string{current.Aria2cPath}, aria2.ManagedArgs(current)...)
-	}
+	command := []string{current.ControllerPath, "managed-exec"}
 	for index, arg := range command {
 		if index > 0 {
 			builder.WriteByte(' ')
@@ -126,22 +123,9 @@ func RenderSystemdUnit(current state.State) (string, error) {
 	builder.WriteString("Restart=on-failure\n")
 	builder.WriteString("RestartSec=3\n")
 	builder.WriteString("LimitNOFILE=" + strconv.Itoa(MaxOpenFiles) + "\n")
-	if current.RuntimeSchemaVersion == 2 {
-		// managed-exec owns rotation and opens the final log descriptors.
-		builder.WriteString("StandardOutput=null\n")
-		builder.WriteString("StandardError=null\n")
-	} else {
-		if current.LogPath != "" {
-			builder.WriteString("StandardOutput=append:")
-			builder.WriteString(current.LogPath)
-			builder.WriteString("\n")
-		}
-		if current.ErrorLogPath != "" {
-			builder.WriteString("StandardError=append:")
-			builder.WriteString(current.ErrorLogPath)
-			builder.WriteString("\n")
-		}
-	}
+	// managed-exec owns rotation and opens the final log descriptors.
+	builder.WriteString("StandardOutput=null\n")
+	builder.WriteString("StandardError=null\n")
 	builder.WriteString("\n[Install]\n")
 	builder.WriteString("WantedBy=default.target\n")
 	return builder.String(), nil

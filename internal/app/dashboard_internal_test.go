@@ -185,9 +185,7 @@ func TestDashboardSnapshotDoesNotQueryNativeDetailForManifestOnlyJob(t *testing.
 		t.Fatalf("manifest detail was not projected: %+v", read.Detail)
 	}
 }
-func (*dashboardRPCStub) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
-	return "added", nil
-}
+
 func (*dashboardRPCStub) Pause(context.Context, state.State, string) error  { return nil }
 func (*dashboardRPCStub) Resume(context.Context, state.State, string) error { return nil }
 func (rpc *dashboardRPCStub) RetrySource(context.Context, state.State, string) (aria2.RetrySource, error) {

@@ -32,23 +32,6 @@ func ValidateMetainfo(data []byte) (string, error) {
 	return hex.EncodeToString(hash[:]), nil
 }
 
-// MetainfoTotalLength returns the exact logical payload length declared by a
-// validated v1 torrent metainfo dictionary.
-func MetainfoTotalLength(data []byte) (int64, error) {
-	layout, err := MetainfoFileLayout(data)
-	if err != nil {
-		return 0, err
-	}
-	var total int64
-	for _, file := range layout.Files {
-		if file.Length > (1<<63-1)-total {
-			return 0, errors.New("torrent payload length overflows int64")
-		}
-		total += file.Length
-	}
-	return total, nil
-}
-
 // MetainfoFileLayout returns the single- or multi-file payload layout declared
 // by validated v1 torrent metainfo. UTF-8 aliases take precedence when present.
 func MetainfoFileLayout(data []byte) (MetainfoLayout, error) {

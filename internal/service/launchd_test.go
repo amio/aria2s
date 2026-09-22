@@ -9,15 +9,17 @@ import (
 	"github.com/amio/aria2s/internal/state"
 )
 
-func TestRenderLaunchAgentUsesAbsoluteAria2cPathWithoutShell(t *testing.T) {
+func TestRenderLaunchAgentUsesManagedControllerWithoutShell(t *testing.T) {
 	current := state.State{
-		Aria2cPath:   "/opt/homebrew/bin/aria2c",
-		RPCPort:      6800,
-		RPCSecret:    "secret-token",
-		SessionPath:  "/Users/amio/Library/Application Support/aria2s/session",
-		LogPath:      "/Users/amio/Library/Logs/aria2s/aria2.log",
-		ErrorLogPath: "/Users/amio/Library/Logs/aria2s/aria2.err.log",
-		ServiceName:  "io.github.amio.aria2s",
+		RuntimeSchemaVersion: 2,
+		ControllerPath:       "/usr/local/bin/aria2s",
+		Aria2cPath:           "/opt/homebrew/bin/aria2c",
+		RPCPort:              6800,
+		RPCSecret:            "secret-token",
+		SessionPath:          "/Users/amio/Library/Application Support/aria2s/session",
+		LogPath:              "/Users/amio/Library/Logs/aria2s/aria2.log",
+		ErrorLogPath:         "/Users/amio/Library/Logs/aria2s/aria2.err.log",
+		ServiceName:          "io.github.amio.aria2s",
 	}
 
 	rendered, err := service.RenderLaunchAgent(current)
@@ -26,14 +28,9 @@ func TestRenderLaunchAgentUsesAbsoluteAria2cPathWithoutShell(t *testing.T) {
 	}
 
 	assertContains(t, rendered, "<key>ProgramArguments</key>")
-	assertContains(t, rendered, "<string>/opt/homebrew/bin/aria2c</string>")
-	assertContains(t, rendered, "<string>--enable-rpc=true</string>")
-	assertContains(t, rendered, "<string>--rpc-listen-all=false</string>")
-	assertContains(t, rendered, "<string>--rpc-listen-port=6800</string>")
-	assertContains(t, rendered, "<string>--rpc-secret=secret-token</string>")
-	assertContains(t, rendered, "<string>--input-file=/Users/amio/Library/Application Support/aria2s/session</string>")
-	assertContains(t, rendered, "<string>--save-session=/Users/amio/Library/Application Support/aria2s/session</string>")
-	assertContains(t, rendered, "<string>--save-session-interval=60</string>")
+	assertContains(t, rendered, "<string>/usr/local/bin/aria2s</string>")
+	assertContains(t, rendered, "<string>managed-exec</string>")
+	assertNotContains(t, rendered, current.Aria2cPath)
 	assertContains(t, rendered, "<key>RunAtLoad</key>")
 	assertContains(t, rendered, "<false/>")
 	assertContains(t, rendered, "<key>KeepAlive</key>")

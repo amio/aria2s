@@ -109,17 +109,14 @@ type ScannedJob struct {
 }
 
 type Repository struct {
-	root        string
 	jobsDir     string
 	storagesDir string
 	locksDir    string
 }
 
 func New(root string) *Repository {
-	return &Repository{root: root, jobsDir: filepath.Join(root, "jobs"), storagesDir: filepath.Join(root, "storages"), locksDir: filepath.Join(root, "job-locks")}
+	return &Repository{jobsDir: filepath.Join(root, "jobs"), storagesDir: filepath.Join(root, "storages"), locksDir: filepath.Join(root, "job-locks")}
 }
-
-func (repository *Repository) Root() string { return repository.root }
 
 func (repository *Repository) Create(job Job) (Token, error) {
 	if err := validateJob(job); err != nil {

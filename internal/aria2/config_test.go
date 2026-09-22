@@ -43,20 +43,21 @@ func TestWriteConfigWrites0600(t *testing.T) {
 	}
 }
 
-func TestManagedArgsIncludeRPCAndSessionFlags(t *testing.T) {
+func TestManagedV2ArgsIncludeRPCAndSessionFlags(t *testing.T) {
 	current := state.State{
-		RPCPort:     6800,
-		RPCSecret:   "secret-token",
-		SessionPath: "/tmp/session",
+		RPCPort:          6800,
+		RPCSecret:        "secret-token",
+		SessionPath:      "/tmp/session",
+		StartupInputPath: "/tmp/startup",
 	}
 
-	args := aria2.ManagedArgs(current)
+	args := aria2.ManagedV2Args(current, "/tmp/hooks")
 
 	assertSliceContains(t, args, "--enable-rpc=true")
 	assertSliceContains(t, args, "--rpc-listen-all=false")
 	assertSliceContains(t, args, "--rpc-listen-port=6800")
 	assertSliceContains(t, args, "--rpc-secret=secret-token")
-	assertSliceContains(t, args, "--input-file=/tmp/session")
+	assertSliceContains(t, args, "--input-file=/tmp/startup")
 	assertSliceContains(t, args, "--save-session=/tmp/session")
 	assertSliceContains(t, args, "--save-session-interval=60")
 }

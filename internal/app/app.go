@@ -33,16 +33,13 @@ import (
 
 type RPC interface {
 	Version(context.Context, state.State) (string, error)
-	AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error)
 	SaveSession(context.Context, state.State) error
-	Shutdown(context.Context, state.State) error
 }
 
 type dashboardRPC interface {
 	Version(context.Context, state.State) (string, error)
 	ReadBatch(context.Context, state.State, aria2.ReadBatchQuery) (aria2.ReadBatch, error)
 	TaskDetail(context.Context, state.State, string) (aria2.DownloadDetail, error)
-	AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error)
 	Pause(context.Context, state.State, string) error
 	Resume(context.Context, state.State, string) error
 	RetrySource(context.Context, state.State, string) (aria2.RetrySource, error)
@@ -209,10 +206,6 @@ func defaultOptionsForOS(goos, home string, uid int, runner service.CommandRunne
 type InstallRequest struct {
 	Start              bool
 	DiscardLegacyTasks bool
-}
-
-func (app *App) Install(ctx context.Context, start bool) error {
-	return app.InstallManaged(ctx, InstallRequest{Start: start})
 }
 
 // RebindManagedController refreshes the committed identity of an existing v2
@@ -713,10 +706,6 @@ func (app *App) Start(ctx context.Context) error {
 	return app.waitForRPC(ctx, current)
 }
 
-func (app *App) Stop(ctx context.Context) error {
-	return app.StopManaged(ctx, StopOptions{})
-}
-
 type StopOptions struct {
 	DiscardUnmanagedTasks bool
 }
@@ -775,10 +764,6 @@ func (app *App) guardUnmanagedTasks(ctx context.Context, current state.State, di
 		}
 	}
 	return nil
-}
-
-func (app *App) Restart(ctx context.Context) error {
-	return app.RestartManaged(ctx, StopOptions{})
 }
 
 // RecoverRPC performs an explicitly acknowledged managed-only restart. It
@@ -874,21 +859,6 @@ func (app *App) Doctor(ctx context.Context) doctor.Report {
 			return app.options.RPC.Version(ctx, current)
 		},
 	})
-}
-
-func (app *App) Add(ctx context.Context, uri string, opts aria2.AddOptions) (string, error) {
-	current, err := state.Load(app.options.Paths.StateFile)
-	if err != nil {
-		return "", err
-	}
-	gid, err := app.options.RPC.AddURI(ctx, current, uri, opts)
-	if err != nil {
-		return "", err
-	}
-	if opts.Dir != "" {
-		_ = app.recordDir(opts.Dir)
-	}
-	return gid, nil
 }
 
 func (app *App) DefaultDir() string {
@@ -1124,10 +1094,6 @@ func (r *LocalRPC) RemoveDownloadResult(ctx context.Context, current state.State
 
 func (r *LocalRPC) SaveSession(ctx context.Context, current state.State) error {
 	return aria2.WrapTransportError(r.rpcClient(current).SaveSession(ctx))
-}
-
-func (r *LocalRPC) Shutdown(ctx context.Context, current state.State) error {
-	return aria2.WrapTransportError(r.rpcClient(current).Shutdown(ctx))
 }
 
 func (r *LocalRPC) ReadBatch(ctx context.Context, current state.State, query aria2.ReadBatchQuery) (aria2.ReadBatch, error) {

@@ -10,14 +10,16 @@ import (
 	"github.com/amio/aria2s/internal/state"
 )
 
-func TestRenderSystemdUnitUsesAbsoluteAria2cPathWithoutShell(t *testing.T) {
+func TestRenderSystemdUnitUsesManagedControllerWithoutShell(t *testing.T) {
 	current := state.State{
-		Aria2cPath:   "/usr/bin/aria2c",
-		RPCPort:      6800,
-		RPCSecret:    "secret-token",
-		SessionPath:  "/home/amio/.local/state/aria2s/session",
-		LogPath:      "/home/amio/.local/state/aria2s/aria2.log",
-		ErrorLogPath: "/home/amio/.local/state/aria2s/aria2.err.log",
+		RuntimeSchemaVersion: 2,
+		ControllerPath:       "/usr/local/bin/aria2s",
+		Aria2cPath:           "/usr/bin/aria2c",
+		RPCPort:              6800,
+		RPCSecret:            "secret-token",
+		SessionPath:          "/home/amio/.local/state/aria2s/session",
+		LogPath:              "/home/amio/.local/state/aria2s/aria2.log",
+		ErrorLogPath:         "/home/amio/.local/state/aria2s/aria2.err.log",
 	}
 
 	rendered, err := service.RenderSystemdUnit(current)
@@ -27,9 +29,10 @@ func TestRenderSystemdUnitUsesAbsoluteAria2cPathWithoutShell(t *testing.T) {
 
 	assertContains(t, rendered, "[Unit]")
 	assertContains(t, rendered, "Description=aria2 RPC service managed by aria2s")
-	assertContains(t, rendered, "ExecStart=/usr/bin/aria2c --enable-rpc=true --rpc-listen-all=false --rpc-listen-port=6800 --rpc-secret=secret-token --input-file=/home/amio/.local/state/aria2s/session --save-session=/home/amio/.local/state/aria2s/session --save-session-interval=60")
-	assertContains(t, rendered, "StandardOutput=append:/home/amio/.local/state/aria2s/aria2.log")
-	assertContains(t, rendered, "StandardError=append:/home/amio/.local/state/aria2s/aria2.err.log")
+	assertContains(t, rendered, "ExecStart=/usr/local/bin/aria2s managed-exec")
+	assertContains(t, rendered, "StandardOutput=null")
+	assertContains(t, rendered, "StandardError=null")
+	assertNotContains(t, rendered, current.Aria2cPath)
 	assertContains(t, rendered, "LimitNOFILE=65536")
 	assertContains(t, rendered, "[Install]")
 	assertContains(t, rendered, "WantedBy=default.target")
@@ -54,6 +57,22 @@ func TestRenderSystemdUnitEscapesRuntimeV2ControllerPath(t *testing.T) {
 	assertContains(t, rendered, "StandardError=null")
 	assertNotContains(t, rendered, current.LogPath)
 	assertNotContains(t, rendered, current.ErrorLogPath)
+}
+
+func TestServiceRenderersRejectUnsupportedRuntimeSchemas(t *testing.T) {
+	for name, render := range map[string]func(state.State) (string, error){
+		"launchd": service.RenderLaunchAgent,
+		"systemd": service.RenderSystemdUnit,
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, version := range []int{0, 1, 3} {
+				current := state.State{RuntimeSchemaVersion: version, Aria2cPath: "/usr/bin/aria2c", ControllerPath: "/usr/local/bin/aria2s"}
+				if _, err := render(current); err == nil {
+					t.Fatalf("rendered unsupported runtime schema %d", version)
+				}
+			}
+		})
+	}
 }
 
 func TestSystemdBackendGeneratesLifecycleCommands(t *testing.T) {

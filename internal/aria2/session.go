@@ -3,7 +3,6 @@ package aria2
 import (
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -131,20 +130,6 @@ func (block *SessionBlock) SetOption(key, value string) {
 		}
 	}
 	block.Options = append(block.Options, SessionOption{Key: key, Value: value})
-}
-
-func (block *SessionBlock) DeleteOption(key string) {
-	filtered := block.Options[:0]
-	for _, option := range block.Options {
-		if option.Key != key {
-			filtered = append(filtered, option)
-		}
-	}
-	block.Options = filtered
-}
-
-func (block *SessionBlock) SortOptions() {
-	sort.SliceStable(block.Options, func(i, j int) bool { return block.Options[i].Key < block.Options[j].Key })
 }
 
 func validOptionKey(key string) bool {

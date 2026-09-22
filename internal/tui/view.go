@@ -61,14 +61,12 @@ type rgb struct {
 }
 
 var (
-	frameEdgeColor    = rgb{105, 140, 168}
-	frameDividerColor = rgb{29, 42, 54}
-	frameTextColor    = rgb{241, 244, 247}
-	contentBgColor    = rgb{28, 28, 28}
-	bgColor           = rgb{16, 16, 16}
-	bodyTextColor     = rgb{210, 217, 225}
-	selectedColor     = rgb{52, 52, 52}
-	errorTextColor    = rgb{255, 125, 125}
+	frameTextColor = rgb{241, 244, 247}
+	contentBgColor = rgb{28, 28, 28}
+	bgColor        = rgb{16, 16, 16}
+	bodyTextColor  = rgb{210, 217, 225}
+	selectedColor  = rgb{52, 52, 52}
+	errorTextColor = rgb{255, 125, 125}
 )
 
 func (model Model) View() tea.View {
@@ -418,20 +416,6 @@ func (model Model) fillBody(width int, height int, lines []string) []string {
 	return body
 }
 
-func (model Model) fillDetailBody(width int, height int, lines []string) []string {
-	body := make([]string, 0, height)
-	for _, line := range lines {
-		if len(body) == height {
-			return body
-		}
-		body = append(body, model.blankBodyLine(width, line))
-	}
-	if len(body) < height {
-		body = append(body, model.blankBodyLines(width, height-len(body))...)
-	}
-	return body
-}
-
 func (model Model) blankBodyLines(width int, count int) []string {
 	lines := make([]string, 0, count)
 	for range count {
@@ -573,11 +557,6 @@ func (model Model) viewport() (int, int) {
 		height = defaultViewportHeight
 	}
 	return width, height
-}
-
-func tableColumnWidths(width int) (int, int, int, int, int, int, int, int, int, int, int, int) {
-	l := computeLayout(width)
-	return l.statusWidth, l.nameWidth, l.sizeWidth, l.downloadedWidth, l.progressWidth, l.downWidth, l.upWidth, l.seedsWidth, l.peersWidth, l.etaWidth, l.uploadedWidth, l.addedAgoWidth
 }
 
 // tableLayout holds the computed column widths for a given content width.
@@ -971,27 +950,6 @@ func paddedStyledLine(text string, width int, padding int, foreground rgb, backg
 	}
 	line := strings.Repeat(" ", padding) + fitLeft(text, innerWidth) + strings.Repeat(" ", padding)
 	return styledLine(line, foreground, background, bold)
-}
-
-func centeredStyledLine(text string, width int, padding int, foreground rgb, background rgb) string {
-	innerWidth := max(width-padding*2, 0)
-	if innerWidth == 0 {
-		return styledLine(strings.Repeat(" ", width), foreground, background, false)
-	}
-	textWidth := ansi.StringWidth(text)
-	leftPad := max((innerWidth-textWidth)/2, 0)
-	rightPad := max(innerWidth-textWidth-leftPad, 0)
-	line := strings.Repeat(" ", padding) + strings.Repeat(" ", leftPad) + text + strings.Repeat(" ", rightPad) + strings.Repeat(" ", padding)
-	return styledLine(line, foreground, background, false)
-}
-
-func paddedTransparentLine(text string, width int, padding int, foreground rgb, bold bool) string {
-	innerWidth := max(width-padding*2, 0)
-	if innerWidth == 0 {
-		return colorizeForeground(strings.Repeat(" ", width), foreground, bold)
-	}
-	line := strings.Repeat(" ", padding) + fitLeft(text, innerWidth) + strings.Repeat(" ", padding)
-	return colorizeForeground(line, foreground, bold)
 }
 
 func borderedLine(text string, width int, foreground rgb, contentBg rgb, bold bool) string {

@@ -32,7 +32,7 @@ func TestInstallStartPollsRPCUntilReady(t *testing.T) {
 		RPCPollInterval: time.Nanosecond,
 	})
 
-	if err := application.Install(context.Background(), true); err != nil {
+	if err := application.InstallManaged(context.Background(), app.InstallRequest{Start: true}); err != nil {
 		t.Fatalf("install --start should poll until RPC is ready: %v", err)
 	}
 	if rpc.versionCalls != 3 {
@@ -102,7 +102,7 @@ func TestInstallStartPollsRPCUntilReadyOnLinuxPaths(t *testing.T) {
 		RPCPollInterval: time.Nanosecond,
 	})
 
-	if err := application.Install(context.Background(), true); err != nil {
+	if err := application.InstallManaged(context.Background(), app.InstallRequest{Start: true}); err != nil {
 		t.Fatalf("install --start should poll until RPC is ready on Linux paths: %v", err)
 	}
 	if rpc.versionCalls != 3 {
@@ -124,7 +124,7 @@ func TestInstallStartTimeoutGivesRecoveryGuidance(t *testing.T) {
 		},
 	})
 
-	err := application.Install(context.Background(), true)
+	err := application.InstallManaged(context.Background(), app.InstallRequest{Start: true})
 
 	if err == nil {
 		t.Fatal("expected install --start timeout error")
@@ -488,7 +488,7 @@ func TestStopSavesSessionBeforeStoppingService(t *testing.T) {
 	rpc := &sessionRecordingRPC{events: &events, service: serviceBackend}
 	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{})
 
-	if err := application.Stop(context.Background()); err != nil {
+	if err := application.StopManaged(context.Background(), app.StopOptions{}); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
 
@@ -510,7 +510,7 @@ func TestStopSavesSessionBeforeStoppingServiceOnLinuxPaths(t *testing.T) {
 	rpc := &sessionRecordingRPC{events: &events, service: serviceBackend}
 	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{})
 
-	if err := application.Stop(context.Background()); err != nil {
+	if err := application.StopManaged(context.Background(), app.StopOptions{}); err != nil {
 		t.Fatalf("stop: %v", err)
 	}
 
@@ -531,7 +531,7 @@ func TestStopCallsServiceStopEvenWhenSaveSessionFails(t *testing.T) {
 	rpc := &sessionRecordingRPC{saveSessionErr: errors.New("rpc unavailable")}
 	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{})
 
-	err := application.Stop(context.Background())
+	err := application.StopManaged(context.Background(), app.StopOptions{})
 
 	// Non-transport errors should be reported so callers know session save failed.
 	if err == nil {
@@ -557,7 +557,7 @@ func TestRestartSavesSessionBeforeRestartingService(t *testing.T) {
 		RPCPollInterval: time.Nanosecond,
 	})
 
-	if err := application.Restart(context.Background()); err != nil {
+	if err := application.RestartManaged(context.Background(), app.StopOptions{}); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 
@@ -582,7 +582,7 @@ func TestRestartSavesSessionBeforeRestartingServiceOnLinuxPaths(t *testing.T) {
 		RPCPollInterval: time.Nanosecond,
 	})
 
-	if err := application.Restart(context.Background()); err != nil {
+	if err := application.RestartManaged(context.Background(), app.StopOptions{}); err != nil {
 		t.Fatalf("restart: %v", err)
 	}
 
@@ -602,7 +602,7 @@ func TestStopCallsServiceStopWhenStateLoadFails(t *testing.T) {
 	rpc := &sessionRecordingRPC{}
 	application := newTestApp(servicePaths, "", serviceBackend, rpc, app.Options{})
 
-	err := application.Stop(context.Background())
+	err := application.StopManaged(context.Background(), app.StopOptions{})
 
 	// State load failure should be reported.
 	if err == nil {
@@ -636,13 +636,10 @@ func TestRestartStopsAndRestartsWhenRPCUnavailable(t *testing.T) {
 		RPCPollInterval: time.Nanosecond,
 	})
 
-	if err := application.Restart(context.Background()); err != nil {
+	if err := application.RestartManaged(context.Background(), app.StopOptions{}); err != nil {
 		t.Fatalf("restart should stop and restart: %v", err)
 	}
 
-	if rpc.shutdownCalls != 0 {
-		t.Fatalf("expected no shutdown RPC, got %d", rpc.shutdownCalls)
-	}
 	if strings.Join(events, ",") != "saveSession,stop,start,version" {
 		t.Fatalf("expected saveSession, stop, start, version, got %v", events)
 	}
@@ -680,12 +677,12 @@ func TestInstallStartIgnoresExistingUserConfigChanges(t *testing.T) {
 		RPCPollInterval: time.Nanosecond,
 	})
 
-	if err := application.Install(context.Background(), true); err != nil {
+	if err := application.InstallManaged(context.Background(), app.InstallRequest{Start: true}); err != nil {
 		t.Fatalf("install --start: %v", err)
 	}
 
-	if rpc.saveSessionCalls != 0 || rpc.shutdownCalls != 0 {
-		t.Fatalf("expected no graceful restart, got save=%d shutdown=%d", rpc.saveSessionCalls, rpc.shutdownCalls)
+	if rpc.saveSessionCalls != 0 {
+		t.Fatalf("expected no checkpoint, got %d", rpc.saveSessionCalls)
 	}
 	if strings.Join(events, ",") != "version" {
 		t.Fatalf("expected config changes to be ignored, got %v", events)
@@ -713,7 +710,7 @@ func TestInstallWritesSystemdUnitForLinuxPaths(t *testing.T) {
 		},
 	})
 
-	if err := application.Install(context.Background(), false); err != nil {
+	if err := application.InstallManaged(context.Background(), app.InstallRequest{}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
@@ -741,7 +738,7 @@ func TestInstallFailsOnCorruptStateWithoutOverwritingIt(t *testing.T) {
 	}
 	application := newTestApp(servicePaths, aria2c, &recordingService{}, fixedRPC{version: "1.37.0"}, app.Options{})
 
-	err := application.Install(context.Background(), false)
+	err := application.InstallManaged(context.Background(), app.InstallRequest{})
 
 	if err == nil {
 		t.Fatal("expected corrupt state to fail install")
@@ -786,7 +783,7 @@ func TestInstallReloadsLoadedServiceWhenPlistChanges(t *testing.T) {
 	serviceBackend := &recordingService{loaded: true}
 	application := newTestApp(servicePaths, aria2c, serviceBackend, fixedRPC{version: "1.37.0"}, app.Options{})
 
-	if err := application.Install(context.Background(), false); err != nil {
+	if err := application.InstallManaged(context.Background(), app.InstallRequest{}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
@@ -829,12 +826,12 @@ func TestInstallStartGracefullyStopsRunningServiceBeforeReloadingChangedPlist(t 
 		RPCPollInterval: time.Nanosecond,
 	})
 
-	if err := application.Install(context.Background(), true); err != nil {
+	if err := application.InstallManaged(context.Background(), app.InstallRequest{Start: true}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
-	if rpc.saveSessionCalls != 1 || rpc.shutdownCalls != 0 {
-		t.Fatalf("expected one checkpoint and no shutdown, got save=%d shutdown=%d", rpc.saveSessionCalls, rpc.shutdownCalls)
+	if rpc.saveSessionCalls != 1 {
+		t.Fatalf("expected one checkpoint, got %d", rpc.saveSessionCalls)
 	}
 	if strings.Join(events, ",") != "saveSession,stop,uninstall,install,start,version" {
 		t.Fatalf("expected checkpoint, stop, reinstall, start, version, got %v", events)
@@ -871,7 +868,7 @@ func TestInstallPreservesRunningServiceAcrossChangedPlistWithoutStartFlag(t *tes
 	rpc := &sessionRecordingRPC{events: &events, service: serviceBackend}
 	application := newTestApp(servicePaths, aria2c, serviceBackend, rpc, app.Options{})
 
-	if err := application.Install(context.Background(), false); err != nil {
+	if err := application.InstallManaged(context.Background(), app.InstallRequest{}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 
@@ -918,7 +915,7 @@ func TestInstallWritesDefaultConfigWithoutBootstrappingWhenServiceAlreadyLoaded(
 	loadedService := &alreadyLoadedService{}
 	application := newTestApp(servicePaths, aria2c, loadedService, fixedRPC{version: "1.37.0"}, app.Options{})
 
-	if err := application.Install(context.Background(), false); err != nil {
+	if err := application.InstallManaged(context.Background(), app.InstallRequest{}); err != nil {
 		t.Fatalf("install should write default config without bootstrap: %v", err)
 	}
 	if loadedService.installCalls != 0 {
@@ -967,7 +964,7 @@ func TestInstallLeavesExistingConfigUntouchedWhenAlreadyInstalled(t *testing.T) 
 
 	time.Sleep(10 * time.Millisecond)
 
-	if err := application.Install(context.Background(), false); err != nil {
+	if err := application.InstallManaged(context.Background(), app.InstallRequest{}); err != nil {
 		t.Fatalf("install: %v", err)
 	}
 	if len(serviceBackend.calls) != 0 {
@@ -1259,22 +1256,16 @@ func (rpc *recoveryRPC) Version(context.Context, state.State) (string, error) {
 	}
 	return "1.37.0", nil
 }
-func (*recoveryRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
-	return "", nil
-}
+
 func (*recoveryRPC) SaveSession(context.Context, state.State) error { return nil }
-func (*recoveryRPC) Shutdown(context.Context, state.State) error    { return nil }
 
 type alwaysUnavailableRPC struct{}
 
 func (alwaysUnavailableRPC) Version(context.Context, state.State) (string, error) {
 	return "", errors.New("RPC blocked")
 }
-func (alwaysUnavailableRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
-	return "", nil
-}
+
 func (alwaysUnavailableRPC) SaveSession(context.Context, state.State) error { return nil }
-func (alwaysUnavailableRPC) Shutdown(context.Context, state.State) error    { return nil }
 
 func (service *recordingService) Install(context.Context) error {
 	service.calls = append(service.calls, "install")
@@ -1391,15 +1382,7 @@ func (rpc fixedRPC) Version(context.Context, state.State) (string, error) {
 	return rpc.version, nil
 }
 
-func (rpc fixedRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
-	return "2089b05ecca3d829", nil
-}
-
 func (rpc fixedRPC) SaveSession(context.Context, state.State) error {
-	return nil
-}
-
-func (rpc fixedRPC) Shutdown(context.Context, state.State) error {
 	return nil
 }
 
@@ -1418,15 +1401,7 @@ func (rpc *flakyRPC) Version(context.Context, state.State) (string, error) {
 	return rpc.version, nil
 }
 
-func (rpc *flakyRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
-	return "2089b05ecca3d829", nil
-}
-
 func (rpc *flakyRPC) SaveSession(context.Context, state.State) error {
-	return nil
-}
-
-func (rpc *flakyRPC) Shutdown(context.Context, state.State) error {
 	return nil
 }
 
@@ -1447,32 +1422,9 @@ func (*flakyRPC) AddURIs(context.Context, state.State, []string, aria2.AddOption
 func (*flakyRPC) Remove(context.Context, state.State, string) error       { return nil }
 func (*flakyRPC) ClearStopped(context.Context, state.State, string) error { return nil }
 
-type dirRecordingRPC struct {
-	lastDir string
-}
-
-func (rpc *dirRecordingRPC) Version(context.Context, state.State) (string, error) {
-	return "1.37.0", nil
-}
-
-func (rpc *dirRecordingRPC) AddURI(_ context.Context, _ state.State, _ string, opts aria2.AddOptions) (string, error) {
-	rpc.lastDir = opts.Dir
-	return "2089b05ecca3d829", nil
-}
-
-func (rpc *dirRecordingRPC) SaveSession(context.Context, state.State) error {
-	return nil
-}
-
-func (rpc *dirRecordingRPC) Shutdown(context.Context, state.State) error {
-	return nil
-}
-
 type sessionRecordingRPC struct {
 	saveSessionCalls int
-	shutdownCalls    int
 	saveSessionErr   error
-	shutdownErr      error
 	events           *[]string
 	service          *recordingService
 }
@@ -1491,94 +1443,12 @@ func (rpc *sessionRecordingRPC) Version(context.Context, state.State) (string, e
 	return "1.37.0", nil
 }
 
-func (rpc *sessionRecordingRPC) AddURI(context.Context, state.State, string, aria2.AddOptions) (string, error) {
-	return "2089b05ecca3d829", nil
-}
-
 func (rpc *sessionRecordingRPC) SaveSession(context.Context, state.State) error {
 	rpc.saveSessionCalls++
 	if rpc.events != nil {
 		*rpc.events = append(*rpc.events, "saveSession")
 	}
 	return rpc.saveSessionErr
-}
-
-func (rpc *sessionRecordingRPC) Shutdown(context.Context, state.State) error {
-	rpc.shutdownCalls++
-	if rpc.events != nil {
-		*rpc.events = append(*rpc.events, "shutdown")
-	}
-	if rpc.shutdownErr != nil {
-		return rpc.shutdownErr
-	}
-	if rpc.service != nil {
-		rpc.service.running = false
-	}
-	return nil
-}
-
-func TestAddRecordsCustomDirAndExposesRecentDirs(t *testing.T) {
-	root := t.TempDir()
-	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
-	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
-	rpc := &dirRecordingRPC{}
-	application := newTestApp(servicePaths, aria2c, &recordingService{}, rpc, app.Options{
-		DownloadDir: filepath.Join(root, "Downloads"),
-	})
-	writeInstalledStateAndConfig(t, servicePaths, aria2c)
-
-	if _, err := application.Add(context.Background(), "https://example.com/a.zip", aria2.AddOptions{Dir: "/data/Movies"}); err != nil {
-		t.Fatalf("add: %v", err)
-	}
-	if rpc.lastDir != "/data/Movies" {
-		t.Fatalf("rpc received dir %q, want /data/Movies", rpc.lastDir)
-	}
-
-	recent, err := application.RecentDirs(context.Background())
-	if err != nil {
-		t.Fatalf("recent dirs: %v", err)
-	}
-	if len(recent) != 1 || recent[0] != "/data/Movies" {
-		t.Fatalf("recent dirs got %#v, want [/data/Movies]", recent)
-	}
-
-	// Adding the same dir again should dedup, not duplicate.
-	if _, err := application.Add(context.Background(), "https://example.com/b.zip", aria2.AddOptions{Dir: "/data/Movies"}); err != nil {
-		t.Fatalf("add: %v", err)
-	}
-	recent, _ = application.RecentDirs(context.Background())
-	if len(recent) != 1 {
-		t.Fatalf("expected deduped single recent dir, got %#v", recent)
-	}
-
-	// A new dir is recorded at the front.
-	if _, err := application.Add(context.Background(), "https://example.com/c.zip", aria2.AddOptions{Dir: "/data/Music"}); err != nil {
-		t.Fatalf("add: %v", err)
-	}
-	recent, _ = application.RecentDirs(context.Background())
-	if len(recent) != 2 || recent[0] != "/data/Music" || recent[1] != "/data/Movies" {
-		t.Fatalf("expected [Music Movies], got %#v", recent)
-	}
-}
-
-func TestAddWithoutDirDoesNotRecord(t *testing.T) {
-	root := t.TempDir()
-	servicePaths := paths.NewDarwin(filepath.Join(root, "home"))
-	aria2c := writeExecutable(t, filepath.Join(root, "bin", "aria2c"))
-	rpc := &dirRecordingRPC{}
-	application := newTestApp(servicePaths, aria2c, &recordingService{}, rpc, app.Options{})
-	writeInstalledStateAndConfig(t, servicePaths, aria2c)
-
-	if _, err := application.Add(context.Background(), "https://example.com/a.zip", aria2.AddOptions{}); err != nil {
-		t.Fatalf("add: %v", err)
-	}
-	recent, err := application.RecentDirs(context.Background())
-	if err != nil {
-		t.Fatalf("recent dirs: %v", err)
-	}
-	if len(recent) != 0 {
-		t.Fatalf("expected no recent dirs when dir unset, got %#v", recent)
-	}
 }
 
 func TestDeleteRecentDirPersistsRemoval(t *testing.T) {
@@ -1591,7 +1461,7 @@ func TestDeleteRecentDirPersistsRemoval(t *testing.T) {
 	if err := state.Save(servicePaths.StateFile, current); err != nil {
 		t.Fatal(err)
 	}
-	application := newTestApp(servicePaths, "", &recordingService{}, &dirRecordingRPC{}, app.Options{})
+	application := newTestApp(servicePaths, "", &recordingService{}, fixedRPC{}, app.Options{})
 
 	if err := application.DeleteRecentDir(context.Background(), "/data/Movies"); err != nil {
 		t.Fatalf("delete recent dir: %v", err)

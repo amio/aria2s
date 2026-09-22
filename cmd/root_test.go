@@ -299,10 +299,6 @@ func (*trackingRPC) CompleteCensus(context.Context, state.State) ([]aria2.Lifecy
 	return nil, nil
 }
 
-func (rpc *trackingRPC) Shutdown(context.Context, state.State) error {
-	return nil
-}
-
 func (*trackingRPC) ReadBatch(context.Context, state.State, aria2.ReadBatchQuery) (aria2.ReadBatch, error) {
 	return aria2.ReadBatch{}, nil
 }

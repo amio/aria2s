@@ -589,7 +589,6 @@ func (unavailableRPC) AddURI(context.Context, state.State, string, aria2.AddOpti
 	return "", nil
 }
 func (unavailableRPC) SaveSession(context.Context, state.State) error { return nil }
-func (unavailableRPC) Shutdown(context.Context, state.State) error    { return nil }
 
 func (rpc *fakeRPC) Version(context.Context, state.State) (string, error) {
 	return rpc.version, nil
@@ -619,10 +618,6 @@ func (rpc *fakeRPC) ForceRemove(context.Context, state.State, string) error     
 func (rpc *fakeRPC) RemoveDownloadResult(context.Context, state.State, string) error { return nil }
 
 func (rpc *fakeRPC) SaveSession(context.Context, state.State) error {
-	return nil
-}
-
-func (rpc *fakeRPC) Shutdown(context.Context, state.State) error {
 	return nil
 }
 

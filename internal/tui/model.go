@@ -419,7 +419,6 @@ func (model Model) applySnapshot(msg snapshotResultMsg) (tea.Model, tea.Cmd) {
 	return model, tea.Tick(model.refreshInterval, func(time.Time) tea.Msg { return refreshTimerMsg{token: token} })
 }
 
-func (model Model) Mode() Mode { return model.mode }
 func (model Model) Selected() app.TaskRow {
 	items := model.items()
 	if model.selected < 0 || model.selected >= len(items) {

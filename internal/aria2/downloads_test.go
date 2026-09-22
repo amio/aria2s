@@ -13,48 +13,6 @@ import (
 	"github.com/amio/aria2s/internal/aria2"
 )
 
-func TestListDownloadsFetchesActiveWaitingAndStoppedWindows(t *testing.T) {
-	var requests []rpcCall
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := decodeRPCCall(t, r)
-		requests = append(requests, call)
-		switch call.Method {
-		case "aria2.tellActive":
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[{"gid":"a1","status":"active","files":[{"path":"/tmp/a.iso"}],"completedLength":"25","totalLength":"100","downloadSpeed":"5","uploadLength":"0"}]}`)
-		case "aria2.tellWaiting":
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[{"gid":"w1","status":"waiting","files":[{"path":"/tmp/w.iso"}],"completedLength":"0","totalLength":"200"}]}`)
-		case "aria2.tellStopped":
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[{"gid":"s1","status":"complete","files":[{"path":"/tmp/s.iso"}],"completedLength":"300","totalLength":"300"}]}`)
-		default:
-			t.Fatalf("unexpected method %s", call.Method)
-		}
-	}))
-	defer server.Close()
-	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
-
-	snapshot, err := client.ListDownloads(context.Background(), aria2.ListOptions{WaitingLimit: 10, StoppedOffset: 20, StoppedLimit: 30})
-	if err != nil {
-		t.Fatalf("list downloads: %v", err)
-	}
-
-	if len(snapshot.Active) != 1 || snapshot.Active[0].GID != "a1" || snapshot.Active[0].Name != "a.iso" {
-		t.Fatalf("unexpected active downloads: %#v", snapshot.Active)
-	}
-	if snapshot.Active[0].UploadLength != 0 || !snapshot.Active[0].UploadLengthKnown {
-		t.Fatalf("known-zero upload length was lost: %#v", snapshot.Active[0])
-	}
-	if len(snapshot.Waiting) != 1 || snapshot.Waiting[0].GID != "w1" || snapshot.Waiting[0].Status != "waiting" {
-		t.Fatalf("unexpected waiting downloads: %#v", snapshot.Waiting)
-	}
-	if len(snapshot.Stopped) != 1 || snapshot.Stopped[0].GID != "s1" ||
-		snapshot.Stopped[0].CompletedLength != 300 || !snapshot.Stopped[0].LengthKnown {
-		t.Fatalf("unexpected stopped downloads: %#v", snapshot.Stopped)
-	}
-	assertRPCRequest(t, requests[0], "aria2.tellActive", "token:secret-token")
-	assertRPCRequest(t, requests[1], "aria2.tellWaiting", "token:secret-token", float64(0), float64(10))
-	assertRPCRequest(t, requests[2], "aria2.tellStopped", "token:secret-token", float64(-21), float64(30))
-}
-
 func TestLifecycleStatusIncludesNativeDisplayName(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := decodeRPCCall(t, r)
@@ -71,96 +29,6 @@ func TestLifecycleStatusIncludesNativeDisplayName(t *testing.T) {
 	}
 	if status.Name != "Readable Release" {
 		t.Fatalf("lifecycle display name = %q", status.Name)
-	}
-}
-
-func TestListDownloadsFiltersCompletedMetadataFromStopped(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := decodeRPCCall(t, r)
-		switch call.Method {
-		case "aria2.tellActive":
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[
-				{"gid":"m1","status":"active","files":[{"path":"[METADATA]GIRLT.No.017.7z"}],"completedLength":"0","totalLength":"0","downloadSpeed":"0"},
-				{"gid":"a1","status":"active","files":[{"path":"/tmp/movie.mkv"}],"bittorrent":{"info":{"name":"Movie"}},"completedLength":"100","totalLength":"200","downloadSpeed":"5"}
-			]}`)
-		case "aria2.tellWaiting":
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[]}`)
-		case "aria2.tellStopped":
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[
-				{"gid":"m2","status":"complete","files":[{"path":"[METADATA]The+New+York+Times"}],"completedLength":"20480","totalLength":"20480"},
-				{"gid":"s1","status":"complete","files":[{"path":"/tmp/done.iso"}],"completedLength":"300","totalLength":"300"}
-			]}`)
-		default:
-			t.Fatalf("unexpected method %s", call.Method)
-		}
-	}))
-	defer server.Close()
-	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
-
-	snapshot, err := client.ListDownloads(context.Background(), aria2.ListOptions{})
-	if err != nil {
-		t.Fatalf("list downloads: %v", err)
-	}
-
-	if len(snapshot.Active) != 2 {
-		t.Fatalf("active count got %d, want 2", len(snapshot.Active))
-	}
-	if !snapshot.Active[0].IsMetadata {
-		t.Fatalf("first active entry should be metadata: %#v", snapshot.Active[0])
-	}
-	if snapshot.Active[0].Name != "GIRLT.No.017.7z" {
-		t.Fatalf("metadata name got %q, want GIRLT.No.017.7z", snapshot.Active[0].Name)
-	}
-	if snapshot.Active[1].Name != "Movie" {
-		t.Fatalf("active name got %q, want Movie", snapshot.Active[1].Name)
-	}
-
-	if len(snapshot.Stopped) != 1 {
-		t.Fatalf("stopped count got %d, want 1 (completed metadata should be filtered)", len(snapshot.Stopped))
-	}
-	if snapshot.Stopped[0].GID != "s1" {
-		t.Fatalf("stopped entry got %s, want s1", snapshot.Stopped[0].GID)
-	}
-}
-
-func TestListDownloadsDecodesMetadataDisplayName(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		call := decodeRPCCall(t, r)
-		switch call.Method {
-		case "aria2.tellActive":
-			assertRequestIncludesField(t, call, "numSeeders")
-			assertRequestIncludesField(t, call, "connections")
-			assertRequestIncludesField(t, call, "uploadLength")
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[
-				{"gid":"m1","status":"active","files":[{"path":"[METADATA]The+New+York+Times+Best+Sellers"}],"completedLength":"0","totalLength":"20480","uploadLength":"2048","numSeeders":"7","connections":"13"}
-			]}`)
-		case "aria2.tellWaiting":
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[]}`)
-		case "aria2.tellStopped":
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[]}`)
-		default:
-			t.Fatalf("unexpected method %s", call.Method)
-		}
-	}))
-	defer server.Close()
-	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
-
-	snapshot, err := client.ListDownloads(context.Background(), aria2.ListOptions{})
-	if err != nil {
-		t.Fatalf("list downloads: %v", err)
-	}
-
-	if len(snapshot.Active) != 1 {
-		t.Fatalf("active count got %d, want 1", len(snapshot.Active))
-	}
-	if snapshot.Active[0].Name != "The New York Times Best Sellers" {
-		t.Fatalf("metadata name got %q, want 'The New York Times Best Sellers'", snapshot.Active[0].Name)
-	}
-	if snapshot.Active[0].NumSeeders != 7 || snapshot.Active[0].Connections != 13 {
-		t.Fatalf("peer metrics got seeds=%d peers=%d, want 7 and 13", snapshot.Active[0].NumSeeders, snapshot.Active[0].Connections)
-	}
-	if snapshot.Active[0].UploadLength != 2048 || !snapshot.Active[0].UploadLengthKnown {
-		t.Fatalf("upload length got value=%d known=%t, want 2048 and true", snapshot.Active[0].UploadLength, snapshot.Active[0].UploadLengthKnown)
 	}
 }
 
@@ -276,7 +144,7 @@ func TestRetrySourceBuildsMagnetFromInfoHashWhenURIsMissing(t *testing.T) {
 	}
 }
 
-func TestSessionLifecycleRPCMethodsUseExpectedAria2Calls(t *testing.T) {
+func TestSaveSessionUsesExpectedAria2Call(t *testing.T) {
 	var requests []rpcCall
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		call := decodeRPCCall(t, r)
@@ -289,15 +157,11 @@ func TestSessionLifecycleRPCMethodsUseExpectedAria2Calls(t *testing.T) {
 	if err := client.SaveSession(context.Background()); err != nil {
 		t.Fatalf("save session: %v", err)
 	}
-	if err := client.Shutdown(context.Background()); err != nil {
-		t.Fatalf("shutdown: %v", err)
-	}
 
-	if len(requests) != 2 {
-		t.Fatalf("expected 2 RPC calls, got %d", len(requests))
+	if len(requests) != 1 {
+		t.Fatalf("expected 1 RPC call, got %d", len(requests))
 	}
 	assertRPCRequest(t, requests[0], "aria2.saveSession", "token:secret-token")
-	assertRPCRequest(t, requests[1], "aria2.shutdown", "token:secret-token")
 }
 
 type rpcCall struct {

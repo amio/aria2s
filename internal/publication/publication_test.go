@@ -7,7 +7,7 @@ import (
 	"testing"
 )
 
-func TestMovePreservesIdentityAndConflict(t *testing.T) {
+func TestMoveExpectedPreservesIdentityAndConflict(t *testing.T) {
 	root := t.TempDir()
 	sourceDir := filepath.Join(root, "stage")
 	destinationDir := filepath.Join(root, "target")
@@ -20,7 +20,11 @@ func TestMovePreservesIdentityAndConflict(t *testing.T) {
 		t.Fatal(err)
 	}
 	destination := filepath.Join(destinationDir, "payload")
-	if _, err := Move(source, destination); err != nil {
+	parent, err := Identify(destinationDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MoveExpected(source, destination, before, parent); err != nil {
 		t.Fatal(err)
 	}
 	after, err := Identify(destination)
@@ -31,7 +35,11 @@ func TestMovePreservesIdentityAndConflict(t *testing.T) {
 		t.Fatal("rename did not preserve object identity")
 	}
 	os.WriteFile(source, []byte("second"), 0o600)
-	if _, err := Move(source, destination); !errors.Is(err, ErrConflict) {
+	replacement, err := Identify(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MoveExpected(source, destination, replacement, parent); !errors.Is(err, ErrConflict) {
 		t.Fatalf("conflict error = %v", err)
 	}
 	data, _ := os.ReadFile(destination)

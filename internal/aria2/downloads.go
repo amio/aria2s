@@ -100,30 +100,6 @@ type DownloadFile struct {
 	Selected        bool
 }
 
-func (client *RPCClient) ListDownloads(ctx context.Context, options ListOptions) (DownloadSnapshot, error) {
-	if options.WaitingLimit <= 0 {
-		options.WaitingLimit = 100
-	}
-	if options.StoppedLimit <= 0 {
-		options.StoppedLimit = 100
-	}
-	var active, waiting, stopped []rawDownload
-	if err := client.call(ctx, "aria2.tellActive", []any{downloadFields()}, &active); err != nil {
-		return DownloadSnapshot{}, err
-	}
-	if err := client.call(ctx, "aria2.tellWaiting", []any{0, options.WaitingLimit, downloadFields()}, &waiting); err != nil {
-		return DownloadSnapshot{}, err
-	}
-	if err := client.call(ctx, "aria2.tellStopped", []any{recentStoppedOffset(options.StoppedOffset), options.StoppedLimit, downloadFields()}, &stopped); err != nil {
-		return DownloadSnapshot{}, err
-	}
-	return DownloadSnapshot{
-		Active:  mapDownloads(active),
-		Waiting: mapDownloads(waiting),
-		Stopped: filterMetadataStopped(mapDownloads(stopped)),
-	}, nil
-}
-
 // aria2 indexes stopped results from the least recent entry. A negative offset
 // walks backward from the most recent entry and returns the page newest-first.
 func recentStoppedOffset(offset int) int {
@@ -308,11 +284,6 @@ func (client *RPCClient) SaveSession(ctx context.Context) error {
 	return client.call(ctx, "aria2.saveSession", nil, &ignored)
 }
 
-func (client *RPCClient) Shutdown(ctx context.Context) error {
-	var ignored string
-	return client.call(ctx, "aria2.shutdown", nil, &ignored)
-}
-
 type rawDownload struct {
 	GID                    string    `json:"gid"`
 	Status                 string    `json:"status"`
@@ -462,10 +433,6 @@ func fileName(path string) string {
 		return path
 	}
 	return name
-}
-
-func downloadFields() []string {
-	return []string{"gid", "status", "dir", "files", "bittorrent", "completedLength", "totalLength", "downloadSpeed", "uploadSpeed", "uploadLength", "infoHash", "numSeeders", "connections", "seeder"}
 }
 
 func dashboardRowFields() []string {

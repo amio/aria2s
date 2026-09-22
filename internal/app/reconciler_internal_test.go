@@ -460,7 +460,6 @@ func (rpc *reconcilerRPC) SaveSession(context.Context, state.State) error {
 	rpc.saveCalls++
 	return rpc.saveErr
 }
-func (*reconcilerRPC) Shutdown(context.Context, state.State) error { return nil }
 
 func newReconcilerTestApp(t *testing.T) (*App, *jobs.Repository, *reconcilerRPC, string) {
 	t.Helper()
@@ -494,6 +493,40 @@ func TestReconcilerPersistsDistinctBindingBeforeUnknownAddAndKeepsStableJobID(t 
 	}
 	if job.Issue != nil {
 		t.Fatalf("observed unknown Add retained issue: %+v", job.Issue)
+	}
+}
+
+func TestAddManagedRecordsResolvedDirectoriesMostRecentFirst(t *testing.T) {
+	application, repository, _, target := newReconcilerTestApp(t)
+	defaultDir, err := filepath.EvalSymlinks(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	customDir := filepath.Join(defaultDir, "custom")
+	if err := os.Mkdir(customDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range []struct {
+		requested string
+		want      []string
+	}{
+		{"", []string{defaultDir}},
+		{customDir, []string{customDir, defaultDir}},
+		{customDir, []string{customDir, defaultDir}},
+		{defaultDir, []string{defaultDir, customDir}},
+	} {
+		result, err := application.AddManaged(context.Background(), AddRequest{Source: "https://example.test/payload.bin", TargetDir: step.requested})
+		if err != nil || result.Warning != nil {
+			t.Fatalf("add managed task: err=%v warning=%v", err, result.Warning)
+		}
+		job, _, err := repository.Load(result.Task.JobID)
+		if err != nil || job.TargetDir != step.want[0] {
+			t.Fatalf("persisted target = %q, err=%v, want %q", job.TargetDir, err, step.want[0])
+		}
+		recent, err := application.RecentDirs(context.Background())
+		if err != nil || !reflect.DeepEqual(recent, step.want) {
+			t.Fatalf("recent directories = %v, err=%v, want %v", recent, err, step.want)
+		}
 	}
 }
 
@@ -603,7 +636,7 @@ func TestStartupKeepsValidatedLegacyPendingSavedBinding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	manifestDir := filepath.Join(repository.Root(), "jobs", jobID)
+	manifestDir := filepath.Join(application.options.Paths.StateDir, "jobs", jobID)
 	if err := os.MkdirAll(manifestDir, 0o700); err != nil {
 		t.Fatal(err)
 	}

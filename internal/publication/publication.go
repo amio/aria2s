@@ -146,22 +146,6 @@ func ValidatePayloadRoot(workDir, relative string) (string, Identity, error) {
 	return path, identity, err
 }
 
-func Move(source, destination string) (MoveResult, error) {
-	sourceIdentity, err := Identify(source)
-	if err != nil {
-		return MoveResult{}, err
-	}
-	destinationParent := filepath.Dir(destination)
-	parentIdentity, err := Identify(destinationParent)
-	if err != nil {
-		return MoveResult{}, err
-	}
-	if sourceIdentity.MountID != parentIdentity.MountID {
-		return MoveResult{}, ErrCrossDevice
-	}
-	return MoveExpected(source, destination, sourceIdentity, parentIdentity)
-}
-
 // MoveExpected binds a portable rename to identities observed before the
 // publication transaction. The destination preflight avoids intentional
 // replacement, but an external writer can still race the ordinary rename.

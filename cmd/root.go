@@ -124,10 +124,6 @@ func Execute() error {
 	return NewRoot(application).Execute()
 }
 
-func printErr(command *cobra.Command, format string, args ...any) {
-	fmt.Fprintf(command.ErrOrStderr(), format, args...)
-}
-
 func customRootHelp(cmd *cobra.Command, _ []string) {
 	// Subcommands should use the default cobra help behavior,
 	// not this root-specific custom layout.

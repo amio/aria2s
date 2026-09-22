@@ -8,7 +8,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/amio/aria2s/internal/aria2"
 	"github.com/amio/aria2s/internal/state"
 )
 
@@ -93,8 +92,14 @@ func (backend *LaunchdBackend) serviceTarget() string {
 }
 
 func RenderLaunchAgent(current state.State) (string, error) {
+	if current.RuntimeSchemaVersion != 2 {
+		return "", fmt.Errorf("service rendering requires runtime v2")
+	}
 	if current.Aria2cPath == "" {
 		return "", fmt.Errorf("aria2c path is required")
+	}
+	if current.ControllerPath == "" {
+		return "", fmt.Errorf("controller path is required for runtime v2")
 	}
 	var builder strings.Builder
 	builder.WriteString(xml.Header)
@@ -102,32 +107,17 @@ func RenderLaunchAgent(current state.State) (string, error) {
 	builder.WriteString("\n<plist version=\"1.0\">\n<dict>\n")
 	writePlistString(&builder, "Label", current.ServiceName)
 	builder.WriteString("  <key>ProgramArguments</key>\n  <array>\n")
-	if current.RuntimeSchemaVersion == 2 {
-		if current.ControllerPath == "" {
-			return "", fmt.Errorf("controller path is required for runtime v2")
-		}
-		writePlistArrayString(&builder, current.ControllerPath)
-		writePlistArrayString(&builder, "managed-exec")
-	} else {
-		writePlistArrayString(&builder, current.Aria2cPath)
-		for _, arg := range aria2.ManagedArgs(current) {
-			writePlistArrayString(&builder, arg)
-		}
-	}
+	writePlistArrayString(&builder, current.ControllerPath)
+	writePlistArrayString(&builder, "managed-exec")
 	builder.WriteString("  </array>\n")
 	builder.WriteString("  <key>RunAtLoad</key>\n  <false/>\n")
 	builder.WriteString("  <key>KeepAlive</key>\n  <dict>\n")
 	builder.WriteString("    <key>SuccessfulExit</key>\n    <false/>\n")
 	builder.WriteString("  </dict>\n")
-	if current.RuntimeSchemaVersion == 2 {
-		// managed-exec must rotate before opening these paths; launchd-owned
-		// descriptors would keep writing to an archive after rename.
-		writePlistString(&builder, "StandardOutPath", "/dev/null")
-		writePlistString(&builder, "StandardErrorPath", "/dev/null")
-	} else {
-		writePlistString(&builder, "StandardOutPath", current.LogPath)
-		writePlistString(&builder, "StandardErrorPath", current.ErrorLogPath)
-	}
+	// managed-exec must rotate before opening these paths; launchd-owned
+	// descriptors would keep writing to an archive after rename.
+	writePlistString(&builder, "StandardOutPath", "/dev/null")
+	writePlistString(&builder, "StandardErrorPath", "/dev/null")
 	writePlistResourceLimits(&builder, MaxOpenFiles)
 	builder.WriteString("</dict>\n</plist>\n")
 	return builder.String(), nil

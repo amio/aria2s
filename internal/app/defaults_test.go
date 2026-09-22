@@ -21,9 +21,11 @@ func TestDefaultOptionsForLinuxUseSystemdPathsAndRenderer(t *testing.T) {
 		t.Fatalf("unexpected linux service name: %s", options.Paths.ServiceName)
 	}
 	unit, err := options.RenderService(state.State{
-		Aria2cPath:   "/usr/bin/aria2c",
-		LogPath:      options.Paths.LogFile,
-		ErrorLogPath: options.Paths.ErrorLogFile,
+		RuntimeSchemaVersion: 2,
+		ControllerPath:       "/usr/local/bin/aria2s",
+		Aria2cPath:           "/usr/bin/aria2c",
+		LogPath:              options.Paths.LogFile,
+		ErrorLogPath:         options.Paths.ErrorLogFile,
 	})
 	if err != nil {
 		t.Fatalf("render linux service: %v", err)
@@ -43,9 +45,11 @@ func TestNewInfersLinuxServiceDefaultsFromLinuxPaths(t *testing.T) {
 		t.Fatal("expected app.New to infer a service backend for Linux paths")
 	}
 	unit, err := application.options.RenderService(state.State{
-		Aria2cPath:   "/usr/bin/aria2c",
-		LogPath:      servicePaths.LogFile,
-		ErrorLogPath: servicePaths.ErrorLogFile,
+		RuntimeSchemaVersion: 2,
+		ControllerPath:       "/usr/local/bin/aria2s",
+		Aria2cPath:           "/usr/bin/aria2c",
+		LogPath:              servicePaths.LogFile,
+		ErrorLogPath:         servicePaths.ErrorLogFile,
 	})
 	if err != nil {
 		t.Fatalf("render inferred linux service: %v", err)

@@ -54,6 +54,9 @@ func TestReadBatchUsesAuthenticatedNestedMulticall(t *testing.T) {
 		if calls[2].Params[1] != float64(-21) {
 			t.Fatalf("stopped offset = %#v, want newest-first page offset -21", calls[2].Params[1])
 		}
+		if calls[1].Params[1] != float64(0) || calls[1].Params[2] != float64(10) || calls[2].Params[2] != float64(10) {
+			t.Fatalf("unexpected list windows: waiting=%#v stopped=%#v", calls[1].Params, calls[2].Params)
+		}
 		detailFields, ok := calls[3].Params[len(calls[3].Params)-1].([]any)
 		if !ok || !containsJSONValue(detailFields, "files") {
 			t.Fatalf("detail call lost files: %#v", calls[3].Params)
@@ -130,18 +133,18 @@ func TestReadBatchHydratesOnlyRowsWithoutTorrentNames(t *testing.T) {
 			if len(calls) != 3 {
 				t.Fatalf("initial calls = %d", len(calls))
 			}
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[[{"gid":"http","status":"active"},{"gid":"torrent","status":"active","bittorrent":{"info":{"name":"Large Torrent"}}}]],[[]],[[{"gid":"metadata","status":"complete"}]]]}`)
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[[{"gid":"http","status":"active","completedLength":"25","totalLength":"100","downloadSpeed":"5","uploadLength":"0"},{"gid":"torrent","status":"active","bittorrent":{"info":{"name":"Large Torrent"}}},{"gid":"pending-metadata","status":"active","uploadLength":"2048","numSeeders":"7","connections":"13"}]],[[{"gid":"waiting","status":"waiting","bittorrent":{"info":{"name":"Queued Torrent"}}}]],[[{"gid":"metadata","status":"complete"},{"gid":"done","status":"complete","totalLength":"300","completedLength":"300","bittorrent":{"info":{"name":"Completed Torrent"}}}]]]}`)
 		case 2:
-			if len(calls) != 2 || calls[0].Method != "aria2.tellStatus" || calls[1].Method != "aria2.tellStatus" {
+			if len(calls) != 3 {
 				t.Fatalf("identity calls = %#v", calls)
 			}
 			for _, call := range calls {
 				fields, ok := call.Params[len(call.Params)-1].([]any)
-				if !ok || len(fields) != 2 || !containsJSONValue(fields, "gid") || !containsJSONValue(fields, "files") {
+				if call.Method != "aria2.tellStatus" || !ok || len(fields) != 2 || !containsJSONValue(fields, "gid") || !containsJSONValue(fields, "files") {
 					t.Fatalf("identity fields = %#v", call.Params)
 				}
 			}
-			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[{"gid":"http","files":[{"path":"/tmp/asset.iso"}]}],[{"gid":"metadata","files":[{"path":"[METADATA]Example"}]}]]}`)
+			fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":[[{"gid":"http","files":[{"path":"/tmp/asset.iso"}]}],[{"gid":"pending-metadata","files":[{"path":"[METADATA]The+New+York+Times"}]}],[{"gid":"metadata","files":[{"path":"[METADATA]Example"}]}]]}`)
 		default:
 			t.Fatalf("unexpected request %d", requestCount)
 		}
@@ -153,11 +156,26 @@ func TestReadBatchHydratesOnlyRowsWithoutTorrentNames(t *testing.T) {
 	if err != nil || read.ListErr != nil {
 		t.Fatalf("compact read failed: read=%#v err=%v", read, err)
 	}
-	if len(read.Downloads.Active) != 2 || read.Downloads.Active[0].Name != "asset.iso" || read.Downloads.Active[1].Name != "Large Torrent" {
+	if len(read.Downloads.Active) != 3 || read.Downloads.Active[0].Name != "asset.iso" || read.Downloads.Active[1].Name != "Large Torrent" {
 		t.Fatalf("row names = %#v", read.Downloads.Active)
 	}
-	if len(read.Downloads.Stopped) != 0 {
+	httpRow := read.Downloads.Active[0]
+	if httpRow.CompletedLength != 25 || httpRow.TotalLength != 100 || !httpRow.LengthKnown || httpRow.DownloadSpeed != 5 || httpRow.UploadLength != 0 || !httpRow.UploadLengthKnown {
+		t.Fatalf("HTTP row metrics = %#v", httpRow)
+	}
+	metadata := read.Downloads.Active[2]
+	if !metadata.IsMetadata || metadata.Name != "The New York Times" || metadata.NumSeeders != 7 || metadata.Connections != 13 || metadata.UploadLength != 2048 || !metadata.UploadLengthKnown {
+		t.Fatalf("metadata row = %#v", metadata)
+	}
+	if len(read.Downloads.Waiting) != 1 || read.Downloads.Waiting[0].GID != "waiting" || read.Downloads.Waiting[0].Status != "waiting" {
+		t.Fatalf("waiting rows = %#v", read.Downloads.Waiting)
+	}
+	if len(read.Downloads.Stopped) != 1 || read.Downloads.Stopped[0].GID != "done" {
 		t.Fatalf("metadata result was not filtered: %#v", read.Downloads.Stopped)
+	}
+	completed := read.Downloads.Stopped[0]
+	if completed.CompletedLength != 300 || completed.TotalLength != 300 || !completed.LengthKnown {
+		t.Fatalf("completed row metrics = %#v", completed)
 	}
 }
 
