@@ -23,6 +23,7 @@ type reconcilerRPC struct {
 	unknownAdd   bool
 	bindingSeen  bool
 	addGIDs      []string
+	addOptions   []aria2.AddOptions
 	pauseCalls   []string
 	resumeCalls  []string
 	forceCalls   []string
@@ -37,6 +38,7 @@ func (*reconcilerRPC) Version(context.Context, state.State) (string, error) { re
 func (rpc *reconcilerRPC) AddURI(_ context.Context, _ state.State, _ string, options aria2.AddOptions) (string, error) {
 	rpc.observePersistedBinding(options.GID)
 	rpc.addGIDs = append(rpc.addGIDs, options.GID)
+	rpc.addOptions = append(rpc.addOptions, options)
 	rpc.statuses[options.GID] = aria2.LifecycleStatus{GID: options.GID, Status: "active", Dir: options.Dir}
 	if rpc.unknownAdd {
 		return "", &aria2.OutcomeUnknownError{Method: "aria2.addUri", Cause: context.DeadlineExceeded}
@@ -46,6 +48,7 @@ func (rpc *reconcilerRPC) AddURI(_ context.Context, _ state.State, _ string, opt
 func (rpc *reconcilerRPC) AddTorrent(_ context.Context, _ state.State, _ []byte, options aria2.AddOptions) (string, error) {
 	rpc.observePersistedBinding(options.GID)
 	rpc.addGIDs = append(rpc.addGIDs, options.GID)
+	rpc.addOptions = append(rpc.addOptions, options)
 	if rpc.torrentErr != nil {
 		return "", rpc.torrentErr
 	}
@@ -232,6 +235,16 @@ func TestTransferPublicationAndFinalSeedUseDifferentExecutionGIDs(t *testing.T) 
 	if _, err := os.Stat(filepath.Join(target, "x")); err != nil {
 		t.Fatalf("payload was not published: %v", err)
 	}
+	startup, err := application.ReconcileJob(context.Background(), jobID, ReconcileInput{Mode: ReconcileStartup})
+	if err != nil || startup.StartupBlock == nil {
+		t.Fatalf("published startup = %+v, %v", startup, err)
+	}
+	assertStartupMatchesAddOptions(t, *startup.StartupBlock, rpc.addOptions[len(rpc.addOptions)-1])
+	assertSessionOptions(t, *startup.StartupBlock, map[string]string{
+		"dir": target, "pause": "false", "bt-metadata-only": "false",
+		"bt-seed-unverified": "true", "check-integrity": "false",
+		"force-save": "false", "remove-control-file": "true",
+	})
 }
 
 func TestPublicationAutoSuffixesObservedConflict(t *testing.T) {

@@ -3,6 +3,8 @@ package aria2
 import (
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -120,6 +122,14 @@ func (block SessionBlock) Option(key string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// ApplyOptions shares RPC encoding while preserving unrelated saved options.
+func (block *SessionBlock) ApplyOptions(opts AddOptions) {
+	values := opts.values()
+	for _, key := range slices.Sorted(maps.Keys(values)) {
+		block.SetOption(key, values[key])
+	}
 }
 
 func (block *SessionBlock) SetOption(key, value string) {

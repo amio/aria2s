@@ -203,7 +203,6 @@ func (app *App) reconcileStagedLive(ctx context.Context, repository *jobs.Reposi
 		}
 	}
 	fact := inspectStartupFact(repository, job, scope)
-	options := stagedAddOptions(job, workDir, fact)
 	var added string
 	var addErr error
 	if fact.Torrent && fact.HasMetainfo {
@@ -211,12 +210,9 @@ func (app *App) reconcileStagedLive(ctx context.Context, repository *jobs.Reposi
 		if readErr != nil {
 			return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", readErr)
 		}
-		added, addErr = env.rpc.AddTorrent(ctx, env.current, metainfo, options)
+		added, addErr = env.rpc.AddTorrent(ctx, env.current, metainfo, managedTransferOptions(job, workDir, fact.MetainfoPath, fact))
 	} else if fact.WorkEmpty && completeSubmittedSource(job.Source) {
-		if strings.HasPrefix(job.Source, "magnet:") {
-			options.MetadataOnly, options.SaveMetadata = true, true
-		}
-		added, addErr = env.rpc.AddURI(ctx, env.current, job.Source, options)
+		added, addErr = env.rpc.AddURI(ctx, env.current, job.Source, managedTransferOptions(job, workDir, job.Source, fact))
 	} else {
 		return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", errors.New("staged artifacts have no safe restart state"))
 	}
@@ -362,9 +358,8 @@ func (app *App) reconcilePublishedLive(ctx context.Context, repository *jobs.Rep
 		if err != nil {
 			return ReconcileResult{}, err
 		}
-		check := false
-		removeControl := true
-		added, addErr := env.rpc.AddTorrent(ctx, env.current, metainfo, aria2.AddOptions{Dir: job.TargetDir, GID: gid, Managed: true, SeedUnverified: true, CheckIntegrity: &check, ForceSave: &check, RemoveControlFile: &removeControl})
+		options := managedTransferOptions(job, job.TargetDir, repository.MetainfoPath(job.ID), StartupFact{})
+		added, addErr := env.rpc.AddTorrent(ctx, env.current, metainfo, options)
 		if err := confirmManagedAdd(ctx, env.rpc, env.current, gid, job.TargetDir, added, addErr); err != nil {
 			return ReconcileResult{}, persistIssue(repository, job, token, "FinalSeedStartFailed", err)
 		}
@@ -478,7 +473,8 @@ func (app *App) reconcileStartupLocked(ctx context.Context, repository *jobs.Rep
 		if _, err := repository.SaveCAS(job, token); err != nil {
 			return ReconcileResult{}, err
 		}
-		block := generatedTorrentBlock(job.Execution.GID, job.ActivityIntent, repository.MetainfoPath(job.ID), job.TargetDir, false, true)
+		block := aria2.SessionBlock{URI: repository.MetainfoPath(job.ID)}
+		block.ApplyOptions(managedTransferOptions(job, job.TargetDir, block.URI, StartupFact{}))
 		return ReconcileResult{StartupBlock: &block}, nil
 	}
 	fact := inspectStartupFact(repository, job, scope)
@@ -487,11 +483,10 @@ func (app *App) reconcileStartupLocked(ctx context.Context, repository *jobs.Rep
 		if savedGID, ok := saved.Option("gid"); !ok || savedGID != job.Execution.GID {
 			return ReconcileResult{}, persistIssue(repository, job, token, "ManagedIdentityConflict", errors.New("saved block GID does not match execution binding"))
 		}
-		block, problem := normalizeStagedBlock(*saved, job, job.Execution.GID, workDir, fact)
+		block, problem := normalizeStagedBlock(*saved, job, workDir, fact)
 		if problem != "" {
 			return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", errors.New(problem))
 		}
-		applyMissingControlRecovery(&block, fact)
 		job.Issue = nil
 		if _, err := repository.SaveCAS(job, token); err != nil {
 			return ReconcileResult{}, err
@@ -516,14 +511,13 @@ func (app *App) reconcileStartupLocked(ctx context.Context, repository *jobs.Rep
 	}
 	var block aria2.SessionBlock
 	if fact.Torrent && fact.HasMetainfo {
-		block = generatedTorrentBlock(job.Execution.GID, job.ActivityIntent, fact.MetainfoPath, workDir, job.ActivityIntent == jobs.ActivityStopped, false)
+		block.URI = fact.MetainfoPath
 	} else if fact.WorkEmpty && completeSubmittedSource(job.Source) {
-		block = aria2.SessionBlock{URI: job.Source}
-		applyManagedOptions(&block, job.Execution.GID, workDir, job.ActivityIntent)
+		block.URI = job.Source
 	} else {
 		return ReconcileResult{}, persistIssue(repository, job, token, "RestartStateMissing", errors.New("native block is missing beside staged artifacts"))
 	}
-	applyMissingControlRecovery(&block, fact)
+	block.ApplyOptions(managedTransferOptions(job, workDir, block.URI, fact))
 	return ReconcileResult{StartupBlock: &block}, nil
 }
 
@@ -870,11 +864,31 @@ func convergeActivity(ctx context.Context, env liveEnvironment, gid, status stri
 	return nil
 }
 
-func stagedAddOptions(job jobs.Job, workDir string, fact StartupFact) aria2.AddOptions {
-	options := aria2.AddOptions{Dir: workDir, GID: job.Execution.GID, Managed: true, Pause: job.ActivityIntent == jobs.ActivityStopped}
-	if stagedIntegrityRequired(fact) {
-		value := true
-		options.CheckIntegrity = &value
+// managedTransferOptions owns the transport policy shared by live additions and
+// startup replay. Input identifies this execution: a retained torrent must not
+// inherit metadata-only mode from its original magnet source.
+func managedTransferOptions(job jobs.Job, dir, input string, fact StartupFact) aria2.AddOptions {
+	on, off := true, false
+	paused := job.ActivityIntent == jobs.ActivityStopped
+	metadata := strings.HasPrefix(input, "magnet:")
+	options := aria2.AddOptions{
+		Dir: dir, GID: job.Execution.GID, Pause: &paused,
+		AllowOverwrite: &off, AutoFileRenaming: &off, FollowTorrent: &off,
+		RemoveControlFile: &off, ForceSave: &on, SeedUnverified: &off,
+		MetadataOnly: &metadata,
+	}
+	if metadata {
+		options.SaveMetadata = &on
+	}
+	if job.Payload.Location == jobs.PayloadPublished {
+		options.SeedUnverified = &on
+		options.CheckIntegrity = &off
+		options.ForceSave = &off
+		options.RemoveControlFile = &on
+	} else if fact.Torrent && !fact.WorkEmpty && !fact.HasControl {
+		// Missing control state requires piece verification; allocated bytes
+		// may be full-length without containing any downloaded pieces.
+		options.CheckIntegrity = &on
 	}
 	return options
 }

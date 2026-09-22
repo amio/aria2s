@@ -2,11 +2,13 @@ package aria2_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -77,45 +79,73 @@ func TestAddURIRejectsUnsupportedSchemes(t *testing.T) {
 	}
 }
 
-func TestManagedTorrentOverridesUnverifiedSeedingByPublicationPhase(t *testing.T) {
-	var bodies [][]byte
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := io.ReadAll(r.Body)
-		if err != nil {
-			t.Fatalf("read body: %v", err)
-		}
-		bodies = append(bodies, body)
-		fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":"0123456789abcdef"}`)
-	}))
-	defer server.Close()
+func TestAddOptionsShareRPCAndSessionEncoding(t *testing.T) {
+	on, off := true, false
+	for _, test := range []struct {
+		name string
+		opts aria2.AddOptions
+		want map[string]string
+	}{
+		{name: "omitted", want: map[string]string{}},
+		{name: "metadata", opts: aria2.AddOptions{Dir: "/data", Pause: &off, MetadataOnly: &on, SaveMetadata: &on},
+			want: map[string]string{"dir": "/data", "pause": "false", "bt-metadata-only": "true", "bt-save-metadata": "true"}},
+		{name: "seed", opts: aria2.AddOptions{SeedUnverified: &on, CheckIntegrity: &off, ForceSave: &off, RemoveControlFile: &on},
+			want: map[string]string{"bt-seed-unverified": "true", "check-integrity": "false", "force-save": "false", "remove-control-file": "true"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var got map[string]string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var request struct {
+					Params []json.RawMessage `json:"params"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+					t.Error(err)
+					return
+				}
+				if err := json.Unmarshal(request.Params[len(request.Params)-1], &got); err != nil {
+					t.Error(err)
+					return
+				}
+				fmt.Fprint(w, `{"jsonrpc":"2.0","id":"1","result":"0123456789abcdef"}`)
+			}))
+			defer server.Close()
+			client := aria2.NewRPCClient(server.URL, "secret", server.Client())
+			if _, err := client.AddTorrent(context.Background(), []byte("metainfo"), test.opts); err != nil {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(got, test.want) {
+				t.Fatalf("RPC options = %v, want %v", got, test.want)
+			}
 
-	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
-	if _, err := client.AddTorrent(
-		context.Background(),
-		[]byte("metainfo"),
-		aria2.AddOptions{Managed: true},
-	); err != nil {
-		t.Fatalf("add staged torrent: %v", err)
+			block := aria2.SessionBlock{URI: "/torrent", Options: []aria2.SessionOption{{Key: "split", Value: "3"}}}
+			block.ApplyOptions(test.opts)
+			encoded, err := aria2.EncodeSession([]aria2.SessionBlock{block})
+			if err != nil {
+				t.Fatal(err)
+			}
+			decoded, problems := aria2.ParseSession(encoded)
+			if len(problems) != 0 || len(decoded) != 1 {
+				t.Fatalf("session decode: %v, %v", decoded, problems)
+			}
+			for key, want := range test.want {
+				if value, ok := decoded[0].Option(key); !ok || value != want {
+					t.Errorf("session %s = %q, want %q", key, value, want)
+				}
+			}
+			if len(decoded[0].Options) != len(test.want)+1 {
+				t.Fatalf("session options = %v", decoded[0].Options)
+			}
+			if value, _ := decoded[0].Option("split"); value != "3" {
+				t.Fatal("unrelated saved option changed")
+			}
+			fresh := aria2.SessionBlock{URI: "/torrent", Options: []aria2.SessionOption{{Key: "split", Value: "3"}}}
+			fresh.ApplyOptions(test.opts)
+			again, err := aria2.EncodeSession([]aria2.SessionBlock{fresh})
+			if err != nil || string(again) != string(encoded) {
+				t.Fatalf("option application changed encoding: %q, %v", again, err)
+			}
+		})
 	}
-	forceSave := false
-	removeControl := true
-	if _, err := client.AddTorrent(
-		context.Background(),
-		[]byte("metainfo"),
-		aria2.AddOptions{Managed: true, SeedUnverified: true, ForceSave: &forceSave, RemoveControlFile: &removeControl},
-	); err != nil {
-		t.Fatalf("add final seed: %v", err)
-	}
-
-	if len(bodies) != 2 {
-		t.Fatalf("request count = %d, want 2", len(bodies))
-	}
-	assertContains(t, string(bodies[0]), `"bt-seed-unverified":"false"`)
-	assertContains(t, string(bodies[0]), `"force-save":"true"`)
-	assertContains(t, string(bodies[0]), `"remove-control-file":"false"`)
-	assertContains(t, string(bodies[1]), `"bt-seed-unverified":"true"`)
-	assertContains(t, string(bodies[1]), `"force-save":"false"`)
-	assertContains(t, string(bodies[1]), `"remove-control-file":"true"`)
 }
 
 func TestWrapTransportErrorMarksEOFAsTransportUnavailable(t *testing.T) {

@@ -53,21 +53,6 @@ func NewRPCClient(endpoint, secret string, client *http.Client) *RPCClient {
 	return &RPCClient{endpoint: endpoint, secret: secret, client: client}
 }
 
-/** AddOptions carries optional per-task overrides sent to aria2.addUri. */
-type AddOptions struct {
-	Dir               string
-	GID               string
-	Out               string
-	Pause             bool
-	Managed           bool
-	MetadataOnly      bool
-	SaveMetadata      bool
-	SeedUnverified    bool
-	CheckIntegrity    *bool
-	ForceSave         *bool
-	RemoveControlFile *bool
-}
-
 func (client *RPCClient) AddURI(ctx context.Context, uri string, opts AddOptions) (string, error) {
 	if !isSupportedURI(uri) {
 		return "", fmt.Errorf("unsupported URI: %s", uri)
@@ -93,52 +78,6 @@ func (client *RPCClient) AddTorrent(ctx context.Context, metainfo []byte, opts A
 		return "", err
 	}
 	return gid, nil
-}
-
-func (opts AddOptions) values() map[string]string {
-	values := make(map[string]string)
-	if opts.Dir != "" {
-		values["dir"] = opts.Dir
-	}
-	if opts.GID != "" {
-		values["gid"] = opts.GID
-	}
-	if opts.Out != "" {
-		values["out"] = opts.Out
-	}
-	if opts.Pause {
-		values["pause"] = "true"
-	}
-	if opts.Managed {
-		values["allow-overwrite"] = "false"
-		values["auto-file-renaming"] = "false"
-		values["remove-control-file"] = "false"
-		values["force-save"] = "true"
-		values["follow-torrent"] = "false"
-		// Staged payloads must not inherit a user-wide trust policy. A failed
-		// allocation can leave full-length files without any verified pieces.
-		// Final seeds explicitly override this below after publication.
-		values["bt-seed-unverified"] = "false"
-	}
-	if opts.MetadataOnly {
-		values["bt-metadata-only"] = "true"
-	}
-	if opts.SaveMetadata {
-		values["bt-save-metadata"] = "true"
-	}
-	if opts.SeedUnverified {
-		values["bt-seed-unverified"] = "true"
-	}
-	if opts.CheckIntegrity != nil {
-		values["check-integrity"] = fmt.Sprintf("%t", *opts.CheckIntegrity)
-	}
-	if opts.ForceSave != nil {
-		values["force-save"] = fmt.Sprintf("%t", *opts.ForceSave)
-	}
-	if opts.RemoveControlFile != nil {
-		values["remove-control-file"] = fmt.Sprintf("%t", *opts.RemoveControlFile)
-	}
-	return values
 }
 
 func (client *RPCClient) Version(ctx context.Context) (string, error) {
