@@ -18,6 +18,28 @@ const (
 	ManagedLogFileCount       = 3
 )
 
+// ReadLogTail reads at most limit bytes from the end observed when opening a log.
+// Concurrent appends stay bounded; truncation may return fewer bytes.
+func ReadLogTail(path string, limit int64) ([]byte, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	start := info.Size() - limit
+	if start < 0 {
+		start = 0
+	}
+	if _, err := file.Seek(start, io.SeekStart); err != nil {
+		return nil, err
+	}
+	return io.ReadAll(io.LimitReader(file, limit))
+}
+
 // ActivateLogs rotates bounded managed logs before binding the process-wide
 // stdout and stderr descriptors inherited by aria2c.
 func ActivateLogs(stdoutPath, stderrPath string) error {

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"regexp"
 	"strings"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/amio/aria2s/internal/jobs"
 	"github.com/amio/aria2s/internal/paths"
+	managedruntime "github.com/amio/aria2s/internal/runtime"
 	"github.com/amio/aria2s/internal/state"
 )
 
@@ -139,7 +139,7 @@ func Check(ctx context.Context, options Options) Report {
 	if running && portOccupied && !rpcReachable {
 		readTail := options.ReadLogTail
 		if readTail == nil {
-			readTail = readFileTail
+			readTail = managedruntime.ReadLogTail
 		}
 		logPath := current.LogPath
 		if logPath == "" {
@@ -256,26 +256,6 @@ func currentFileAllocationGID(logTail []byte, scanned []jobs.ScannedJob) string 
 		return matched
 	}
 	return prefix
-}
-
-func readFileTail(path string, limit int64) ([]byte, error) {
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil {
-		return nil, err
-	}
-	start := info.Size() - limit
-	if start < 0 {
-		start = 0
-	}
-	if _, err := file.Seek(start, io.SeekStart); err != nil {
-		return nil, err
-	}
-	return io.ReadAll(io.LimitReader(file, limit))
 }
 
 type SupervisorStatus interface {

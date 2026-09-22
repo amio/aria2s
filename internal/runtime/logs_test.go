@@ -6,10 +6,70 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	managedruntime "github.com/amio/aria2s/internal/runtime"
 )
+
+func TestReadLogTail(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		content string
+		limit   int64
+		want    string
+	}{
+		{name: "empty", limit: 4096},
+		{name: "short", content: "recent\n", limit: 4096, want: "recent\n"},
+		{name: "exact", content: "recent\n", limit: 7, want: "recent\n"},
+		{name: "tail", content: "old\nrecent\n", limit: 7, want: "recent\n"},
+		{name: "zero limit", content: "recent\n"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "aria2.log")
+			writeLog(t, path, test.content)
+			data, err := managedruntime.ReadLogTail(path, test.limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if string(data) != test.want {
+				t.Fatalf("tail = %q, want %q", data, test.want)
+			}
+		})
+	}
+	t.Run("missing", func(t *testing.T) {
+		_, err := managedruntime.ReadLogTail(filepath.Join(t.TempDir(), "missing.log"), 4096)
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("missing log error = %v", err)
+		}
+	})
+}
+
+func TestReadLogTailBoundsLargeSparseLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "aria2.log")
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const size = 1 << 30
+	tail := strings.Repeat("0123456789abcdef", 256*1024/16)
+	if _, err := file.WriteAt([]byte(tail), size-int64(len(tail))); err != nil {
+		file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, limit := range []int64{4096, 256 * 1024} {
+		data, err := managedruntime.ReadLogTail(path, limit)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(data) != tail[int64(len(tail))-limit:] {
+			t.Fatalf("limit %d: got %d bytes with unexpected tail content", limit, len(data))
+		}
+	}
+}
 
 func TestActivateLogsBindsProcessOutput(t *testing.T) {
 	if os.Getenv("ARIA2S_TEST_ACTIVATE_LOGS") == "1" {
