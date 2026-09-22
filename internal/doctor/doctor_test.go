@@ -43,7 +43,7 @@ func TestCheckDetectsMissingBinaryAndPortConflict(t *testing.T) {
 		},
 	})
 
-	if report.Healthy {
+	if report.Healthy() {
 		t.Fatal("expected unhealthy report")
 	}
 	assertReportContains(t, report, "missing aria2c binary")
@@ -74,13 +74,13 @@ func TestCheckReportsCorruptManagedManifestWithRecoveryCode(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(jobDir, "manifest.json"), []byte("not-json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	report := doctor.Check(context.Background(), doctor.Options{Paths: servicePaths, Service: fixedService{loaded: true, running: true}, IsPortAvailable: func(int) bool { return true }, RPCVersion: func(context.Context, state.State) (string, error) { return "1.37.0", nil }})
-	for _, issue := range report.Issues {
+	report := app.New(app.Options{Paths: servicePaths, Service: &fakeService{installed: true, started: true}, RPC: &fakeRPC{}}).Doctor(context.Background())
+	for _, issue := range report.Issues() {
 		if issue.Code == "CorruptManifest" && len(issue.Recovery) > 0 && !strings.Contains(issue.Recovery[0], "Clear") && strings.Contains(issue.Recovery[0], "cannot be proven") {
 			return
 		}
 	}
-	t.Fatalf("corrupt manifest issue missing: %#v", report.Issues)
+	t.Fatalf("corrupt manifest issue missing: %#v", report.Issues())
 }
 
 func TestCheckDoesNotReportPortConflictWhenManagedRPCIsReachable(t *testing.T) {
@@ -124,8 +124,8 @@ func TestCheckDoesNotReportPortConflictWhenManagedRPCIsReachable(t *testing.T) {
 		},
 	})
 
-	if !report.Healthy {
-		t.Fatalf("expected healthy report, got %#v", report.Issues)
+	if !report.Healthy() {
+		t.Fatalf("expected healthy report, got %#v", report.Issues())
 	}
 }
 
@@ -163,15 +163,15 @@ func TestCheckReportsSlowManagedRPCAsWarning(t *testing.T) {
 		},
 	})
 
-	if !report.Healthy {
-		t.Fatalf("slow but reachable RPC made report unhealthy: %#v", report.Issues)
+	if !report.Healthy() {
+		t.Fatalf("slow but reachable RPC made report unhealthy: %#v", report.Issues())
 	}
-	for _, issue := range report.Issues {
+	for _, issue := range report.Issues() {
 		if issue.Code == "RPCSlow" && issue.Severity == "warning" {
 			return
 		}
 	}
-	t.Fatalf("missing slow RPC warning: %#v", report.Issues)
+	t.Fatalf("missing slow RPC warning: %#v", report.Issues())
 }
 
 func TestCheckRecognizesManagedFileAllocationStallWithoutPortConflict(t *testing.T) {
@@ -204,9 +204,9 @@ func TestCheckRecognizesManagedFileAllocationStallWithoutPortConflict(t *testing
 
 	assertReportContains(t, report, "managed service is listening but RPC does not respond")
 	assertReportContains(t, report, "file allocation is blocking aria2 startup")
-	for _, issue := range report.Issues {
+	for _, issue := range report.Issues() {
 		if issue.Code == "PortConflict" {
-			t.Fatalf("managed listener was misclassified as port conflict: %#v", report.Issues)
+			t.Fatalf("managed listener was misclassified as port conflict: %#v", report.Issues())
 		}
 	}
 	if report.Repair == nil || report.Repair.Command != "aria2s doctor --repair --discard-unmanaged-tasks" {
@@ -239,9 +239,9 @@ func TestCheckIgnoresFileAllocationFromAnEarlierStartup(t *testing.T) {
 	if report.Repair != nil {
 		t.Fatalf("stale FileAlloc marker produced a repair: %#v", report.Repair)
 	}
-	for _, issue := range report.Issues {
+	for _, issue := range report.Issues() {
 		if issue.Code == "FileAllocationBlocked" {
-			t.Fatalf("stale FileAlloc marker produced issue: %#v", report.Issues)
+			t.Fatalf("stale FileAlloc marker produced issue: %#v", report.Issues())
 		}
 	}
 }
@@ -318,7 +318,7 @@ func TestCheckReportsSupervisorDrift(t *testing.T) {
 		},
 	})
 
-	if report.Healthy {
+	if report.Healthy() {
 		t.Fatal("expected supervisor drift report")
 	}
 	assertReportContains(t, report, "missing service file")
@@ -365,7 +365,7 @@ func TestCheckReportsNotRunningAndRPCUnreachable(t *testing.T) {
 		},
 	})
 
-	if report.Healthy {
+	if report.Healthy() {
 		t.Fatal("expected unhealthy report")
 	}
 	assertReportContains(t, report, "supervisor not running")
@@ -642,12 +642,12 @@ func (service fixedService) IsRunning(context.Context) bool {
 
 func assertReportContains(t *testing.T, report doctor.Report, want string) {
 	t.Helper()
-	for _, issue := range report.Issues {
+	for _, issue := range report.Issues() {
 		if strings.Contains(issue.Summary, want) {
 			return
 		}
 	}
-	t.Fatalf("expected report to contain %q, got %#v", want, report.Issues)
+	t.Fatalf("expected report to contain %q, got %#v", want, report.Issues())
 }
 
 func assertContains(t *testing.T, text, want string) {

@@ -15,45 +15,16 @@ import (
 	"github.com/amio/aria2s/internal/state"
 )
 
-type Issue struct {
-	Code        string
-	Severity    string
-	Summary     string
-	Explanation string
-	Evidence    string
-	Recovery    []string
-}
-
-type Report struct {
-	Healthy bool
-	Checks  []DiagnosticCheck
-	Issues  []Issue
-	Repair  *Repair
-}
-
-type DiagnosticCheck struct {
-	Name     string
-	Healthy  bool
-	Severity string
-	Summary  string
-	Evidence string
-	Recovery []string
-}
-
-type Repair struct {
-	Code    string
-	Command string
-	Summary string
-}
-
 type Options struct {
-	Paths            paths.Paths
-	IsPortAvailable  func(int) bool
-	Service          SupervisorStatus
-	RPCVersion       func(context.Context, state.State) (string, error)
-	RPCProbeTimeout  time.Duration
-	RPCSlowThreshold time.Duration
-	ReadLogTail      func(string, int64) ([]byte, error)
+	Paths               paths.Paths
+	IsPortAvailable     func(int) bool
+	Service             SupervisorStatus
+	RPCVersion          func(context.Context, state.State) (string, error)
+	RPCProbeTimeout     time.Duration
+	RPCSlowThreshold    time.Duration
+	ReadLogTail         func(string, int64) ([]byte, error)
+	InspectInstallation func(state.State) error
+	InspectTasks        func(context.Context, state.State, bool, []jobs.ScannedJob, error) []DiagnosticCheck
 }
 
 const (
@@ -61,22 +32,29 @@ const (
 	defaultRPCSlowThreshold = 2 * time.Second
 )
 
-func Check(ctx context.Context, options Options) Report {
-	report := Report{Healthy: true}
+func Check(ctx context.Context, options Options) (report Report) {
+	var current state.State
+	var rpcReachable bool
+	// Task coverage remains useful even when runtime state cannot be loaded.
+	defer func() {
+		scanned, scanErr := jobs.New(options.Paths.StateDir).Scan()
+		if options.InspectTasks != nil {
+			report.Checks = append(report.Checks, options.InspectTasks(ctx, current, rpcReachable, scanned, scanErr)...)
+		}
+		report = report.Sanitized(current.RPCSecret)
+	}()
 	addSuccess := func(name, summary string) {
-		report.Checks = append(report.Checks, DiagnosticCheck{Name: name, Healthy: true, Severity: "ok", Summary: summary})
+		report.Checks = append(report.Checks, DiagnosticCheck{Group: checkGroup(name), Name: name, Issue: Issue{Severity: OK, Summary: summary}})
 	}
 	addIssue := func(name string, issue Issue) {
-		report.Checks = append(report.Checks, DiagnosticCheck{Name: name, Severity: issue.Severity, Summary: issue.Summary, Evidence: issue.Evidence, Recovery: issue.Recovery})
-		report.Issues = append(report.Issues, issue)
-		if issue.Severity == "error" {
-			report.Healthy = false
-		}
+		report.Checks = append(report.Checks, DiagnosticCheck{Group: checkGroup(name), Name: name, Issue: issue})
 	}
 
-	current, err := state.Load(options.Paths.StateFile)
+	var err error
+	current, err = state.Load(options.Paths.StateFile)
 	if err != nil {
 		addIssue("Runtime state", problem("InstallIncomplete", "state file is missing or unreadable", err.Error(), "Run `aria2s install`."))
+		report.Checks = append(report.Checks, DiagnosticCheck{Group: Runtime, Name: "Runtime inspection", Issue: Issue{Severity: Skipped, Summary: "service and RPC checks require readable managed state"}})
 		return report
 	}
 	addSuccess("Runtime state", "managed state is readable")
@@ -93,8 +71,16 @@ func Check(ctx context.Context, options Options) Report {
 	if !fileExists(options.Paths.ServiceFile) {
 		addIssue("Service", problem("InstallIncomplete", "missing service file", options.Paths.ServiceFile, "Run `aria2s install`."))
 	} else {
-		addSuccess("Service", "managed service is installed")
+		addSuccess("Service", "managed service file is present")
 	}
+	if options.InspectInstallation != nil && current.RuntimeSchemaVersion == 2 {
+		if err := options.InspectInstallation(current); err != nil {
+			addIssue("Committed runtime", problem("InstallIncomplete", "installed runtime does not match its committed configuration", err.Error(), "Run `aria2s install` to repair the managed runtime."))
+		} else {
+			addSuccess("Committed runtime", "controller, service, session, and paths match installed state")
+		}
+	}
+
 	loaded, running := false, false
 	if options.Service != nil {
 		loaded = options.Service.IsLoaded(ctx)
@@ -109,9 +95,8 @@ func Check(ctx context.Context, options Options) Report {
 		}
 	}
 
-	scanned, scanErr := jobs.New(options.Paths.StateDir).Scan()
 	probe := observeRPC(ctx, current, options.RPCVersion, options.RPCProbeTimeout, options.RPCSlowThreshold)
-	rpcReachable := probe.Reachable
+	rpcReachable = probe.Reachable
 	portOccupied := options.IsPortAvailable != nil && !options.IsPortAvailable(current.RPCPort)
 	endpoint := fmt.Sprintf("127.0.0.1:%d", current.RPCPort)
 	if probe.Slow {
@@ -128,7 +113,7 @@ func Check(ctx context.Context, options Options) Report {
 	} else if options.RPCVersion != nil || options.IsPortAvailable != nil {
 		switch {
 		case running && portOccupied:
-			addIssue("RPC", problem("RPCUnresponsive", "managed service is listening but RPC does not respond", endpoint, "Use the recommended repair below when a startup blocker is identified."))
+			addIssue("RPC", problem("RPCUnresponsive", "managed service is listening but RPC does not respond", endpoint, "Inspect `aria2s logs`; use a recommended repair only when Doctor identifies a startup blocker."))
 		case !running && portOccupied:
 			addIssue("RPC", problem("PortConflict", "port conflict: RPC port is used by another process", endpoint, "Stop the conflicting process or rerun `aria2s install` to select another port."))
 		default:
@@ -146,6 +131,7 @@ func Check(ctx context.Context, options Options) Report {
 			logPath = options.Paths.LogFile
 		}
 		if tail, readErr := readTail(logPath, 256*1024); readErr == nil {
+			scanned, _ := jobs.New(options.Paths.StateDir).Scan()
 			if gid := currentFileAllocationGID(tail, scanned); gid != "" {
 				addIssue("Startup", problem("FileAllocationBlocked", "file allocation is blocking aria2 startup", "gid="+gid+"; current aria2 log is stalled at FileAlloc", "Run `aria2s doctor --repair --discard-unmanaged-tasks`."))
 				report.Repair = &Repair{
@@ -157,28 +143,6 @@ func Check(ctx context.Context, options Options) Report {
 		}
 	}
 
-	if scanErr != nil {
-		addIssue("Managed tasks", problem("InstallIncomplete", "managed job store is unreadable", scanErr.Error(), "Repair permissions for the aria2s state directory, then rerun doctor."))
-	} else {
-		corrupt := 0
-		for _, item := range scanned {
-			if item.Err != nil {
-				corrupt++
-			}
-		}
-		if corrupt == 0 {
-			addSuccess("Managed tasks", fmt.Sprintf("%d manifest(s) are readable", len(scanned)))
-		}
-		for _, item := range scanned {
-			if item.Err != nil {
-				addIssue("Task "+item.ID, lifecycleProblem("CorruptManifest", item.ID, item.Err.Error()))
-				continue
-			}
-			if item.Job.Issue != nil {
-				addIssue("Task "+item.ID, lifecycleProblem(item.Job.Issue.Code, item.ID, "managed manifest"))
-			}
-		}
-	}
 	return report
 }
 
@@ -186,7 +150,7 @@ func problem(code, summary, evidence, recovery string) Issue {
 	return Issue{Code: code, Severity: "error", Summary: summary, Explanation: summary, Evidence: evidence, Recovery: []string{recovery}}
 }
 
-func lifecycleProblem(code, jobID, evidence string) Issue {
+func LifecycleProblem(code, jobID, evidence string) Issue {
 	summary := "managed task requires recovery"
 	severity := "error"
 	if metadata, ok := jobs.LookupIssue(code); ok {
@@ -210,17 +174,21 @@ func lifecycleProblem(code, jobID, evidence string) Issue {
 	case "PublicationConflict":
 		recovery = "Use Retry to publish the retained staging payload under the next available suffixed name."
 	case "PublicationRecoveryRequired", "PublicationPayloadMismatch", "PublicationPayloadMissing", "PublicationStateUncertain":
-		recovery = "Inspect staging and target, preserve the only payload, then use Retry or explicit Clear."
+		recovery = "Inspect staging and target, preserve the only payload, then use the actions shown in Dashboard."
 	case "RestartStateMissing":
 		recovery = "Restore the original session/metainfo or inspect retained staging before Retry."
 	case "CorruptManifest":
 		recovery = "Preserve the aria2s state directory and inspect the matching aria2 task manually; automatic deletion is unavailable because native ownership cannot be proven."
-	case "ManagedIdentityConflict", "FinalSeedPathMismatch":
+	case "ManagedIdentityConflict":
 		recovery = "Stop external RPC changes and inspect the GID/path before retrying."
+	case "FinalSeedPathMismatch":
+		recovery = "Restore the published files at their original download location, then use Retry; if those files are no longer needed, choose Remove in Dashboard."
 	case "RestartCheckpointFailed":
 		recovery = "Keep the service running, repair RPC/session access, and retry the operation."
+	case "RemovalFailed":
+		recovery = "Restore storage access, then choose Remove in Dashboard to finish removal; Retry cannot revive this task."
 	case "CleanupFailed":
-		recovery = "Restore storage access, run `aria2s dashboard`, select this task, and choose Retry; the published payload is retained."
+		recovery = "Restore storage access, run `aria2s dashboard`, select this task, and choose Remove; the published payload is retained."
 	case "AddFailed", "FinalSeedStartFailed":
 		recovery = "Restore RPC availability and use Retry; do not submit a duplicate manually."
 	case "PowerLossDurabilityUnavailable":

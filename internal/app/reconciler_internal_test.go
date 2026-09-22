@@ -343,7 +343,7 @@ func TestMissingPublishedSeedExposesActionableUserMessageWithoutLosingCause(t *t
 	if !errors.As(err, &userMessage) {
 		t.Fatalf("missing payload error has no user message: %T", err)
 	}
-	want := "seed files are missing or changed; restore them to the download location and retry, or remove the task"
+	want := "published files are missing or changed; restore them to the download location and retry, or remove the task"
 	if got := userMessage.UserMessage(); got != want {
 		t.Fatalf("user message = %q, want %q", got, want)
 	}

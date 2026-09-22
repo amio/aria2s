@@ -14,7 +14,7 @@ var issueMetadata = map[string]IssueMetadata{
 	"AddFailed":                      {"error", "aria2 could not start this transfer", []string{"retry", "remove"}},
 	"CleanupFailed":                  {"warning", "managed staging cleanup is incomplete", []string{"remove"}},
 	"CorruptManifest":                {"error", "managed task metadata is corrupt", []string{}},
-	"FinalSeedPathMismatch":          {"error", "seed files are missing or changed; restore them to the download location and retry, or remove the task", []string{"retry", "remove"}},
+	"FinalSeedPathMismatch":          {"error", "published files are missing or changed; restore them to the download location and retry, or remove the task", []string{"retry", "remove"}},
 	"FinalSeedStartFailed":           {"error", "published payload could not be reseeded", []string{"retry", "remove"}},
 	"ManagedIdentityConflict":        {"error", "native execution does not match managed ownership", []string{"retry"}},
 	"PayloadStorageMismatch":         {"error", "payload and download location no longer belong to the same storage", []string{"retry", "remove"}},

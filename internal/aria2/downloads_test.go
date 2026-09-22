@@ -229,3 +229,43 @@ func downloadDirField(t *testing.T, detail aria2.DownloadDetail) string {
 	}
 	return field.String()
 }
+
+func TestDiagnosticCensusReadsEveryPageAndNativeErrorEvidence(t *testing.T) {
+	var waitingOffsets, stoppedOffsets []int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		call := decodeRPCCall(t, r)
+		if call.Params[0] != "token:secret-token" {
+			t.Errorf("census request missing authentication: %+v", call)
+		}
+		rows := []map[string]string{}
+		switch call.Method {
+		case "aria2.tellActive":
+			rows = append(rows, map[string]string{"gid": "active", "status": "active"})
+		case "aria2.tellWaiting", "aria2.tellStopped":
+			offset := int(call.Params[1].(float64))
+			if call.Method == "aria2.tellWaiting" {
+				waitingOffsets = append(waitingOffsets, offset)
+			} else {
+				stoppedOffsets = append(stoppedOffsets, offset)
+			}
+			for i := offset; i < offset+100 && i < 205; i++ {
+				rows = append(rows, map[string]string{"gid": fmt.Sprintf("%s-%d", call.Method, i), "status": "error", "errorCode": "3", "errorMessage": "resource not found"})
+			}
+		default:
+			t.Errorf("unexpected method %s", call.Method)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": "1", "result": rows})
+	}))
+	defer server.Close()
+	client := aria2.NewRPCClient(server.URL, "secret-token", server.Client())
+	tasks, err := client.CompleteCensus(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tasks) != 411 || !reflect.DeepEqual(waitingOffsets, []int{0, 100, 200}) || !reflect.DeepEqual(stoppedOffsets, []int{0, 100, 200}) {
+		t.Fatalf("incomplete census: %d tasks; waiting=%v stopped=%v", len(tasks), waitingOffsets, stoppedOffsets)
+	}
+	if task := tasks[len(tasks)-1]; task.ErrorCode != "3" || task.ErrorMessage != "resource not found" {
+		t.Fatalf("lost native failure evidence: %+v", task)
+	}
+}

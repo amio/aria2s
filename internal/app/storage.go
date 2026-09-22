@@ -173,39 +173,9 @@ func loadObservedStorageScope(repository *jobs.Repository, id string) (jobs.Stor
 // both the app-owned staging marker and the registered target independently
 // prove that the original storage scope is mounted at its original path.
 func rebindJobStorage(repository *jobs.Repository, job jobs.Job, token jobs.Token) (jobs.StorageScope, jobs.Job, jobs.Token, error) {
-	storedScope, err := loadRegisteredStorageScope(repository, job.StorageID)
+	storedScope, observedScope, normalized, needsStableBinding, err := observeJobStorage(repository, job)
 	if err != nil {
 		return jobs.StorageScope{}, job, token, err
-	}
-	observedScope, needsStableBinding, err := observeStorageScope(storedScope)
-	if err != nil {
-		return jobs.StorageScope{}, job, token, err
-	}
-
-	target, err := publication.InspectTarget(job.TargetDir)
-	if err != nil {
-		return jobs.StorageScope{}, job, token, storageFailure(targetUnavailable, fmt.Errorf("inspect registered target directory: %w", err))
-	}
-	if filepath.Clean(target.MountPoint) != filepath.Clean(observedScope.MountPoint) {
-		return jobs.StorageScope{}, job, token, storageFailure(targetIdentityChanged, errors.New("registered target resolves to a different mount point"))
-	}
-	if target.Identity.MountID != observedScope.Marker.MountID {
-		return jobs.StorageScope{}, job, token, storageFailure(targetIdentityChanged, errors.New("registered target and staging marker are on different mounts"))
-	}
-	if target.Identity.ObjectID != job.TargetIdentity.ObjectID {
-		return jobs.StorageScope{}, job, token, storageFailure(targetIdentityChanged, errors.New("registered target object changed"))
-	}
-
-	normalized := job
-	normalized.TargetIdentity = jobIdentity(target.Identity)
-	if normalized.Payload.Identity.MountID != 0 {
-		registeredPayloadMount := normalized.Payload.Identity.MountID
-		if registeredPayloadMount != job.TargetIdentity.MountID &&
-			registeredPayloadMount != storedScope.Marker.MountID &&
-			registeredPayloadMount != target.Identity.MountID {
-			return jobs.StorageScope{}, job, token, storageFailure(payloadStorageMismatch, errors.New("registered payload belongs to a different mount"))
-		}
-		normalized.Payload.Identity.MountID = target.Identity.MountID
 	}
 
 	// Compute every external fact before writing a stable binding or normalizing
@@ -222,6 +192,48 @@ func rebindJobStorage(repository *jobs.Repository, job jobs.Job, token jobs.Toke
 		token = next
 	}
 	return observedScope, normalized, token, nil
+}
+
+// observeJobStorage shares the reconciler's identity rules with read-only
+// diagnostics. Mount rebinding is computed here and committed only by callers
+// that own a lifecycle transaction.
+func observeJobStorage(repository *jobs.Repository, job jobs.Job) (jobs.StorageScope, jobs.StorageScope, jobs.Job, bool, error) {
+	storedScope, err := loadRegisteredStorageScope(repository, job.StorageID)
+	if err != nil {
+		return jobs.StorageScope{}, jobs.StorageScope{}, job, false, err
+	}
+	observedScope, needsStableBinding, err := observeStorageScope(storedScope)
+	if err != nil {
+		return jobs.StorageScope{}, jobs.StorageScope{}, job, false, err
+	}
+
+	target, err := publication.InspectTarget(job.TargetDir)
+	if err != nil {
+		return jobs.StorageScope{}, jobs.StorageScope{}, job, false, storageFailure(targetUnavailable, fmt.Errorf("inspect registered target directory: %w", err))
+	}
+	if filepath.Clean(target.MountPoint) != filepath.Clean(observedScope.MountPoint) {
+		return jobs.StorageScope{}, jobs.StorageScope{}, job, false, storageFailure(targetIdentityChanged, errors.New("registered target resolves to a different mount point"))
+	}
+	if target.Identity.MountID != observedScope.Marker.MountID {
+		return jobs.StorageScope{}, jobs.StorageScope{}, job, false, storageFailure(targetIdentityChanged, errors.New("registered target and staging marker are on different mounts"))
+	}
+	if target.Identity.ObjectID != job.TargetIdentity.ObjectID {
+		return jobs.StorageScope{}, jobs.StorageScope{}, job, false, storageFailure(targetIdentityChanged, errors.New("registered target object changed"))
+	}
+
+	normalized := job
+	normalized.TargetIdentity = jobIdentity(target.Identity)
+	if normalized.Payload.Identity.MountID != 0 {
+		registeredPayloadMount := normalized.Payload.Identity.MountID
+		if registeredPayloadMount != job.TargetIdentity.MountID &&
+			registeredPayloadMount != storedScope.Marker.MountID &&
+			registeredPayloadMount != target.Identity.MountID {
+			return jobs.StorageScope{}, jobs.StorageScope{}, job, false, storageFailure(payloadStorageMismatch, errors.New("registered payload belongs to a different mount"))
+		}
+		normalized.Payload.Identity.MountID = target.Identity.MountID
+	}
+
+	return storedScope, observedScope, normalized, needsStableBinding, nil
 }
 
 func createStorageMarker(stagingRoot, stableID string) error {

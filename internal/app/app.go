@@ -613,35 +613,53 @@ func (app *App) inspectDashboard(ctx context.Context) (state.State, bool, error)
 	if serviceRunning {
 		return current, true, nil
 	}
+	return current, false, app.inspectInstalledRuntime(current)
+}
+
+// inspectInstalledRuntime verifies next-start artifacts without rendering,
+// adopting, or changing them. Doctor also checks this while the service runs.
+func (app *App) inspectInstalledRuntime(current state.State) error {
+	if current.SessionPath != app.options.Paths.SessionFile || current.StartupInputPath != app.options.Paths.StartupInputFile ||
+		current.LogPath != app.options.Paths.LogFile || current.ErrorLogPath != app.options.Paths.ErrorLogFile ||
+		current.ServiceName != app.options.Paths.ServiceName || current.RPCPort < 1 || current.RPCPort > 65535 || current.RPCSecret == "" {
+		return dashboardInstallRequired("managed runtime state does not match the current platform layout")
+	}
 	if !isExecutable(current.Aria2cPath) {
-		return current, false, dashboardInstallRequired("stored aria2c path is not executable")
+		return dashboardInstallRequired("stored aria2c path is not executable")
 	}
 	serviceInfo, err := os.Lstat(app.options.Paths.ServiceFile)
 	if err != nil || !serviceInfo.Mode().IsRegular() || serviceInfo.Mode()&os.ModeSymlink != 0 {
-		return current, false, dashboardInstallRequired("service artifact is missing or invalid")
+		return dashboardInstallRequired("service artifact is missing or invalid")
 	}
 	serviceData, err := os.ReadFile(app.options.Paths.ServiceFile)
 	if err != nil {
-		return current, false, dashboardInstallRequired("service artifact cannot be read")
+		return dashboardInstallRequired("service artifact cannot be read")
 	}
 	serviceHash := sha256.Sum256(serviceData)
 	if current.ServiceIdentity == "" || current.ServiceIdentity != hex.EncodeToString(serviceHash[:]) {
-		return current, false, dashboardInstallRequired("service artifact identity does not match committed state")
+		return dashboardInstallRequired("service artifact identity does not match committed state")
 	}
 	if !isExecutable(current.ControllerPath) {
-		return current, false, dashboardInstallRequired("controller executable is missing or invalid")
+		return dashboardInstallRequired("controller executable is missing or invalid")
 	}
 	controllerIdentity, identityErr := fileIdentity(current.ControllerPath)
 	if identityErr != nil || current.ControllerIdentity == "" || controllerIdentity != current.ControllerIdentity {
-		return current, false, dashboardInstallRequired("controller executable identity does not match committed state")
+		return dashboardInstallRequired("controller executable identity does not match committed state")
 	}
-	if needs0600File(current.SessionPath) {
-		return current, false, dashboardInstallRequired("managed session file is missing or invalid")
+	sessionInfo, err := os.Stat(current.SessionPath)
+	if err != nil {
+		return dashboardInstallRequired(fmt.Sprintf("managed session is unreadable: %v", err))
+	}
+	if !sessionInfo.Mode().IsRegular() {
+		return dashboardInstallRequired("managed session is not a regular file")
+	}
+	if sessionInfo.Mode().Perm() != 0o600 {
+		return dashboardInstallRequired(fmt.Sprintf("managed session permissions are %04o; expected 0600 (%s)", sessionInfo.Mode().Perm(), current.SessionPath))
 	}
 	if !dirExists(filepath.Dir(current.LogPath)) {
-		return current, false, dashboardInstallRequired("managed log directory is missing")
+		return dashboardInstallRequired("managed log directory is missing")
 	}
-	return current, false, nil
+	return nil
 }
 
 func dashboardInstallRequired(reason string) error {
@@ -830,19 +848,6 @@ func (app *App) saveSession(ctx context.Context, current state.State) error {
 func (app *App) Status(ctx context.Context) doctor.StatusReport {
 	return doctor.Status(ctx, doctor.StatusOptions{
 		Paths:            app.options.Paths,
-		Service:          app.options.Service,
-		RPCProbeTimeout:  app.options.RPCProbeTimeout,
-		RPCSlowThreshold: app.options.RPCSlowThreshold,
-		RPCVersion: func(ctx context.Context, current state.State) (string, error) {
-			return app.options.RPC.Version(ctx, current)
-		},
-	})
-}
-
-func (app *App) Doctor(ctx context.Context) doctor.Report {
-	return doctor.Check(ctx, doctor.Options{
-		Paths:            app.options.Paths,
-		IsPortAvailable:  app.options.IsPortAvailable,
 		Service:          app.options.Service,
 		RPCProbeTimeout:  app.options.RPCProbeTimeout,
 		RPCSlowThreshold: app.options.RPCSlowThreshold,
