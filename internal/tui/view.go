@@ -233,7 +233,7 @@ func (model Model) detailView() string {
 		lines = appendDetailLabelLines(lines, "Info Hash", detail.InfoHash, contentWidth)
 	}
 	if detail.PrimaryURI != "" {
-		lines = appendDetailLabelLines(lines, "Source URL", detail.PrimaryURI, contentWidth)
+		lines = appendDetailSourceLines(lines, detail.PrimaryURI, contentWidth)
 	}
 	lines = appendDetailLabelLines(lines, "Download Dir", detailDownloadDir(detail), contentWidth)
 	if temporaryDir := detailTemporaryDir(detail); temporaryDir != "" {
@@ -1056,6 +1056,14 @@ func detailLabelPrefix(label string) string {
 }
 
 func appendDetailLabelLines(lines []string, label, value string, width int) []string {
+	return appendDetailValueLines(lines, label, value, width, false)
+}
+
+func appendDetailSourceLines(lines []string, value string, width int) []string {
+	return appendDetailValueLines(lines, "Source URL", value, width, true)
+}
+
+func appendDetailValueLines(lines []string, label, value string, width int, hardWrap bool) []string {
 	prefix := detailLabelPrefix(label)
 	indent := strings.Repeat(" ", detailLabelWidth+1)
 	valueWidth := max(width-(detailLabelWidth+1), 1)
@@ -1063,7 +1071,12 @@ func appendDetailLabelLines(lines []string, label, value string, width int) []st
 	if cleaned == "" {
 		return append(lines, prefix)
 	}
-	wrapped := ansi.Wrap(cleaned, valueWidth, " ")
+	var wrapped string
+	if hardWrap {
+		wrapped = ansi.Hardwrap(cleaned, valueWidth, true)
+	} else {
+		wrapped = ansi.Wrap(cleaned, valueWidth, " ")
+	}
 	for i, part := range strings.Split(wrapped, "\n") {
 		if i == 0 {
 			lines = append(lines, prefix+" "+part)
