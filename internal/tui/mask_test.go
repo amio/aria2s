@@ -26,13 +26,13 @@ func TestMaskedTitlesRemainPresentationOnly(t *testing.T) {
 		t.Fatal("mask toggle should change only local presentation state")
 	}
 	alias := model.displayTaskName(row.Name, row.GID)
-	if len(strings.Fields(alias)) != 2 || !strings.HasSuffix(alias, "-bcd") {
+	if len(strings.Fields(strings.TrimSuffix(alias, " - BCD"))) != 2 || !strings.HasSuffix(alias, " - BCD") {
 		t.Fatalf("short title should use two words and the task ID suffix: %q", alias)
 	}
-	if got := model.displayTaskName(row.Name, "job-5678ef01"); strings.TrimSuffix(got, "-f01") != strings.TrimSuffix(alias, "-bcd") {
+	if got := model.displayTaskName(row.Name, "job-5678ef01"); strings.TrimSuffix(got, " - F01") != strings.TrimSuffix(alias, " - BCD") {
 		t.Fatalf("word selection should depend on the name alone: %q vs %q", got, alias)
 	}
-	if len(strings.Fields(model.displayTaskName(strings.Repeat("a", 30), row.GID))) <= 2 {
+	if len(strings.Fields(strings.TrimSuffix(model.displayTaskName(strings.Repeat("a", 30), row.GID), " - BCD"))) <= 2 {
 		t.Fatal("long names should produce longer word combinations")
 	}
 	for _, mode := range []Mode{ModeList, ModeDetail} {

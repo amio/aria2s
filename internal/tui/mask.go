@@ -41,7 +41,7 @@ func (model Model) displayTaskName(name, id string) string {
 	alias := strings.Join(words, " ")
 	if id != "" {
 		shortID := []rune(id)
-		alias += "-" + string(shortID[max(0, len(shortID)-3):])
+		alias += " - " + strings.ToUpper(string(shortID[max(0, len(shortID)-3):]))
 	}
 	return alias
 }
