@@ -28,9 +28,9 @@ var dashboardGroups = []taskGroup{
 	{status: app.StatusMetadata, before: newerAddedTask},
 	{status: app.StatusPaused, holds: partiallyDownloaded, before: moreCompleteTask},
 	{status: app.StatusDownloading, before: lessCompleteTask},
-	{status: app.StatusSeeding, before: taskNameLess},
+	{status: app.StatusSeeding, before: newerCompletedTask},
 	{status: app.StatusPaused, holds: fullyDownloaded, before: taskNameLess},
-	{status: app.StatusComplete, before: taskNameLess},
+	{status: app.StatusComplete, before: newerCompletedTask},
 }
 
 // unexpectedTaskGroup receives rows whose canonical status no group claims.
@@ -109,6 +109,15 @@ func newerAddedTask(left, right app.TaskRow) bool {
 
 func taskNameLess(left, right app.TaskRow) bool {
 	return strings.ToLower(left.Name) < strings.ToLower(right.Name)
+}
+
+// Legacy and unmanaged rows have no durable completion time; keep their
+// snapshot order after rows whose completion time is known.
+func newerCompletedTask(left, right app.TaskRow) bool {
+	if left.CompletedAt.IsZero() != right.CompletedAt.IsZero() {
+		return !left.CompletedAt.IsZero()
+	}
+	return left.CompletedAt.After(right.CompletedAt)
 }
 
 // moreCompleteTask and lessCompleteTask order measurable rows by progress and

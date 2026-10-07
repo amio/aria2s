@@ -66,11 +66,12 @@ type StorageScope struct {
 }
 
 type PayloadState struct {
-	Location  PayloadLocation `json:"location"`
-	Root      string          `json:"root,omitempty"`
-	FinalRoot string          `json:"finalRoot,omitempty"`
-	Identity  ObjectIdentity  `json:"identity,omitempty"`
-	Length    *int64          `json:"length,omitempty"`
+	Location    PayloadLocation `json:"location"`
+	Root        string          `json:"root,omitempty"`
+	FinalRoot   string          `json:"finalRoot,omitempty"`
+	Identity    ObjectIdentity  `json:"identity,omitempty"`
+	Length      *int64          `json:"length,omitempty"`
+	CompletedAt time.Time       `json:"completedAt,omitzero"`
 }
 
 type ExecutionBinding struct {

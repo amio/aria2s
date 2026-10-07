@@ -232,12 +232,20 @@ func TestTransferPublicationAndFinalSeedUseDifferentExecutionGIDs(t *testing.T) 
 	if loaded.Payload.Location != jobs.PayloadPublished || loaded.Execution == nil || loaded.Execution.GID == transferGID {
 		t.Fatalf("publication/seed binding = %+v", loaded)
 	}
+	if loaded.Payload.CompletedAt.IsZero() {
+		t.Fatal("publication did not persist completion time")
+	}
+	completedAt := loaded.Payload.CompletedAt
 	if _, err := os.Stat(filepath.Join(target, "x")); err != nil {
 		t.Fatalf("payload was not published: %v", err)
 	}
 	startup, err := application.ReconcileJob(context.Background(), jobID, ReconcileInput{Mode: ReconcileStartup})
 	if err != nil || startup.StartupBlock == nil {
 		t.Fatalf("published startup = %+v, %v", startup, err)
+	}
+	restarted, _, err := repository.Load(jobID)
+	if err != nil || !restarted.Payload.CompletedAt.Equal(completedAt) {
+		t.Fatalf("startup changed completion time: %+v, %v", restarted.Payload, err)
 	}
 	assertStartupMatchesAddOptions(t, *startup.StartupBlock, rpc.addOptions[len(rpc.addOptions)-1])
 	assertSessionOptions(t, *startup.StartupBlock, map[string]string{

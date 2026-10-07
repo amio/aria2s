@@ -268,7 +268,7 @@ func (app *App) prepareAndPublish(ctx context.Context, repository *jobs.Reposito
 		return ReconcileResult{}, persistIssue(repository, job, token, publicationProblem(err), err)
 	}
 	length := native.TotalLength
-	job.Payload = jobs.PayloadState{Location: jobs.PayloadStaging, Root: root, FinalRoot: finalRoot, Identity: jobIdentity(identity), Length: &length}
+	job.Payload = jobs.PayloadState{Location: jobs.PayloadStaging, Root: root, FinalRoot: finalRoot, Identity: jobIdentity(identity), Length: &length, CompletedAt: time.Now().UTC()}
 	token, err = repository.SaveCAS(job, token) // publication intent precedes detach/move
 	if err != nil {
 		return ReconcileResult{}, err

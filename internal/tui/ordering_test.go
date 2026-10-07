@@ -45,8 +45,8 @@ func TestSortTaskRowsAppliesGroupLocalRules(t *testing.T) {
 		{GID: "downloading-unsized", CanonicalStatus: "downloading"},
 		{GID: "paused-low", CanonicalStatus: "paused", CompletedLength: 20, TotalLength: 100},
 		{GID: "paused-high", CanonicalStatus: "paused", CompletedLength: 80, TotalLength: 100},
-		{GID: "seeding-b", CanonicalStatus: "seeding", Name: "Beta"},
-		{GID: "seeding-a", CanonicalStatus: "seeding", Name: "alpha"},
+		{GID: "seeding-b", CanonicalStatus: "seeding", Name: "Beta", CompletedAt: now},
+		{GID: "seeding-a", CanonicalStatus: "seeding", Name: "alpha", CompletedAt: now.Add(-time.Hour)},
 		{GID: "paused-done-b", CanonicalStatus: "paused", Name: "beta", CompletedLength: 100, TotalLength: 100},
 		{GID: "paused-done-a", CanonicalStatus: "paused", Name: "alpha", CompletedLength: 100, TotalLength: 100},
 	}
@@ -58,7 +58,7 @@ func TestSortTaskRowsAppliesGroupLocalRules(t *testing.T) {
 		"metadata-new", "metadata-old",
 		"paused-high", "paused-low",
 		"downloading-near", "downloading-far", "downloading-unsized",
-		"seeding-a", "seeding-b",
+		"seeding-b", "seeding-a",
 		"paused-done-a", "paused-done-b",
 	}
 	if got := taskGIDs(rows); !reflect.DeepEqual(got, want) {
@@ -73,5 +73,42 @@ func TestDashboardSummaryStatusesListEachStatusOnce(t *testing.T) {
 	}
 	if got := dashboardSummaryStatuses; !reflect.DeepEqual(got, want) {
 		t.Fatalf("summary statuses = %v, want %v", got, want)
+	}
+}
+
+func TestSortTaskRowsPreservesNewestFirstCompleteHistory(t *testing.T) {
+	rows := []app.TaskRow{
+		{GID: "complete-new", CanonicalStatus: "complete", Name: "Zulu"},
+		{GID: "seeding", CanonicalStatus: "seeding", Name: "seed"},
+		{GID: "complete-middle", CanonicalStatus: "complete", Name: "Alpha"},
+		{GID: "waiting", CanonicalStatus: "waiting"},
+		{GID: "complete-old", CanonicalStatus: "complete", Name: "Beta"},
+	}
+
+	sortTaskRows(rows)
+
+	want := []string{"waiting", "seeding", "complete-new", "complete-middle", "complete-old"}
+	if got := taskGIDs(rows); !reflect.DeepEqual(got, want) {
+		t.Fatalf("complete history order = %v, want %v", got, want)
+	}
+}
+
+func TestSortTaskRowsOrdersByCompletionTime(t *testing.T) {
+	now := time.Now()
+	for _, status := range []string{"complete", "seeding"} {
+		t.Run(status, func(t *testing.T) {
+			rows := []app.TaskRow{
+				{GID: "unknown-first", CanonicalStatus: status},
+				{GID: "old", CanonicalStatus: status, Name: "Alpha", CompletedAt: now.Add(-time.Hour), AddedAt: now},
+				{GID: "new", CanonicalStatus: status, Name: "Zulu", CompletedAt: now, AddedAt: now.Add(-time.Hour)},
+				{GID: "equal", CanonicalStatus: status, Name: "Beta", CompletedAt: now},
+				{GID: "unknown-second", CanonicalStatus: status},
+			}
+			sortTaskRows(rows)
+			want := []string{"new", "equal", "old", "unknown-first", "unknown-second"}
+			if got := taskGIDs(rows); !reflect.DeepEqual(got, want) {
+				t.Fatalf("completion order = %v, want %v", got, want)
+			}
+		})
 	}
 }

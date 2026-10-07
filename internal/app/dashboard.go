@@ -151,6 +151,7 @@ func (session *DashboardSession) projectSnapshot(native aria2.ReadBatch, scanned
 			job, owned := managedByExecution[row.GID]
 			if owned {
 				row.AddedAt = job.CreatedAt
+				row.CompletedAt = job.Payload.CompletedAt
 				row.GID = job.ID
 				seen[job.ID] = struct{}{}
 			}
@@ -173,7 +174,7 @@ func (session *DashboardSession) projectSnapshot(native aria2.ReadBatch, scanned
 		if _, ok := seen[gid]; ok {
 			continue
 		}
-		row := TaskRow{GID: gid, Status: "absent", Dir: job.TargetDir, Name: manifestDisplayName(job), AddedAt: job.CreatedAt}
+		row := TaskRow{GID: gid, Status: "absent", Dir: job.TargetDir, Name: manifestDisplayName(job), AddedAt: job.CreatedAt, CompletedAt: job.Payload.CompletedAt}
 		applyTaskRowProjection(&row, session.projectTask(job, true, taskObservation{absent: true}))
 		applyPublishedMetrics(&row.CompletedLength, &row.TotalLength, &row.LengthKnown, job)
 		read.Downloads.Stopped = append(read.Downloads.Stopped, row)
@@ -338,10 +339,17 @@ func pageManagedHistory(rows []TaskRow, managed map[string]jobs.Job, page Dashbo
 		if leftOK != rightOK {
 			return leftOK
 		}
-		if leftJob.UpdatedAt.Equal(rightJob.UpdatedAt) {
+		leftTime, rightTime := leftJob.UpdatedAt, rightJob.UpdatedAt
+		if history[left].CanonicalStatus == string(StatusComplete) && !history[left].CompletedAt.IsZero() {
+			leftTime = history[left].CompletedAt
+		}
+		if history[right].CanonicalStatus == string(StatusComplete) && !history[right].CompletedAt.IsZero() {
+			rightTime = history[right].CompletedAt
+		}
+		if leftTime.Equal(rightTime) {
 			return history[left].GID < history[right].GID
 		}
-		return leftJob.UpdatedAt.After(rightJob.UpdatedAt)
+		return leftTime.After(rightTime)
 	})
 	start := min(max(page.StoppedOffset, 0), len(history))
 	limit := page.StoppedLimit

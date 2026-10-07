@@ -58,6 +58,7 @@ type TaskRow struct {
 	Seeder            bool
 	InfoHash          string
 	AddedAt           time.Time
+	CompletedAt       time.Time
 	CanonicalStatus   string
 	Ownership         string
 	IssueCode         string

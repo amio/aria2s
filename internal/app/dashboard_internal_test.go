@@ -672,7 +672,7 @@ func TestDashboardKeepsNativeMetricsAuthoritativeForManagedTask(t *testing.T) {
 		TargetDir:      filepath.Join(root, "downloads"),
 		ActivityIntent: jobs.ActivityStopped,
 		Payload: jobs.PayloadState{Location: jobs.PayloadPublished, Root: "payload.bin", FinalRoot: "payload.bin",
-			Identity: jobs.ObjectIdentity{MountID: 1, ObjectID: 2}, Length: &manifestLength},
+			Identity: jobs.ObjectIdentity{MountID: 1, ObjectID: 2}, Length: &manifestLength, CompletedAt: createdAt.Add(time.Hour)},
 		Execution: &jobs.ExecutionBinding{GID: executionGID},
 		CreatedAt: createdAt,
 	}
@@ -716,7 +716,26 @@ func TestDashboardKeepsNativeMetricsAuthoritativeForManagedTask(t *testing.T) {
 	if !got.Downloads.Stopped[0].AddedAt.Equal(createdAt) {
 		t.Fatalf("managed added time = %v, want %v", got.Downloads.Stopped[0].AddedAt, createdAt)
 	}
+	if !got.Downloads.Stopped[0].CompletedAt.Equal(job.Payload.CompletedAt) {
+		t.Fatalf("managed completion time = %v, want %v", got.Downloads.Stopped[0].CompletedAt, job.Payload.CompletedAt)
+	}
 	if got.Detail == nil || got.Detail.CompletedLength != 99 || got.Detail.TotalLength != 100 {
 		t.Fatalf("native detail metrics were overwritten: %#v", got.Detail)
+	}
+}
+
+func TestManagedHistoryPagesByCompletionBeforeLaterUpdates(t *testing.T) {
+	now := time.Now().UTC()
+	managed := map[string]jobs.Job{
+		"old": {UpdatedAt: now},
+		"new": {UpdatedAt: now.Add(-time.Hour)},
+	}
+	rows := []TaskRow{
+		{GID: "old", Ownership: string(OwnershipManaged), CanonicalStatus: string(StatusComplete), CompletedAt: now.Add(-2 * time.Hour)},
+		{GID: "new", Ownership: string(OwnershipManaged), CanonicalStatus: string(StatusComplete), CompletedAt: now.Add(-time.Hour)},
+	}
+	page := pageManagedHistory(rows, managed, DashboardListWindow{StoppedLimit: 1})
+	if len(page) != 1 || page[0].GID != "new" {
+		t.Fatalf("latest completed page = %+v", page)
 	}
 }
