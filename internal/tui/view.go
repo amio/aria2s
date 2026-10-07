@@ -174,7 +174,8 @@ func (model Model) detailView() string {
 		if model.detailState.LastError != nil {
 			message = "Details unavailable: " + model.detailState.LastError.Error()
 		}
-		name := model.Selected().Name
+		selected := model.Selected()
+		name := model.displayTaskName(selected.Name, selected.GID)
 		topContent := joinSides(name, []string{message}, frameContentWidth(width))
 		feedback := "Detail view"
 		if model.notice != "" {
@@ -203,7 +204,7 @@ func (model Model) detailView() string {
 	if maxNameWidth < 10 {
 		maxNameWidth = 10
 	}
-	name := detail.Name
+	name := model.displayTaskName(detail.Name, detail.GID)
 	if ansi.StringWidth(name) > maxNameWidth {
 		name = ansi.Truncate(name, maxNameWidth, "...")
 	}
@@ -480,7 +481,7 @@ func (model Model) downloadRow(width int, download app.TaskRow, selected bool) s
 		status = pendingStatus(action.kind)
 	}
 	add(status, l.statusWidth, false)
-	name := download.Name
+	name := model.displayTaskName(download.Name, download.GID)
 	if download.IssueCode != "" {
 		name += " [" + download.IssueCode + "]"
 	}

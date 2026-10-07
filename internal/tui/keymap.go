@@ -11,6 +11,7 @@ import (
 var dashboardKeys = newDashboardKeyMaps()
 
 type dashboardKeyMaps struct {
+	Mask   key.Binding
 	List   listKeyMap
 	Add    addKeyMap
 	Detail detailKeyMap
@@ -58,6 +59,7 @@ type detailKeyMap struct {
 
 func newDashboardKeyMaps() dashboardKeyMaps {
 	return dashboardKeyMaps{
+		Mask: newHiddenBinding("m"),
 		List: listKeyMap{
 			Quit:       newBinding("q", "Quit", "q", "ctrl+c"),
 			SelectDown: newBinding("j", "Select", "j", "down"),

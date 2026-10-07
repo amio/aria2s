@@ -100,6 +100,7 @@ type Model struct {
 	service         DashboardService
 	refreshInterval time.Duration
 	mode            Mode
+	maskNames       bool
 	list            ListState
 	detailState     DetailState
 	detailCache     map[string]cachedTaskDetail
@@ -420,6 +421,10 @@ func (model Model) Selected() app.TaskRow {
 func (model Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if isInputMode(model.mode) && isTextInputKey(msg) {
 		return model.handleInputTextKey(msg)
+	}
+	if model.mode != ModeAdd && key.Matches(msg, dashboardKeys.Mask) {
+		model.maskNames = !model.maskNames
+		return model, nil
 	}
 	switch model.mode {
 	case ModeAdd:
